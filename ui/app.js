@@ -70,6 +70,7 @@ function render(state) {
       const row = document.createElement("div");
       row.className = "model-row";
       const label = document.createElement("span");
+      label.className = "model-slug";
       label.textContent = model.slug;
       const actions = document.createElement("div");
       actions.className = "card-actions";
@@ -100,6 +101,7 @@ function render(state) {
     slug.required = true;
     slug.placeholder = "another-model-slug";
     slug.autocomplete = "off";
+    slug.setAttribute("aria-label", "Model slug");
     const addBtn = document.createElement("button");
     addBtn.type = "submit";
     addBtn.className = "button-secondary";
@@ -111,11 +113,14 @@ function render(state) {
         formNote.textContent = err.message;
       });
     });
+    const foot = document.createElement("div");
+    foot.className = "card-foot";
     const secretForm = document.createElement("form");
     const secret = document.createElement("input");
     secret.type = "password";
     secret.required = true;
     secret.placeholder = "update API key";
+    secret.setAttribute("aria-label", "API key");
     const secretBtn = document.createElement("button");
     secretBtn.type = "submit";
     secretBtn.className = "button-tertiary";
@@ -138,7 +143,8 @@ function render(state) {
         formNote.textContent = err.message;
       });
     });
-    card.append(addModel, secretForm, remove);
+    foot.append(secretForm, remove);
+    card.append(addModel, foot);
     listEl.append(card);
   }
 }

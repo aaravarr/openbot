@@ -8,9 +8,11 @@ Grok Bot 0.30 routes chat on the Computer, not on your Mac. A hop bound to `127.
 
 ## Status
 
-Supervisor, wrap, hop, catalog UI, and `install.sh` are in this tree. Unit tests cover census, wrap/restore, hop mapping, catalog upsert, and `reconcile`. A live Grok Bot Computer has not yet run `install.sh`. Treat the curl line as the intended install, not as a verified production run.
+`install.sh` copies the tree, leaves chat official, and starts the cream control UI. Tests cover that path against a fake Computer host file, plus census, wrap/restore, hop mapping, and catalog upsert.
 
-The control UI follows `DESIGN.md` from `npx getdesign@latest add cursor`: warm cream canvas, hairline cards, Cursor Orange on the primary save button.
+A live Grok Bot Computer has not run the curl line. Chat routing still has to be proven on the box.
+
+The UI follows `DESIGN.md` from `npx getdesign@latest add cursor`: warm cream canvas, hairline cards, Cursor Orange on the primary save button.
 
 ## Install
 
@@ -20,23 +22,27 @@ Run this **in the Computer terminal**, not on the Mac. Node 22 or newer.
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
 ```
 
-The script copies OpenBot into `/home/box/sand-data/openbot`, starts the control UI on `http://127.0.0.1:18791`, and leaves chat official until you save a provider. Open that URL in the Computer browser. Add providers and models, paste an API key, and pick which model is in use. Saving wraps the unique `createProtoSessionProvider` factory and adopts or starts hop on `127.0.0.1:18790`.
+Then open `http://127.0.0.1:18791` in the Computer browser.
 
-If the host still has a known `/* opengrok-stock-wrap */` header from a previous installer, OpenBot peels it back to stock. A leftover `python …/hop-server.py` on `:18790` is stopped. An unknown listener on that port is refused.
+1. Bare install stays official. Chat is still stock Grok.
+2. Save a provider, model, and API key in the UI. That wraps `createProtoSessionProvider` and starts hop on `127.0.0.1:18790`.
+3. Use switches the wildcard model. Bindings never hold keys. The hop injects the key from `/home/box/sand-data/secrets.json`.
+4. Official peels our wrap (and a leftover `/* opengrok-stock-wrap */` if present), stops hop, and keeps the UI so you can switch back.
 
 Do not put a key on the command line. `OPENBOT_API_KEY` is the env var if you install from the CLI with `--origin` and `--model`.
 
 `--census-only` prints host symbols. It is not proof that wrap would succeed. `--dry-run` runs the wrap transform on a copy.
+
+An unknown listener on `:18790` is refused. A leftover `python …/hop-server.py` is stopped.
 
 ## What it does
 
 - One-line install on the Grok Bot Computer
 - Control UI on `127.0.0.1:18791`
 - Provider list, model list, model switch
-- API-key mode: hop injects the key from `/home/box/sand-data/secrets.json` on each upstream request. Bindings never hold keys.
-- BYOK is pasting that key in the control UI
-- Official mode: stock `createProtoSessionProvider`, no hop, no wrap
-- Custom mode: wrap only `executor.stream`, POST OpenAI-compatible `/v1/chat/completions` through the loopback hop
+- API-key mode and BYOK in this UI
+- Official mode: stock factory, no hop, no wrap
+- Custom mode: wrap only `executor.stream`, POST OpenAI-compatible `/v1/chat/completions`
 
 Per-conversation model override is out of v1.
 

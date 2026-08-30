@@ -8,7 +8,9 @@ Grok Bot 0.30 的聊天路由在 Computer 上，不在 Mac 上。笔记本上绑
 
 ## 现状
 
-supervisor、wrap、hop、目录 UI 和 `install.sh` 已经在仓库里。单元测试覆盖 census、wrap/restore、hop 映射、目录 upsert 和 `reconcile`。还没有在真实的 Grok Bot Computer 上跑过 `install.sh`。下面的 curl 是预定安装方式，不是已经验证过的生产运行。
+`install.sh` 会拷仓库、保持聊天 official，并拉起米色控制界面。测试用假 Computer host 覆盖了这条安装路径，以及 census、wrap/restore、hop 映射和目录 upsert。
+
+还没有在真实的 Grok Bot Computer 上跑过 curl。聊天是否打到盒子上的 `:18790`，仍要在盒子上证明。
 
 控制界面遵循 `npx getdesign@latest add cursor` 生成的 `DESIGN.md`：暖米色底、细线卡片、主保存按钮用 Cursor Orange。
 
@@ -20,22 +22,26 @@ supervisor、wrap、hop、目录 UI 和 `install.sh` 已经在仓库里。单元
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
 ```
 
-脚本把 OpenBot 拷到 `/home/box/sand-data/openbot`，在 `http://127.0.0.1:18791` 拉起控制界面，聊天先保持 official。用 Computer 浏览器打开这个地址。添加 provider 和模型，粘贴 API Key，再选正在用的模型。保存后才会 wrap 唯一的 `createProtoSessionProvider`，并在 `127.0.0.1:18790` 上 adopt 或启动 hop。
+然后用 Computer 浏览器打开 `http://127.0.0.1:18791`。
 
-如果 host 里还留着上一套安装器的 `/* opengrok-stock-wrap */` 头，OpenBot 会先剥回 stock。`:18790` 上残留的 `python …/hop-server.py` 会被停掉。端口上其他不明进程仍然拒绝，不会当成自己的。
+1. 裸安装保持 official，聊天仍是官方 Grok。
+2. 在界面里保存 provider、模型和 API Key。这时才会 wrap `createProtoSessionProvider`，并在 `127.0.0.1:18790` 上启动 hop。
+3. Use 会切换通配模型。bindings 里不会出现 Key。hop 从 `/home/box/sand-data/secrets.json` 注入。
+4. Official 会剥掉我们的 wrap（如果还有 `/* opengrok-stock-wrap */` 也会剥），停 hop，控制界面留着方便再切回去。
 
 不要把 Key 写在命令行上。CLI 带 `--origin` 和 `--model` 安装时，用环境变量 `OPENBOT_API_KEY`。
 
 `--census-only` 只打印 host 符号，不能证明 wrap 会成功。`--dry-run` 才是在副本上跑 wrap。
+
+`:18790` 上不明进程会拒绝。残留的 `python …/hop-server.py` 会被停掉。
 
 ## 会做什么
 
 - 在 Grok Bot Computer 上一行安装
 - 控制界面绑 `127.0.0.1:18791`
 - Provider 列表、模型列表、切模型
-- API-key 模式：hop 每次向上游请求时从 `/home/box/sand-data/secrets.json` 注入 Key。bindings 里不会出现 Key。
-- BYOK 是在控制界面里粘贴这把 Key
-- Official：走官方 `createProtoSessionProvider`，无 hop，无 wrap
+- API-key 模式和 BYOK 都在这个界面里
+- Official：官方 factory，无 hop，无 wrap
 - Custom：只劫持 `executor.stream`，经 loopback hop POST OpenAI 兼容的 `/v1/chat/completions`
 
 按会话覆盖模型不在 v1。

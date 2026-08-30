@@ -5,6 +5,7 @@ import {
   LOOPBACK_HOP,
   OPENBOT_MARKER,
   UI_PORT,
+  type Catalog,
   type CustomBox,
   type OfficialBox,
   type UpstreamOrigin,
@@ -138,6 +139,23 @@ export function officialBox(paths: BoxPaths): OfficialBox {
   };
 }
 
+export function slugify(name: string): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/giu, "-").replace(/^-|-$/gu, "");
+  return slug || "provider";
+}
+
+export function customBoxFromCatalog(input: { paths: BoxPaths; catalog: Catalog }): CustomBox {
+  return {
+    kind: "custom",
+    wrap: { kind: "marked", marker: OPENBOT_MARKER },
+    hopListen: { kind: "adopt-or-start", host: LOOPBACK, port: 18790 },
+    uiListen: { kind: "loopback", host: LOOPBACK, port: UI_PORT },
+    secretsPath: input.paths.secrets,
+    hop: LOOPBACK_HOP,
+    catalog: input.catalog,
+  };
+}
+
 export function customBoxFromProvider(input: {
   paths: BoxPaths;
   origin: UpstreamOrigin;
@@ -147,13 +165,8 @@ export function customBoxFromProvider(input: {
   const providerId = parseProviderId(slugify(input.name));
   const modelId = parseModelId(`${providerId}:${input.modelSlug}`);
   const slug = parseModelSlug(input.modelSlug);
-  return {
-    kind: "custom",
-    wrap: { kind: "marked", marker: OPENBOT_MARKER },
-    hopListen: { kind: "adopt-or-start", host: LOOPBACK, port: 18790 },
-    uiListen: { kind: "loopback", host: LOOPBACK, port: UI_PORT },
-    secretsPath: input.paths.secrets,
-    hop: LOOPBACK_HOP,
+  return customBoxFromCatalog({
+    paths: input.paths,
     catalog: {
       providers: [
         {
@@ -174,12 +187,7 @@ export function customBoxFromProvider(input: {
       ],
       bindings: [{ conversation: { kind: "wildcard" }, modelId }],
     },
-  };
-}
-
-function slugify(name: string): string {
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/giu, "-").replace(/^-|-$/gu, "");
-  return slug || "provider";
+  });
 }
 
 export function parseDisableCommand(input: {

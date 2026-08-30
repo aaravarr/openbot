@@ -63,3 +63,22 @@ export function parseModelSlug(raw: string): ModelSlug {
 export function planToJson(plan: CompiledCustomPlan): string {
   return `${JSON.stringify(plan, null, 2)}\n`;
 }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function catalogFromPlanJson(raw: string | undefined): Catalog {
+  if (raw === undefined) {
+    return { providers: [], models: [], bindings: [] };
+  }
+  const parsed: unknown = JSON.parse(raw);
+  if (!isRecord(parsed) || parsed.kind !== "custom" || !isRecord(parsed.catalog)) {
+    return { providers: [], models: [], bindings: [] };
+  }
+  const catalog = parsed.catalog;
+  if (!Array.isArray(catalog.providers) || !Array.isArray(catalog.models) || !Array.isArray(catalog.bindings)) {
+    return { providers: [], models: [], bindings: [] };
+  }
+  return catalog as Catalog;
+}

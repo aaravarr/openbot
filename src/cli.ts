@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
-import { parseInstallCommand, officialBox, customBoxFromProvider } from "./parse/argv.ts";
+import { parseInstallCommand, officialBox, customBoxFromProvider, slugify } from "./parse/argv.ts";
 import { observe } from "./supervisor/observe.ts";
 import { dryRunWrap, reconcile } from "./supervisor/reconcile.ts";
 import { nodeFs, nodeProcs } from "./supervisor/procs.ts";
@@ -11,11 +11,6 @@ import { type SupervisorDeps } from "./supervisor/observe.ts";
 
 function depsFrom(paths: SupervisorDeps["paths"]): SupervisorDeps {
   return { paths, fs: nodeFs(), procs: nodeProcs() };
-}
-
-function slugify(name: string): string {
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/giu, "-").replace(/^-|-$/gu, "");
-  return slug || "provider";
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -60,9 +55,15 @@ async function main(argv: string[]): Promise<number> {
       name: custom.name,
       modelSlug: custom.modelSlug,
     });
-    const store = loadSecrets(deps.fs, parsed.paths.secrets);
-    saveSecrets(deps.fs, parsed.paths.secrets, upsertSecret(store, parseProviderId(slugify(custom.name)), custom.secret));
     const result = await reconcile(box, deps);
+    if (result.kind === "ok") {
+      const store = loadSecrets(deps.fs, parsed.paths.secrets);
+      saveSecrets(
+        deps.fs,
+        parsed.paths.secrets,
+        upsertSecret(store, parseProviderId(slugify(custom.name)), custom.secret),
+      );
+    }
     printResult(result);
     return result.kind === "ok" ? 0 : 1;
   }

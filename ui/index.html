@@ -7,32 +7,37 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main>
-      <header class="mast">
-        <p class="kicker">Grok Bot Computer</p>
-        <h1>OpenBot</h1>
-        <p class="lede">
-          Official is the stock host file. Custom wraps one factory and hops through loopback.
-          Keys stay in the secret store on this box.
-        </p>
-      </header>
+    <header class="top-nav">
+      <p class="wordmark">OpenBot</p>
+      <p class="nav-status" id="nav-status">Loading</p>
+    </header>
 
-      <section class="mode" aria-labelledby="mode-heading">
-        <div class="mode-copy">
-          <h2 id="mode-heading">Chat route</h2>
-          <p id="mode-status">Loading snapshot…</p>
+    <main>
+      <section class="hero">
+        <p class="kicker">Grok Bot Computer</p>
+        <h1>Your models. Stock Grok when you want it back.</h1>
+        <p class="lede">
+          Official restores the vendor host file. Custom wraps one factory and hops through loopback.
+          Keys stay in the secret store on this box, never in bindings.
+        </p>
+        <div class="hero-actions">
+          <button type="button" class="button-download" id="btn-official">Official</button>
+          <button type="button" class="button-secondary" id="btn-refresh">Refresh</button>
         </div>
-        <div class="mode-actions">
-          <button type="button" id="btn-official">Official</button>
-          <button type="button" class="ghost" id="btn-refresh">Refresh</button>
-        </div>
+        <p class="route-copy" id="mode-status">Loading snapshot…</p>
       </section>
 
-      <section class="card" aria-labelledby="provider-heading">
-        <h2 id="provider-heading">Provider</h2>
+      <section aria-labelledby="providers-heading">
+        <h2 id="providers-heading" class="display-sm">Providers</h2>
+        <div id="provider-list" class="card-grid"></div>
+      </section>
+
+      <section class="feature-card" aria-labelledby="add-heading">
+        <h2 id="add-heading" class="title-md">Add provider</h2>
         <p class="hint">
-          Paste an OpenAI-compatible origin, a model slug, and an API key. Saving writes the secret
-          separately from the catalog, then reconciles the box.
+          OpenAI-compatible origin, a model slug, and an API key. Saving upserts the row. Existing
+          providers stay. The hop injects this key on each upstream request (API-key mode). BYOK is
+          this form.
         </p>
         <form id="provider-form">
           <label>
@@ -55,18 +60,13 @@
           </label>
           <label>
             API key
-            <input name="secret" type="password" required placeholder="will not be stored in bindings" />
+            <input name="secret" type="password" required placeholder="not stored in bindings" />
           </label>
           <div class="form-actions">
-            <button type="submit">Save and use</button>
+            <button type="submit" class="button-primary">Save and use</button>
             <p class="fine" id="form-note"></p>
           </div>
         </form>
-      </section>
-
-      <section class="card" aria-labelledby="catalog-heading">
-        <h2 id="catalog-heading">Catalog</h2>
-        <pre id="catalog">{}</pre>
       </section>
     </main>
     <script src="/app.js"></script>

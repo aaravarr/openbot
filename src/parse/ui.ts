@@ -1,50 +1,195 @@
-import { parseSecretBytes } from "../supervisor/secrets.ts";
+import {
+  HIGH_AGENT_MAX_TOKENS,
+  type Catalog,
+  type DesiredState,
+  type Model,
+  type Provider,
+} from "../domain/types.ts";
+import { parseModelId, parseModelSlug } from "../supervisor/plan.ts";
 import { type BoxPaths } from "../supervisor/paths.ts";
-import { customBoxFromProvider, officialBox, parseUpstreamOrigin } from "./argv.ts";
-import { type DesiredState } from "../domain/types.ts";
+import { parseProviderId, parseSecretBytes } from "../supervisor/secrets.ts";
+import { customBoxFromCatalog, officialBox, parseUpstreamOrigin, slugify } from "./argv.ts";
 
-export type UiSaveInput =
+export type UiCommand =
   | { readonly kind: "official" }
   | {
-      readonly kind: "custom";
+      readonly kind: "upsert-provider";
       readonly name: string;
       readonly origin: string;
       readonly modelSlug: string;
       readonly secret: string;
-    };
+    }
+  | { readonly kind: "upsert-model"; readonly providerId: string; readonly slug: string }
+  | { readonly kind: "use-model"; readonly modelId: string }
+  | { readonly kind: "remove-provider"; readonly providerId: string }
+  | { readonly kind: "set-secret"; readonly providerId: string; readonly secret: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-export function parseUiProviderSave(input: unknown, paths: BoxPaths): {
-  desired: DesiredState;
-  secret?: { providerName: string; bytes: ReturnType<typeof parseSecretBytes> };
-} {
+export function parseUiCommand(input: unknown): UiCommand {
   if (!isRecord(input) || typeof input.kind !== "string") {
     throw new Error("OpenBot: UI save needs a kind");
   }
   if (input.kind === "official") {
+    return { kind: "official" };
+  }
+  if (input.kind === "custom" || input.kind === "upsert-provider") {
+    if (typeof input.name !== "string" || typeof input.origin !== "string" || typeof input.modelSlug !== "string") {
+      throw new Error("OpenBot: upsert-provider needs name, origin, and modelSlug");
+    }
+    if (typeof input.secret !== "string") {
+      throw new Error("OpenBot: upsert-provider needs a secret in the POST body");
+    }
+    return {
+      kind: "upsert-provider",
+      name: input.name,
+      origin: input.origin,
+      modelSlug: input.modelSlug,
+      secret: input.secret,
+    };
+  }
+  if (input.kind === "upsert-model") {
+    if (typeof input.providerId !== "string" || typeof input.slug !== "string") {
+      throw new Error("OpenBot: upsert-model needs providerId and slug");
+    }
+    return { kind: "upsert-model", providerId: input.providerId, slug: input.slug };
+  }
+  if (input.kind === "use-model") {
+    if (typeof input.modelId !== "string") {
+      throw new Error("OpenBot: use-model needs modelId");
+    }
+    return { kind: "use-model", modelId: input.modelId };
+  }
+  if (input.kind === "remove-provider") {
+    if (typeof input.providerId !== "string") {
+      throw new Error("OpenBot: remove-provider needs providerId");
+    }
+    return { kind: "remove-provider", providerId: input.providerId };
+  }
+  if (input.kind === "set-secret") {
+    if (typeof input.providerId !== "string" || typeof input.secret !== "string") {
+      throw new Error("OpenBot: set-secret needs providerId and secret");
+    }
+    return { kind: "set-secret", providerId: input.providerId, secret: input.secret };
+  }
+  throw new Error("OpenBot: unknown UI command");
+}
+
+function emptyCatalog(): Catalog {
+  return { providers: [], models: [], bindings: [] };
+}
+
+function withWildcard(catalog: Catalog, modelId: Model["id"]): Catalog {
+  return {
+    ...catalog,
+    bindings: [{ conversation: { kind: "wildcard" }, modelId }],
+  };
+}
+
+function upsertProviderRow(catalog: Catalog, provider: Provider): Catalog {
+  const rest = catalog.providers.filter((row) => row.id !== provider.id);
+  return { ...catalog, providers: [...rest, provider] };
+}
+
+function upsertModelRow(catalog: Catalog, model: Model): Catalog {
+  const rest = catalog.models.filter((row) => row.id !== model.id);
+  const models = [...rest, model];
+  const hasWildcard = catalog.bindings.some((row) => row.conversation.kind === "wildcard");
+  if (hasWildcard) {
+    return { ...catalog, models };
+  }
+  return withWildcard({ ...catalog, models }, model.id);
+}
+
+export function applyUiCommand(input: {
+  command: UiCommand;
+  catalog: Catalog;
+  paths: BoxPaths;
+}): {
+  desired: DesiredState;
+  secret?: { providerId: ReturnType<typeof parseProviderId>; bytes: ReturnType<typeof parseSecretBytes> };
+} {
+  const { command, catalog, paths } = input;
+  if (command.kind === "official") {
     return { desired: officialBox(paths) };
   }
-  if (input.kind !== "custom") {
-    throw new Error("OpenBot: UI save kind is official or custom");
+  if (command.kind === "set-secret") {
+    const providerId = parseProviderId(command.providerId);
+    if (!catalog.providers.some((row) => row.id === providerId)) {
+      throw new Error("OpenBot: unknown provider");
+    }
+    if (catalog.models.length === 0) {
+      throw new Error("OpenBot: add a model before using custom chat");
+    }
+    return {
+      desired: customBoxFromCatalog({ paths, catalog }),
+      secret: { providerId, bytes: parseSecretBytes(command.secret) },
+    };
   }
-  if (typeof input.name !== "string" || typeof input.origin !== "string" || typeof input.modelSlug !== "string") {
-    throw new Error("OpenBot: custom save needs name, origin, and modelSlug");
+  if (command.kind === "upsert-provider") {
+    const providerId = parseProviderId(slugify(command.name));
+    const origin = parseUpstreamOrigin(command.origin);
+    const slug = parseModelSlug(command.modelSlug);
+    const modelId = parseModelId(`${providerId}:${command.modelSlug}`);
+    const next = upsertModelRow(
+      upsertProviderRow(catalog, {
+        id: providerId,
+        name: command.name,
+        origin,
+        maxTokensDefault: HIGH_AGENT_MAX_TOKENS,
+        mapFile: "provider-maps.cjs",
+      }),
+      { id: modelId, providerId, slug, parameters: [] },
+    );
+    return {
+      desired: customBoxFromCatalog({ paths, catalog: withWildcard(next, modelId) }),
+      secret: { providerId, bytes: parseSecretBytes(command.secret) },
+    };
   }
-  if (typeof input.secret !== "string") {
-    throw new Error("OpenBot: custom save needs a secret in the POST body, not in a binding");
+  if (command.kind === "upsert-model") {
+    const providerId = parseProviderId(command.providerId);
+    if (!catalog.providers.some((row) => row.id === providerId)) {
+      throw new Error("OpenBot: unknown provider");
+    }
+    const slug = parseModelSlug(command.slug);
+    const modelId = parseModelId(`${providerId}:${command.slug}`);
+    const next = upsertModelRow(catalog, { id: modelId, providerId, slug, parameters: [] });
+    return { desired: customBoxFromCatalog({ paths, catalog: next }) };
   }
-  const origin = parseUpstreamOrigin(input.origin);
-  const desired = customBoxFromProvider({
-    paths,
-    origin,
-    name: input.name,
-    modelSlug: input.modelSlug,
-  });
-  return {
-    desired,
-    secret: { providerName: input.name, bytes: parseSecretBytes(input.secret) },
+  if (command.kind === "use-model") {
+    const modelId = parseModelId(command.modelId);
+    const model = catalog.models.find((row) => row.id === modelId);
+    if (!model) {
+      throw new Error("OpenBot: unknown model");
+    }
+    return { desired: customBoxFromCatalog({ paths, catalog: withWildcard(catalog, modelId) }) };
+  }
+  const providerId = parseProviderId(command.providerId);
+  const providers = catalog.providers.filter((row) => row.id !== providerId);
+  const models = catalog.models.filter((row) => row.providerId !== providerId);
+  if (providers.length === 0 || models.length === 0) {
+    return { desired: officialBox(paths) };
+  }
+  const active = catalog.bindings.find((row) => row.conversation.kind === "wildcard");
+  const stillBound = active && models.some((row) => row.id === active.modelId);
+  const fallback = models[0];
+  if (fallback === undefined) {
+    return { desired: officialBox(paths) };
+  }
+  const next: Catalog = {
+    providers,
+    models,
+    bindings: [{ conversation: { kind: "wildcard" }, modelId: stillBound && active ? active.modelId : fallback.id }],
   };
+  return { desired: customBoxFromCatalog({ paths, catalog: next }) };
+}
+
+export function parseUiProviderSave(
+  input: unknown,
+  paths: BoxPaths,
+  catalog: Catalog = emptyCatalog(),
+): ReturnType<typeof applyUiCommand> {
+  return applyUiCommand({ command: parseUiCommand(input), catalog, paths });
 }

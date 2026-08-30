@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { proveWrap, stripWrap, wrapHostSource } from "./wrap.ts";
 import { OPENBOT_MARKER } from "../domain/types.ts";
@@ -60,4 +64,18 @@ test("opengrok wrap is refused", () => {
     runtimePath: "/tmp/runtime.cjs",
   });
   assert.equal(proof.kind, "refused");
+});
+
+test("wrapped source passes node --check when the temp file ends in .cjs", () => {
+  const proof = wrapHostSource({ source: STOCK, runtimePath: "/tmp/runtime.cjs" });
+  assert.equal(proof.kind, "wrapped");
+  if (proof.kind !== "wrapped") {
+    return;
+  }
+  const dir = mkdtempSync(path.join(os.tmpdir(), "openbot-check-"));
+  const file = path.join(dir, "host-main.openbot-check.cjs");
+  writeFileSync(file, proof.source);
+  const result = spawnSync(process.execPath, ["--check", file], { encoding: "utf8" });
+  rmSync(dir, { recursive: true, force: true });
+  assert.equal(result.status, 0, result.stderr);
 });

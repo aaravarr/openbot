@@ -30,38 +30,51 @@ function completionsUrl(origin) {
   return b + "/v1/chat/completions";
 }
 
-function lookupRoute(plan, modelSlug) {
-  var models = (plan && plan.catalog && plan.catalog.models) || [];
-  var providers = (plan && plan.catalog && plan.catalog.providers) || [];
-  var model = null;
-  for (var i = 0; i < models.length; i++) {
-    if (models[i] && (models[i].slug === modelSlug || models[i].id === modelSlug)) {
-      model = models[i];
-      break;
-    }
+function findById(rows, id) {
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i] && rows[i].id === id) return rows[i];
   }
-  if (!model) {
-    var agents = (plan && plan.agents) || {};
-    var wildcard = agents["*"];
-    if (wildcard && wildcard.modelId === modelSlug) {
-      for (var j = 0; j < models.length; j++) {
-        if (models[j] && models[j].slug === wildcard.modelId) {
-          model = models[j];
-          break;
-        }
+  return null;
+}
+
+function lookupRoute(plan, requested) {
+  var catalog = plan && plan.catalog;
+  var models = (catalog && catalog.models) || [];
+  var providers = (catalog && catalog.providers) || [];
+  var agents = (plan && plan.agents) || {};
+  var wildcard = agents["*"];
+
+  function routeFor(model) {
+    if (!model) return null;
+    var provider = findById(providers, model.providerId);
+    if (!provider) return null;
+    return { model: model, provider: provider };
+  }
+
+  if (wildcard && typeof wildcard.modelId === "string") {
+    var bound = null;
+    for (var i = 0; i < models.length; i++) {
+      var row = models[i];
+      if (!row) continue;
+      if (row.providerId !== wildcard.providerId) continue;
+      if (row.slug === wildcard.modelId || row.id === wildcard.modelId) {
+        bound = row;
+        break;
       }
     }
-  }
-  if (!model) return null;
-  var provider = null;
-  for (var k = 0; k < providers.length; k++) {
-    if (providers[k] && providers[k].id === model.providerId) {
-      provider = providers[k];
-      break;
+    if (bound && (requested === bound.slug || requested === bound.id || requested === wildcard.modelId)) {
+      return routeFor(bound);
     }
   }
-  if (!provider) return null;
-  return { model: model, provider: provider };
+
+  var byId = findById(models, requested);
+  if (byId) return routeFor(byId);
+  for (var j = 0; j < models.length; j++) {
+    if (models[j] && models[j].slug === requested) {
+      return routeFor(models[j]);
+    }
+  }
+  return null;
 }
 
 function loadKey(providerId) {
@@ -174,12 +187,13 @@ var server = http.createServer(async function (req, res) {
       send(res, 503, JSON.stringify({ error: { message: "openbot plan missing; save a provider in the UI" } }));
       return;
     }
-    var modelSlug = body && body.model;
-    var route = lookupRoute(plan, modelSlug);
+    var requested = body && body.model;
+    var route = lookupRoute(plan, requested);
     if (!route) {
       send(res, 400, JSON.stringify({ error: { message: "unknown model slug" } }));
       return;
     }
+    body.model = route.model.slug;
     applyMaps(body, {
       modelId: route.model.slug,
       baseUrl: route.provider.origin,

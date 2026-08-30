@@ -8,7 +8,9 @@ Grok Bot 0.30 routes chat on the Computer, not on your Mac. A hop bound to `127.
 
 ## Status
 
-The supervisor, wrap, hop, and loopback UI are in this tree. Unit tests cover census, wrap/restore, hop mapping, and `reconcile`. A live Grok Bot Computer has not yet run `install.sh`. Treat the curl line as the intended install, not as a verified production run.
+Supervisor, wrap, hop, catalog UI, and `install.sh` are in this tree. Unit tests cover census, wrap/restore, hop mapping, catalog upsert, and `reconcile`. A live Grok Bot Computer has not yet run `install.sh`. Treat the curl line as the intended install, not as a verified production run.
+
+The control UI follows `DESIGN.md` from `npx getdesign@latest add cursor`: warm cream canvas, hairline cards, Cursor Orange on the primary save button.
 
 ## Install
 
@@ -18,7 +20,7 @@ Run this **in the Computer terminal**, not on the Mac. Node 22 or newer.
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
 ```
 
-The script copies OpenBot into `/home/box/sand-data/openbot`, starts the control UI on `http://127.0.0.1:18791`, and leaves chat official until you save a provider. Open that URL in the Computer browser. Paste origin, model slug, and API key. Saving wraps the unique `createProtoSessionProvider` factory and adopts or starts hop on `127.0.0.1:18790`.
+The script copies OpenBot into `/home/box/sand-data/openbot`, starts the control UI on `http://127.0.0.1:18791`, and leaves chat official until you save a provider. Open that URL in the Computer browser. Add providers and models, paste an API key, and pick which model is in use. Saving wraps the unique `createProtoSessionProvider` factory and adopts or starts hop on `127.0.0.1:18790`.
 
 Do not put a key on the command line. `OPENBOT_API_KEY` is the env var if you install from the CLI with `--origin` and `--model`.
 
@@ -29,8 +31,8 @@ Do not put a key on the command line. `OPENBOT_API_KEY` is the env var if you in
 - One-line install on the Grok Bot Computer
 - Control UI on `127.0.0.1:18791`
 - Provider list, model list, model switch
-- API keys in `/home/box/sand-data/secrets.json`, never in bindings or git
-- BYOK as paste-a-key in our UI
+- API-key mode: hop injects the key from `/home/box/sand-data/secrets.json` on each upstream request. Bindings never hold keys.
+- BYOK is pasting that key in the control UI
 - Official mode: stock `createProtoSessionProvider`, no hop, no wrap
 - Custom mode: wrap only `executor.stream`, POST OpenAI-compatible `/v1/chat/completions` through the loopback hop
 

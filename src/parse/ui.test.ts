@@ -103,9 +103,16 @@ test("use-model switches the wildcard without dropping providers", () => {
   assert.equal(parsed.desired.catalog.bindings[0]?.modelId, "openai:gpt-4.1");
 });
 
+test("official does not request a catalog wipe", () => {
+  const parsed = parseUiProviderSave({ kind: "official" }, paths(), zhipuCatalog());
+  assert.equal(parsed.desired.kind, "official");
+  assert.equal(parsed.catalogWrite, undefined);
+});
+
 test("remove last provider becomes official", () => {
   const parsed = parseUiProviderSave({ kind: "remove-provider", providerId: "zhipu" }, paths(), zhipuCatalog());
   assert.equal(parsed.desired.kind, "official");
+  assert.equal(parsed.catalogWrite?.providers.length, 0);
 });
 
 test("remove one provider keeps the other and rebinds if needed", () => {

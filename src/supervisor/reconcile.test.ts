@@ -201,7 +201,20 @@ test("official restores the backup and does not wrap identity", async () => {
   assert.equal(result.kind, "ok");
   assert.equal(ctx.fs.read(ctx.paths.hostMain), STOCK);
   assert.equal(ctx.fs.read(ctx.paths.hostMain)?.includes(OPENBOT_MARKER), false);
-  assert.equal(ctx.fs.exists(ctx.paths.plan), false);
+});
+
+test("official keeps the catalog plan file", async () => {
+  const wrapped = wrapHostSource({ source: STOCK, runtimePath: "/tmp/runtime.cjs" });
+  assert.equal(wrapped.kind, "wrapped");
+  if (wrapped.kind !== "wrapped") {
+    return;
+  }
+  const ctx = setup(wrapped.source);
+  ctx.fs.write(ctx.paths.knownBackup, STOCK);
+  ctx.fs.write(ctx.paths.plan, '{"kind":"custom","catalog":{"providers":[{"id":"zhipu"}],"models":[],"bindings":[]}}\n');
+  const result = await reconcile(officialBox(ctx.paths), ctx.deps);
+  assert.equal(result.kind, "ok");
+  assert.match(ctx.fs.read(ctx.paths.plan) ?? "", /zhipu/);
 });
 
 test("official peels a known opengrok wrap back to stock", async () => {

@@ -53,6 +53,14 @@ test("install.sh refuses a machine without the Computer host file", () => {
   assert.match(result.stderr, /Missing \/tmp\/openbot-missing-host-main\.cjs/);
 });
 
+test("install.sh fetches Node 22 when the box node is too old", () => {
+  const body = readFileSync(installSh, "utf8");
+  assert.match(body, /ensure_node/);
+  assert.match(body, /node22/);
+  assert.match(body, /node-\$\{NODE_VERSION\}-\$\{file\}/);
+  assert.match(body, /linux-x64/);
+});
+
 test("install.sh copies the tree, leaves the host stock, and starts the UI", async () => {
   const box = mkdtempSync(path.join(os.tmpdir(), "openbot-install-box-"));
   const src = mkdtempSync(path.join(os.tmpdir(), "openbot-install-src-"));

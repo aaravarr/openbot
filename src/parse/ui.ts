@@ -103,14 +103,17 @@ function upsertModelRow(catalog: Catalog, model: Model): Catalog {
   return withWildcard({ ...catalog, models }, model.id);
 }
 
+export type UiSave = {
+  readonly desired: DesiredState;
+  readonly secret?: { providerId: ReturnType<typeof parseProviderId>; bytes: ReturnType<typeof parseSecretBytes> };
+  readonly catalogWrite?: Catalog;
+};
+
 export function applyUiCommand(input: {
   command: UiCommand;
   catalog: Catalog;
   paths: BoxPaths;
-}): {
-  desired: DesiredState;
-  secret?: { providerId: ReturnType<typeof parseProviderId>; bytes: ReturnType<typeof parseSecretBytes> };
-} {
+}): UiSave {
   const { command, catalog, paths } = input;
   if (command.kind === "official") {
     return { desired: officialBox(paths) };
@@ -170,13 +173,13 @@ export function applyUiCommand(input: {
   const providers = catalog.providers.filter((row) => row.id !== providerId);
   const models = catalog.models.filter((row) => row.providerId !== providerId);
   if (providers.length === 0 || models.length === 0) {
-    return { desired: officialBox(paths) };
+    return { desired: officialBox(paths), catalogWrite: emptyCatalog() };
   }
   const active = catalog.bindings.find((row) => row.conversation.kind === "wildcard");
   const stillBound = active && models.some((row) => row.id === active.modelId);
   const fallback = models[0];
   if (fallback === undefined) {
-    return { desired: officialBox(paths) };
+    return { desired: officialBox(paths), catalogWrite: emptyCatalog() };
   }
   const next: Catalog = {
     providers,
@@ -190,6 +193,6 @@ export function parseUiProviderSave(
   input: unknown,
   paths: BoxPaths,
   catalog: Catalog = emptyCatalog(),
-): ReturnType<typeof applyUiCommand> {
+): UiSave {
   return applyUiCommand({ command: parseUiCommand(input), catalog, paths });
 }

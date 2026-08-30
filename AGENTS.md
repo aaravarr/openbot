@@ -16,7 +16,7 @@ The domain is a box supervisor. Callers parse input into `DesiredState`, then `r
 
 `DesiredState` is `OfficialBox | CustomBox` in `src/domain/types.ts`.
 
-- Official: wrap is stock (gone), hop is stop-owned, UI stays on loopback so the user can switch back. No catalog, no hop URL, no upstream.
+- Official: wrap is stock (gone), hop is stop-owned, UI stays on loopback so the user can switch back. DesiredState has no catalog, hop URL, or upstream. The plan file on disk stays unless the user removed the last provider. Secrets stay.
 - Custom: wrap is marked `/* openbot-stock-wrap */`, hop is adopt-or-start on `127.0.0.1:18790`, UI on `127.0.0.1:18791`. Catalog holds providers, models, and bindings.
 
 A known `/* opengrok-stock-wrap */` header is peeled back to stock before official restore or custom wrap. `python …/hop-server.py` leftovers on `:18790` are SIGTERM'd. Any other foreign listener is still refused, not adopted.
@@ -51,3 +51,4 @@ The first commit is on `main`. Every later change is a PR, then merge. Conventio
 - Adopt a foreign process on `:18790` as ours
 - `kill -9` sand-host or start `node host-main.cjs` without gateway tokens
 - Treat `--census-only` as proof that wrap would succeed
+- Delete the plan file on Official. Official is a wrap mode, not a catalog reset.

@@ -85,6 +85,9 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       send(res, 409, JSON.stringify(result), "application/json; charset=utf-8");
       return;
     }
+    if (parsed.catalogWrite && parsed.catalogWrite.providers.length === 0) {
+      current.fs.remove(current.paths.plan);
+    }
     if (parsed.secret) {
       const store = loadSecrets(current.fs, current.paths.secrets);
       saveSecrets(current.fs, current.paths.secrets, upsertSecret(store, parsed.secret.providerId, parsed.secret.bytes));

@@ -189,7 +189,6 @@ export async function reconcile(desired: DesiredState, deps: SupervisorDeps): Pr
 
   if (desired.kind === "official") {
     wrapBytesChanged = restoreOfficialHost(deps, raw);
-    deps.fs.remove(deps.paths.plan);
     if (hopListen.kind === "ours") {
       deps.procs.stop(hopListen.pid);
       deps.fs.remove(deps.paths.hopPid);

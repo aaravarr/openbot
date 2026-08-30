@@ -1,0 +1,52 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  defaultMaxTokens,
+  mapFinishReason,
+  mapToolCalls,
+  unwrapJsonSchemaTools,
+} from "./translate.ts";
+import { HIGH_AGENT_MAX_TOKENS } from "../domain/types.ts";
+
+test("unwrapJsonSchemaTools peels AI SDK jsonSchema so properties are visible", () => {
+  const tools = unwrapJsonSchemaTools([
+    {
+      name: "SendToUser",
+      description: "talk to the user",
+      parameters: {
+        jsonSchema: {
+          type: "object",
+          properties: { message: { type: "string" } },
+          required: ["message"],
+        },
+      },
+    },
+  ]);
+  assert.equal(tools.length, 1);
+  const parameters = tools[0]?.function.parameters;
+  assert.equal(parameters?.properties.message !== undefined, true);
+  assert.equal("jsonSchema" in (parameters ?? {}), false);
+});
+
+test("mapToolCalls keeps a second SendToUser; the generic hop does not drop it", () => {
+  const parts = mapToolCalls([
+    { id: "c1", function: { name: "SendToUser", arguments: "{\"message\":\"one\"}" } },
+    { id: "c2", function: { name: "SendToUser", arguments: "{\"message\":\"two\"}" } },
+  ]);
+  assert.equal(parts.length, 2);
+  assert.equal(parts[0]?.toolName, "SendToUser");
+  assert.equal(parts[1]?.toolName, "SendToUser");
+  assert.equal(parts[1]?.args.message, "two");
+});
+
+test("mapFinishReason maps tool_calls to host tool-calls and honors stop", () => {
+  assert.equal(mapFinishReason("tool_calls"), "tool-calls");
+  assert.equal(mapFinishReason("stop"), "stop");
+  assert.equal(mapFinishReason("length"), "length");
+});
+
+test("default max tokens is 65536, not 8192", () => {
+  assert.equal(defaultMaxTokens(undefined), HIGH_AGENT_MAX_TOKENS);
+  assert.equal(defaultMaxTokens(undefined), 65536);
+  assert.notEqual(defaultMaxTokens(undefined), 8192);
+});

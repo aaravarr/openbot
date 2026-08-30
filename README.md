@@ -8,38 +8,43 @@ Grok Bot 0.30 routes chat on the Computer, not on your Mac. A hop bound to `127.
 
 ## Status
 
-The public repo is new. This first commit lands the domain model and the repo layout. The one-line installer, host wrap, hop, and Web UI ship as follow-up PRs. Do not curl an install script yet.
+The supervisor, wrap, hop, and loopback UI are in this tree. Unit tests cover census, wrap/restore, hop mapping, and `reconcile`. A live Grok Bot Computer has not yet run `install.sh`. Treat the curl line as the intended install, not as a verified production run.
 
-## What it will do
+## Install
 
-- One-line install on the Grok Bot Computer
-- Control UI on `127.0.0.1` (open it in the Computer browser)
-- Provider list, model list, model switch
-- API keys in a secret store on the box, never in bindings or git
-- BYOK as paste-a-key in our UI
-- Official mode: stock `createProtoSessionProvider`, no hop, no wrap
-- Custom mode: wrap only `executor.stream`, POST OpenAI-compatible `/v1/chat/completions` through a loopback hop
-
-Per-conversation model override is out of v1.
-
-## Design rules (already in types)
-
-- Official is wrap-gone. A vendor host rewrite while you still wanted custom is `needs-reinstall`, not official.
-- Bindings map a conversation to a model id. They cannot hold `apiKey` or any hop URL. The hop URL is always `http://127.0.0.1:18790/v1`.
-- The generic hop unwraps AI SDK `jsonSchema` and maps `tool_calls` faithfully. It does not drop later `SendToUser` calls to force a stop.
-- Agent `max_tokens` default is 65536, not 8192.
-
-See `src/domain/types.ts` and `AGENTS.md`.
-
-## Install (not shipped yet)
-
-Will look like this, run **in the Computer terminal**, not on the Mac:
+Run this **in the Computer terminal**, not on the Mac. Node 22 or newer.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
 ```
 
-Then open the printed `http://127.0.0.1:<ui-port>` URL in the Computer browser.
+The script copies OpenBot into `/home/box/sand-data/openbot`, starts the control UI on `http://127.0.0.1:18791`, and leaves chat official until you save a provider. Open that URL in the Computer browser. Paste origin, model slug, and API key. Saving wraps the unique `createProtoSessionProvider` factory and adopts or starts hop on `127.0.0.1:18790`.
+
+Do not put a key on the command line. `OPENBOT_API_KEY` is the env var if you install from the CLI with `--origin` and `--model`.
+
+`--census-only` prints host symbols. It is not proof that wrap would succeed. `--dry-run` runs the wrap transform on a copy.
+
+## What it does
+
+- One-line install on the Grok Bot Computer
+- Control UI on `127.0.0.1:18791`
+- Provider list, model list, model switch
+- API keys in `/home/box/sand-data/secrets.json`, never in bindings or git
+- BYOK as paste-a-key in our UI
+- Official mode: stock `createProtoSessionProvider`, no hop, no wrap
+- Custom mode: wrap only `executor.stream`, POST OpenAI-compatible `/v1/chat/completions` through the loopback hop
+
+Per-conversation model override is out of v1.
+
+## Design rules
+
+- Official is wrap-gone. A vendor host rewrite while you still wanted custom is `needs-reinstall`, not official.
+- Bindings map a conversation to a model id. They cannot hold `apiKey` or any hop URL. The hop URL is always `http://127.0.0.1:18790/v1`.
+- The generic hop unwraps AI SDK `jsonSchema` and maps `tool_calls` faithfully. It does not drop later `SendToUser` calls to force a stop.
+- Agent `max_tokens` default is 65536, not 8192.
+- Callers parse input into `DesiredState`, then `reconcile`. They do not sequence wrap, hop start, and host bounce themselves.
+
+See `src/domain/types.ts` and `AGENTS.md`.
 
 ## Development
 
@@ -49,7 +54,7 @@ npm test
 npm run typecheck
 ```
 
-Node 22 or newer.
+Node 22 or newer. Tests inject a fake host file and fake processes. They do not prove that a Bot message hits box `:18790`.
 
 ## License
 

@@ -1,0 +1,26 @@
+{
+  "name": "openbot",
+  "version": "0.1.0",
+  "description": "Bring your own models to Grok Bot. One-line install on the Computer, a local control UI, and an official-mode switch that restores stock chat.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test src/domain/types.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aaravarr/openbot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aaravarr/openbot/issues"
+  },
+  "homepage": "https://github.com/aaravarr/openbot#readme",
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2"
+  }
+}

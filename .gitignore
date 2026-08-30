@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.turbo/
+.pnpm-store/
+
+# Build
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.next/
+out/
+
+# Secrets and local machine state
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+sand-data/
+host-main.cjs
+host-main.cjs.*
+
+# Dumps of Grok Bot / Electron bundles (not product source)
+/main.cjs
+app.asar
+*.asar
+
+# Agent run artifacts (not the product)
+.audit/
+.orch/
+*.log
+
+# OS and editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

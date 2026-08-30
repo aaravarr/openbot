@@ -85,6 +85,15 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     const html = await get("http://127.0.0.1:18791/");
     assert.equal(html.status, 200);
     assert.match(html.body, /Save and use/);
+    assert.match(html.body, /Base URL/);
+    assert.match(html.body, /Model ID/);
+    assert.match(html.body, /API Key/);
+    assert.match(html.body, />Now</);
+    assert.match(html.body, /Add provider/);
+    assert.equal(html.body.includes("Catalog"), false);
+    assert.equal(html.body.includes("Origin"), false);
+    assert.equal(html.body.includes("Model slug"), false);
+    assert.equal(html.body.includes("Your models. Stock Grok"), false);
     const css = await get("http://127.0.0.1:18791/styles.css");
     assert.equal(css.status, 200);
     assert.match(css.body, /#f7f7f4/);
@@ -94,10 +103,12 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     assert.equal(state.status, 200);
     const parsed = JSON.parse(state.body) as {
       snapshot: { wrap: { kind: string }; uiListen: { kind: string }; hopListen: { kind: string } };
+      catalog?: unknown;
     };
     assert.equal(parsed.snapshot.wrap.kind, "stock-unmarked");
     assert.equal(parsed.snapshot.uiListen.kind, "ours");
     assert.equal(parsed.snapshot.hopListen.kind, "absent");
+    assert.equal("catalog" in parsed, false);
   } finally {
     killPidFile(path.join(sandData, "openbot-ui.pid"));
     killPidFile(path.join(sandData, "openbot-hop.pid"));

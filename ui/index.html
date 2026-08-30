@@ -8,65 +8,76 @@
   </head>
   <body>
     <header class="top-nav">
-      <p class="wordmark">OpenBot</p>
+      <h1 class="wordmark">OpenBot</h1>
       <p class="nav-status" id="nav-status">Loading</p>
     </header>
 
     <main>
-      <section class="hero">
-        <p class="kicker">Grok Bot Computer</p>
-        <h1>Your models. Stock Grok when you want it back.</h1>
-        <p class="lede">
-          Official restores the vendor host file. Custom wraps one factory and hops through loopback.
-          Keys stay in the secret store on this box, never in bindings.
-        </p>
-        <div class="hero-actions">
-          <button type="button" class="button-download" id="btn-official">Official</button>
-          <button type="button" class="button-secondary" id="btn-refresh">Refresh</button>
-        </div>
-        <p class="route-copy" id="mode-status">Loading snapshot…</p>
+      <section id="now" class="now-card" aria-labelledby="now-heading">
+        <p class="kicker">Now</p>
+        <h2 id="now-heading" class="now-title">Loading…</h2>
+        <p class="now-body" id="now-copy"></p>
+        <p class="code" id="now-origin" hidden></p>
+        <div class="now-actions" id="now-actions"></div>
       </section>
 
       <section aria-labelledby="providers-heading">
-        <h2 id="providers-heading" class="display-sm">Providers</h2>
-        <div id="provider-list" class="card-grid"></div>
-      </section>
-
-      <section class="feature-card" aria-labelledby="add-heading">
-        <h2 id="add-heading" class="title-md">Add provider</h2>
-        <p class="hint">
-          OpenAI-compatible origin, a model slug, and an API key. Saving upserts the row. Existing
-          providers stay. The hop injects this key on each upstream request (API-key mode). BYOK is
-          this form.
-        </p>
-        <form id="provider-form">
-          <label>
-            Name
-            <input name="name" type="text" required placeholder="Zhipu" autocomplete="off" />
-          </label>
-          <label>
-            Origin
-            <input
-              name="origin"
-              type="url"
-              required
-              placeholder="https://open.bigmodel.cn/api/paas/v4"
-              autocomplete="off"
-            />
-          </label>
-          <label>
-            Model slug
-            <input name="modelSlug" type="text" required placeholder="glm-5.3-flash" autocomplete="off" />
-          </label>
-          <label>
-            API key
-            <input name="secret" type="password" required placeholder="not stored in bindings" />
-          </label>
-          <div class="form-actions">
-            <button type="submit" class="button-primary">Save and use</button>
-            <p class="fine" id="form-note"></p>
-          </div>
-        </form>
+        <h2 id="providers-heading" class="section-title">Providers</h2>
+        <div class="list-card">
+          <div id="provider-list"></div>
+          <details id="add-provider">
+            <summary>
+              <span>Add provider</span>
+              <span class="chevron" aria-hidden="true"></span>
+            </summary>
+            <div class="panel">
+              <p class="hint">
+                OpenAI-compatible Base URL, a Model ID, and an API Key. Add more models
+                on the provider after you save.
+              </p>
+              <form id="provider-form">
+                <label>
+                  Name
+                  <input name="name" type="text" required placeholder="OpenAI" autocomplete="off" />
+                </label>
+                <label>
+                  Base URL
+                  <input
+                    name="origin"
+                    type="url"
+                    required
+                    placeholder="https://api.openai.com/v1"
+                    autocomplete="off"
+                  />
+                </label>
+                <label>
+                  Model ID
+                  <input name="modelSlug" type="text" required placeholder="gpt-4.1" autocomplete="off" />
+                </label>
+                <label>
+                  API Key
+                  <span class="password-field">
+                    <input
+                      name="secret"
+                      type="password"
+                      required
+                      placeholder="sk-…"
+                      autocomplete="new-password"
+                      id="add-secret"
+                    />
+                    <button type="button" class="button-tertiary" data-toggle-secret="add-secret">
+                      Show
+                    </button>
+                  </span>
+                </label>
+                <div class="form-actions">
+                  <button type="submit" class="button-primary">Save and use</button>
+                  <p class="fine" id="form-note" aria-live="polite"></p>
+                </div>
+              </form>
+            </div>
+          </details>
+        </div>
       </section>
     </main>
     <script src="/app.js"></script>

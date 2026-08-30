@@ -10,6 +10,7 @@ import { OPENBOT_MARKER } from "./domain/types.ts";
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const installSh = path.join(repoRoot, "install.sh");
+const UI = "http://127.0.0.1:9280";
 
 const STOCK = `function createProtoSessionProvider(client) {
   return { getSession: function () { return 1; } };
@@ -87,10 +88,10 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
 
   try {
     assert.equal(result.status, 0, result.stderr || result.stdout);
-    assert.match(result.stdout, /OpenBot UI: http:\/\/127\.0\.0\.1:18791/);
+    assert.match(result.stdout, /OpenBot UI: http:\/\/127\.0\.0\.1:9280/);
     assert.equal(readFileSync(hostMain, "utf8").includes(OPENBOT_MARKER), false);
     assert.equal(readFileSync(hostMain, "utf8").includes("function createProtoSessionProvider(client)"), true);
-    const html = await get("http://127.0.0.1:18791/");
+    const html = await get(`${UI}/`);
     assert.equal(html.status, 200);
     assert.match(html.body, /Save and use/);
     assert.match(html.body, /Base URL/);
@@ -102,20 +103,29 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     assert.equal(html.body.includes("Origin"), false);
     assert.equal(html.body.includes("Model slug"), false);
     assert.equal(html.body.includes("Your models. Stock Grok"), false);
-    const css = await get("http://127.0.0.1:18791/styles.css");
+    const css = await get(`${UI}/styles.css`);
     assert.equal(css.status, 200);
     assert.match(css.body, /#f7f7f4/);
     assert.match(css.body, /#f54e00/);
     assert.equal(css.body.includes("box-shadow"), false);
-    const state = await get("http://127.0.0.1:18791/api/state");
+    const health = await get(`${UI}/healthz`);
+    assert.equal(health.status, 200);
+    assert.match(health.body, /openbot/);
+    const state = await get(`${UI}/api/state`);
     assert.equal(state.status, 200);
     const parsed = JSON.parse(state.body) as {
-      snapshot: { wrap: { kind: string }; uiListen: { kind: string }; hopListen: { kind: string } };
+      snapshot: {
+        wrap: { kind: string };
+        uiListen: { kind: string; port?: number };
+        hopListen: { kind: string; port?: number };
+      };
       catalog?: unknown;
     };
     assert.equal(parsed.snapshot.wrap.kind, "stock-unmarked");
     assert.equal(parsed.snapshot.uiListen.kind, "ours");
-    assert.equal(parsed.snapshot.hopListen.kind, "absent");
+    assert.equal(parsed.snapshot.hopListen.kind, "ours");
+    assert.equal(parsed.snapshot.uiListen.port, 9280);
+    assert.equal(parsed.snapshot.hopListen.port, 9280);
     assert.equal("catalog" in parsed, false);
   } finally {
     killPidFile(path.join(sandData, "openbot-ui.pid"));

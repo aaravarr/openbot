@@ -15,6 +15,7 @@ export type BoxPaths = {
   readonly hopServer: AbsPath;
   readonly maps: AbsPath;
   readonly plan: AbsPath;
+  readonly mode: AbsPath;
   readonly hopPid: AbsPath;
   readonly uiPid: AbsPath;
   readonly hopLog: AbsPath;
@@ -54,6 +55,7 @@ export function boxPathsFrom(input: {
     hopServer: joinAbs(repoRoot, "payload/hop-server.cjs"),
     maps: joinAbs(repoRoot, "payload/provider-maps.cjs"),
     plan: joinAbs(sandData, "openbot-plan.json"),
+    mode: joinAbs(sandData, "openbot-mode"),
     hopPid: joinAbs(sandData, "openbot-hop.pid"),
     uiPid: joinAbs(sandData, "openbot-ui.pid"),
     hopLog: joinAbs(sandData, "openbot-hop.log"),

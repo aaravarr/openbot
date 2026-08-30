@@ -2,6 +2,9 @@
  * OpenBot domain types. The product is a box supervisor.
  * Official chat is wrap-gone. Custom chat is marked wrap plus loopback hop.
  * Secrets never appear on Binding. The generic hop cannot drop SendToUser.
+ *
+ * Hop and the control UI share one loopback service. Chat is POST /v1/chat/completions.
+ * The UI is GET / and /api/*. Leftover python hop-server.py processes are still SIGTERM'd.
  */
 
 export const OPENBOT_MARKER = "/* openbot-stock-wrap */" as const;
@@ -9,8 +12,7 @@ export const OPENGROK_MARKER = "/* opengrok-stock-wrap */" as const;
 export const HOST_MAIN = "/home/box/sand-host/host-main.cjs" as const;
 export const SAND_DATA = "/home/box/sand-data" as const;
 export const DEFAULT_SECRETS_PATH = "/home/box/sand-data/secrets.json" as const;
-export const HOP_PORT = 18790 as const;
-export const UI_PORT = 18791 as const;
+export const SERVICE_PORT = 9280 as const;
 export const LOOPBACK = "127.0.0.1" as const;
 export const HIGH_AGENT_MAX_TOKENS = 65536 as const;
 export const KNOWN_HOST_BACKUP = "/home/box/sand-data/host-main.cjs.pre-openbot" as const;
@@ -28,9 +30,9 @@ export type OwnedPid = Brand<number, "OwnedPid">;
 export type ForeignPid = Brand<number, "ForeignPid">;
 export type SecretBytes = Brand<string, "SecretBytes">;
 
-export type LoopbackHop = { readonly host: typeof LOOPBACK; readonly port: typeof HOP_PORT };
+export type LoopbackHop = { readonly host: typeof LOOPBACK; readonly port: typeof SERVICE_PORT };
 
-export const LOOPBACK_HOP: LoopbackHop = { host: LOOPBACK, port: HOP_PORT };
+export const LOOPBACK_HOP: LoopbackHop = { host: LOOPBACK, port: SERVICE_PORT };
 
 export type ConversationKey =
   | { readonly kind: "wildcard" }
@@ -86,7 +88,7 @@ export type OfficialBox = {
   readonly uiListen: {
     readonly kind: "loopback";
     readonly host: typeof LOOPBACK;
-    readonly port: typeof UI_PORT;
+    readonly port: typeof SERVICE_PORT;
   };
   readonly secretsPath: AbsPath;
   readonly hop?: never;
@@ -100,12 +102,12 @@ export type CustomBox = {
   readonly hopListen: {
     readonly kind: "adopt-or-start";
     readonly host: typeof LOOPBACK;
-    readonly port: typeof HOP_PORT;
+    readonly port: typeof SERVICE_PORT;
   };
   readonly uiListen: {
     readonly kind: "loopback";
     readonly host: typeof LOOPBACK;
-    readonly port: typeof UI_PORT;
+    readonly port: typeof SERVICE_PORT;
   };
   readonly secretsPath: AbsPath;
   readonly catalog: Catalog;

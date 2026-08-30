@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { LOOPBACK, UI_PORT } from "../domain/types.ts";
+import { LOOPBACK, SERVICE_PORT } from "../domain/types.ts";
 import { parseUiProviderSave } from "../parse/ui.ts";
 import { boxPathsFrom } from "../supervisor/paths.ts";
 import { catalogFromPlanJson } from "../supervisor/plan.ts";
@@ -11,10 +12,15 @@ import { nodeFs, nodeProcs } from "../supervisor/procs.ts";
 import { reconcile } from "../supervisor/reconcile.ts";
 import { loadSecrets, saveSecrets, upsertSecret } from "../supervisor/secrets.ts";
 
+const require = createRequire(import.meta.url);
+const hop = require("../../payload/hop-handler.cjs") as {
+  handleHopRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<boolean>;
+};
+
 const repoRoot = process.env.OPENBOT_REPO ?? fileURLToPath(new URL("../..", import.meta.url));
 const uiDir = path.join(repoRoot, "ui");
 const host = process.env.OPENBOT_UI_HOST ?? LOOPBACK;
-const port = Number(process.env.OPENBOT_UI_PORT ?? String(UI_PORT));
+const port = Number(process.env.OPENBOT_UI_PORT ?? String(SERVICE_PORT));
 
 function paths() {
   return boxPathsFrom({
@@ -125,6 +131,9 @@ const server = http.createServer((req, res) => {
         await handleApi(req, res, url);
         return;
       }
+      if (await hop.handleHopRequest(req, res)) {
+        return;
+      }
       const file = safeUiPath(url.pathname);
       if (file === undefined) {
         send(res, 403, "forbidden", "text/plain; charset=utf-8");
@@ -146,5 +155,5 @@ server.listen(port, host, () => {
   const box = paths();
   fs.mkdirSync(box.sandData, { recursive: true });
   fs.writeFileSync(box.uiPid, `${String(process.pid)}\n`);
-  process.stdout.write(`openbot-ui listening on http://${host}:${String(port)}\n`);
+  process.stdout.write(`openbot listening on http://${host}:${String(port)}\n`);
 });

@@ -6,7 +6,7 @@ import { dryRunWrap, reconcile } from "./supervisor/reconcile.ts";
 import { nodeFs, nodeProcs } from "./supervisor/procs.ts";
 import { loadSecrets, parseProviderId, saveSecrets, upsertSecret } from "./supervisor/secrets.ts";
 import { censusHost } from "./host/census.ts";
-import { LOOPBACK, UI_PORT } from "./domain/types.ts";
+import { LOOPBACK, SERVICE_PORT } from "./domain/types.ts";
 import { type SupervisorDeps } from "./supervisor/observe.ts";
 
 function depsFrom(paths: SupervisorDeps["paths"]): SupervisorDeps {
@@ -71,7 +71,7 @@ async function main(argv: string[]): Promise<number> {
   const result = await reconcile(officialBox(parsed.paths), deps);
   printResult(result);
   if (result.kind === "ok") {
-    console.log(`OpenBot UI: http://${LOOPBACK}:${String(UI_PORT)}`);
+    console.log(`OpenBot UI: http://${LOOPBACK}:${String(SERVICE_PORT)}`);
     console.log("Paste a provider key in the UI to switch chat off the stock model.");
   }
   return result.kind === "ok" ? 0 : 1;

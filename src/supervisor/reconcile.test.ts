@@ -247,6 +247,15 @@ test("leftover opengrok hop-server.py is stopped, not adopted", async () => {
   assert.equal(ctx.procs.started.some((row) => row.includes("hop-server")), true);
 });
 
+test("official stops leftover opengrok hop-server.py and does not start a hop", async () => {
+  const ctx = setup(opengrokWrap(STOCK), { hopForeign: true, opengrokHop: true });
+  const result = await reconcile(officialBox(ctx.paths), ctx.deps);
+  assert.equal(result.kind, "ok");
+  assert.equal(ctx.fs.read(ctx.paths.hostMain), STOCK);
+  assert.equal(ctx.procs.stopped.includes(7), true);
+  assert.equal(ctx.procs.started.some((row) => row.includes("hop-server")), false);
+});
+
 test("private-lane host is not wrapped", async () => {
   const ctx = setup(STOCK + "\ncreateOpenAiHopSession();\nresolvedOpenaiBaseUrl();\n");
   const result = await reconcile(zhipu(ctx.paths), ctx.deps);

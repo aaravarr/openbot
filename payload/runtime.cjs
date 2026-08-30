@@ -8,7 +8,7 @@ var { URL } = require("url");
 var PLAN = process.env.OPENBOT_PLAN || "/home/box/sand-data/openbot-plan.json";
 var LOG = process.env.OPENBOT_LOG || "/tmp/openbot-session.log";
 var HOP_HOST = process.env.OPENBOT_HOP_HOST || "127.0.0.1";
-var HOP_PORT = Number(process.env.OPENBOT_HOP_PORT || "18790");
+var HOP_PORT = Number(process.env.OPENBOT_HOP_PORT || "9280");
 var HIGH_AGENT_MAX_TOKENS = 65536;
 
 function log(line) {

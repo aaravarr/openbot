@@ -1,6 +1,7 @@
 import {
   hopBaseUrl,
   LOOPBACK_HOP,
+  SERVICE_PORT,
   type Binding,
   type Catalog,
   type CustomBox,
@@ -15,7 +16,7 @@ export type CompiledAgent = {
 
 export type CompiledCustomPlan = {
   readonly kind: "custom";
-  readonly hop: { readonly host: "127.0.0.1"; readonly port: 18790 };
+  readonly hop: { readonly host: "127.0.0.1"; readonly port: typeof SERVICE_PORT };
   readonly hopBaseUrl: ReturnType<typeof hopBaseUrl>;
   readonly agents: { readonly [key: string]: CompiledAgent };
   readonly catalog: Catalog;

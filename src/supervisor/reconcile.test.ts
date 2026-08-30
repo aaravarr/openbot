@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { OPENBOT_MARKER, OPENGROK_MARKER } from "../domain/types.ts";
+import { OPENBOT_MARKER, OPENGROK_MARKER, SERVICE_PORT } from "../domain/types.ts";
 import { wrapHostSource } from "../host/wrap.ts";
 import { customBoxFromProvider, officialBox, parseUpstreamOrigin } from "../parse/argv.ts";
 import { boxPathsFrom, parseAbsPath } from "./paths.ts";
@@ -54,17 +54,18 @@ function memoryFs(init: Record<string, string>): FsDeps & { files: Record<string
 }
 
 function fakeProcs(state: {
-  hopOurs?: boolean;
-  hopForeign?: boolean;
+  serviceOurs?: boolean;
+  serviceForeign?: boolean;
+  leftoverHop?: boolean;
+  staleUi?: boolean;
   opengrokHop?: boolean;
-  uiOurs?: boolean;
   syntaxFail?: boolean;
 }): FakeProcs {
-  let hopOurs = state.hopOurs === true;
-  let hopForeign = state.hopForeign === true;
-  let uiOurs = state.uiOurs === true;
-  let hopPid: number | undefined = hopOurs ? 42 : undefined;
-  let uiPid: number | undefined = uiOurs ? 43 : undefined;
+  let serviceOurs = state.serviceOurs === true;
+  let serviceForeign = state.serviceForeign === true;
+  let leftoverHop = state.leftoverHop === true;
+  let hopPid: number | undefined = leftoverHop ? 42 : undefined;
+  let uiPid: number | undefined = serviceOurs || state.staleUi === true ? 43 : undefined;
   const started: string[] = [];
   const stopped: number[] = [];
   const termed: number[] = [];
@@ -75,11 +76,8 @@ function fakeProcs(state: {
     termed,
     checked,
     async port(_host, port) {
-      if (port === 18790) {
-        return hopOurs || hopForeign;
-      }
-      if (port === 18791) {
-        return uiOurs;
+      if (port === SERVICE_PORT) {
+        return serviceOurs || serviceForeign;
       }
       return false;
     },
@@ -97,27 +95,27 @@ function fakeProcs(state: {
     },
     start(input) {
       started.push(input.argv.join(" "));
-      if (input.argv.some((arg) => arg.includes("hop-server"))) {
-        hopOurs = true;
-        hopForeign = false;
-        hopPid = 42;
-        return parseOwnedPid(42);
-      }
-      uiOurs = true;
+      serviceOurs = true;
+      serviceForeign = false;
       uiPid = 43;
       return parseOwnedPid(43);
     },
     stop(pid) {
       stopped.push(pid);
-      hopOurs = false;
-      hopForeign = false;
-      hopPid = undefined;
+      if (pid === hopPid) {
+        leftoverHop = false;
+        hopPid = undefined;
+      }
+      if (pid === uiPid) {
+        serviceOurs = false;
+        uiPid = undefined;
+      }
     },
     hostPids() {
       return [parseOwnedPid(99)];
     },
     opengrokHopPids() {
-      if (state.opengrokHop === true && hopForeign) {
+      if (state.opengrokHop === true) {
         return [parseOwnedPid(7)];
       }
       return [];
@@ -156,7 +154,7 @@ function zhipu(paths: ReturnType<typeof setup>["paths"]) {
   });
 }
 
-test("custom wrap writes the marker, backs up stock, and starts hop plus UI", async () => {
+test("custom wrap writes the marker, backs up stock, and starts the loopback service", async () => {
   const ctx = setup(STOCK);
   const result = await reconcile(zhipu(ctx.paths), ctx.deps);
   assert.equal(result.kind, "ok");
@@ -166,7 +164,10 @@ test("custom wrap writes the marker, backs up stock, and starts hop plus UI", as
   const plan = ctx.fs.read(ctx.paths.plan);
   assert.equal(plan?.includes("apiKey"), false);
   assert.equal(plan?.includes("hopBaseUrl"), true);
-  assert.equal(ctx.procs.started.some((row) => row.includes("hop-server")), true);
+  assert.match(plan ?? "", /9280/);
+  assert.equal(ctx.fs.read(ctx.paths.mode)?.trim(), "custom");
+  assert.equal(ctx.procs.started.some((row) => row.includes("hop-server")), false);
+  assert.equal(ctx.procs.started.some((row) => row.includes("server.ts")), true);
   assert.equal(ctx.procs.termed.length, 1);
 });
 
@@ -201,6 +202,7 @@ test("official restores the backup and does not wrap identity", async () => {
   assert.equal(result.kind, "ok");
   assert.equal(ctx.fs.read(ctx.paths.hostMain), STOCK);
   assert.equal(ctx.fs.read(ctx.paths.hostMain)?.includes(OPENBOT_MARKER), false);
+  assert.equal(ctx.fs.read(ctx.paths.mode)?.trim(), "official");
 });
 
 test("official keeps the catalog plan file", async () => {
@@ -215,6 +217,9 @@ test("official keeps the catalog plan file", async () => {
   const result = await reconcile(officialBox(ctx.paths), ctx.deps);
   assert.equal(result.kind, "ok");
   assert.match(ctx.fs.read(ctx.paths.plan) ?? "", /zhipu/);
+  if (result.kind === "ok") {
+    assert.equal(result.snapshot.alignment.kind, "ok");
+  }
 });
 
 test("official peels a known opengrok wrap back to stock", async () => {
@@ -243,8 +248,8 @@ test("official on an unmarked vendor rewrite does not restore an old backup", as
   assert.equal(ctx.fs.read(ctx.paths.hostMain), vendor);
 });
 
-test("foreign hop is refused, not adopted", async () => {
-  const ctx = setup(STOCK, { hopForeign: true });
+test("foreign listener on the service port is refused, not adopted", async () => {
+  const ctx = setup(STOCK, { serviceForeign: true });
   const result = await reconcile(zhipu(ctx.paths), ctx.deps);
   assert.equal(result.kind, "refused");
   if (result.kind === "refused") {
@@ -253,20 +258,38 @@ test("foreign hop is refused, not adopted", async () => {
 });
 
 test("leftover opengrok hop-server.py is stopped, not adopted", async () => {
-  const ctx = setup(STOCK, { hopForeign: true, opengrokHop: true });
+  const ctx = setup(STOCK, { opengrokHop: true });
   const result = await reconcile(zhipu(ctx.paths), ctx.deps);
   assert.equal(result.kind, "ok");
   assert.equal(ctx.procs.stopped.includes(7), true);
-  assert.equal(ctx.procs.started.some((row) => row.includes("hop-server")), true);
+  assert.equal(ctx.procs.started.some((row) => row.includes("hop-server")), false);
+  assert.equal(ctx.procs.started.some((row) => row.includes("server.ts")), true);
 });
 
-test("official stops leftover opengrok hop-server.py and does not start a hop", async () => {
-  const ctx = setup(opengrokWrap(STOCK), { hopForeign: true, opengrokHop: true });
+test("official stops leftover opengrok hop-server.py and does not start a hop process", async () => {
+  const ctx = setup(opengrokWrap(STOCK), { opengrokHop: true });
   const result = await reconcile(officialBox(ctx.paths), ctx.deps);
   assert.equal(result.kind, "ok");
   assert.equal(ctx.fs.read(ctx.paths.hostMain), STOCK);
   assert.equal(ctx.procs.stopped.includes(7), true);
   assert.equal(ctx.procs.started.some((row) => row.includes("hop-server")), false);
+});
+
+test("leftover hop-server.cjs is stopped when the service is unified", async () => {
+  const ctx = setup(STOCK, { leftoverHop: true });
+  const result = await reconcile(zhipu(ctx.paths), ctx.deps);
+  assert.equal(result.kind, "ok");
+  assert.equal(ctx.procs.stopped.includes(42), true);
+  assert.equal(ctx.fs.exists(ctx.paths.hopPid), false);
+  assert.equal(ctx.procs.started.some((row) => row.includes("hop-server")), false);
+});
+
+test("stale UI on the old two-port layout is stopped and replaced", async () => {
+  const ctx = setup(STOCK, { staleUi: true });
+  const result = await reconcile(zhipu(ctx.paths), ctx.deps);
+  assert.equal(result.kind, "ok");
+  assert.equal(ctx.procs.stopped.includes(43), true);
+  assert.equal(ctx.procs.started.some((row) => row.includes("server.ts")), true);
 });
 
 test("private-lane host is not wrapped", async () => {
@@ -275,13 +298,13 @@ test("private-lane host is not wrapped", async () => {
   assert.equal(result.kind, "refused");
 });
 
-test("owned hop is adopted, not started again", async () => {
+test("owned service is adopted, not started again", async () => {
   const wrapped = wrapHostSource({ source: STOCK, runtimePath: "/tmp/runtime.cjs" });
   assert.equal(wrapped.kind, "wrapped");
   if (wrapped.kind !== "wrapped") {
     return;
   }
-  const ctx = setup(wrapped.source, { hopOurs: true, uiOurs: true });
+  const ctx = setup(wrapped.source, { serviceOurs: true });
   const result = await reconcile(zhipu(ctx.paths), ctx.deps);
   assert.equal(result.kind, "ok");
   assert.equal(ctx.procs.started.length, 0);

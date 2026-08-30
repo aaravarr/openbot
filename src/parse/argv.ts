@@ -4,7 +4,7 @@ import {
   LOOPBACK,
   LOOPBACK_HOP,
   OPENBOT_MARKER,
-  UI_PORT,
+  SERVICE_PORT,
   type Catalog,
   type CustomBox,
   type OfficialBox,
@@ -135,7 +135,7 @@ export function officialBox(paths: BoxPaths): OfficialBox {
     kind: "official",
     wrap: { kind: "stock" },
     hopListen: { kind: "stop-owned" },
-    uiListen: { kind: "loopback", host: LOOPBACK, port: UI_PORT },
+    uiListen: { kind: "loopback", host: LOOPBACK, port: SERVICE_PORT },
     secretsPath: paths.secrets,
   };
 }
@@ -149,8 +149,8 @@ export function customBoxFromCatalog(input: { paths: BoxPaths; catalog: Catalog 
   return {
     kind: "custom",
     wrap: { kind: "marked", marker: OPENBOT_MARKER },
-    hopListen: { kind: "adopt-or-start", host: LOOPBACK, port: 18790 },
-    uiListen: { kind: "loopback", host: LOOPBACK, port: UI_PORT },
+    hopListen: { kind: "adopt-or-start", host: LOOPBACK, port: SERVICE_PORT },
+    uiListen: { kind: "loopback", host: LOOPBACK, port: SERVICE_PORT },
     secretsPath: input.paths.secrets,
     hop: LOOPBACK_HOP,
     catalog: input.catalog,

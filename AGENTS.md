@@ -16,12 +16,12 @@ The domain is a box supervisor. Callers parse input into `DesiredState`, then `r
 
 `DesiredState` is `OfficialBox | CustomBox` in `src/domain/types.ts`.
 
-- Official: wrap is stock (gone), hop is stop-owned, UI stays on loopback so the user can switch back. DesiredState has no catalog, hop URL, or upstream. The plan file on disk stays unless the user removed the last provider. Secrets stay.
-- Custom: wrap is marked `/* openbot-stock-wrap */`, hop is adopt-or-start on `127.0.0.1:18790`, UI on `127.0.0.1:18791`. Catalog holds providers, models, and bindings.
+- Official: wrap is stock (gone). Leftover hop-only processes are stopped. The loopback service stays so the user can switch back. DesiredState has no catalog, hop URL, or upstream. The plan file on disk stays unless the user removed the last provider. Secrets stay. `openbot-mode` is `official`.
+- Custom: wrap is marked `/* openbot-stock-wrap */`. One loopback service on `127.0.0.1:9280` serves the control UI, `/api/*`, and hop `POST /v1/chat/completions`. Catalog holds providers, models, and bindings. `openbot-mode` is `custom`.
 
-A known `/* opengrok-stock-wrap */` header is peeled back to stock before official restore or custom wrap. `python …/hop-server.py` leftovers on `:18790` are SIGTERM'd. Any other foreign listener is still refused, not adopted.
+A known `/* opengrok-stock-wrap */` header is peeled back to stock before official restore or custom wrap. `python …/hop-server.py` leftovers are SIGTERM'd. A leftover `hop-server.cjs` pid is stopped. Any other foreign listener on `:9280` is refused, not adopted.
 
-`align(desired, wrap)` returns `needs-reinstall` when desired is custom and the host file is stock unmarked. That is not official.
+`align(desired, wrap)` returns `needs-reinstall` when desired is custom and the host file is stock unmarked. That is not official. Infer desired from `openbot-mode`, not from plan-file existence. Official keeps the plan.
 
 Bindings are `{ conversation, modelId }`. Derive `hopBaseUrl` with `hopBaseUrl(LOOPBACK_HOP)`. Secret field names are unrepresentable on `Binding`.
 
@@ -47,8 +47,8 @@ The first commit is on `main`. Every later change is a PR, then merge. Conventio
 
 - Fork opengrok into this tree
 - Put keys in bindings, git, chat, or README examples
-- `Popen` a second hop on a live `:18790`
-- Adopt a foreign process on `:18790` as ours
+- Spawn `hop-server.cjs` next to the UI. Hop is a route on the same process.
+- Adopt a foreign process on `:9280` as ours
 - `kill -9` sand-host or start `node host-main.cjs` without gateway tokens
 - Treat `--census-only` as proof that wrap would succeed
 - Delete the plan file on Official. Official is a wrap mode, not a catalog reset.

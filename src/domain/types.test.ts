@@ -5,7 +5,7 @@ import {
   LOOPBACK,
   LOOPBACK_HOP,
   OPENBOT_MARKER,
-  UI_PORT,
+  SERVICE_PORT,
   align,
   hopBaseUrl,
   type CustomBox,
@@ -16,7 +16,7 @@ import { parseAbsPath } from "../supervisor/paths.ts";
 const secretsPath = parseAbsPath("/home/box/sand-data/secrets.json");
 
 test("hopBaseUrl is derived from loopback, not stored on Binding", () => {
-  assert.equal(hopBaseUrl(LOOPBACK_HOP), "http://127.0.0.1:18790/v1");
+  assert.equal(hopBaseUrl(LOOPBACK_HOP), "http://127.0.0.1:9280/v1");
 });
 
 test("HIGH_AGENT_MAX_TOKENS is not 8192", () => {
@@ -27,8 +27,8 @@ test("align names needs-reinstall when custom is desired and wrap is stock", () 
   const desired: CustomBox = {
     kind: "custom",
     wrap: { kind: "marked", marker: OPENBOT_MARKER },
-    hopListen: { kind: "adopt-or-start", host: LOOPBACK, port: 18790 },
-    uiListen: { kind: "loopback", host: LOOPBACK, port: UI_PORT },
+    hopListen: { kind: "adopt-or-start", host: LOOPBACK, port: SERVICE_PORT },
+    uiListen: { kind: "loopback", host: LOOPBACK, port: SERVICE_PORT },
     secretsPath,
     hop: LOOPBACK_HOP,
     catalog: { providers: [], models: [], bindings: [] },
@@ -42,7 +42,7 @@ test("align is ok when official is desired and wrap is stock", () => {
     kind: "official",
     wrap: { kind: "stock" },
     hopListen: { kind: "stop-owned" },
-    uiListen: { kind: "loopback", host: LOOPBACK, port: UI_PORT },
+    uiListen: { kind: "loopback", host: LOOPBACK, port: SERVICE_PORT },
     secretsPath,
   };
   const a = align(desired, { kind: "stock-unmarked" });
@@ -54,7 +54,7 @@ test("official box has no catalog and no hop", () => {
     kind: "official",
     wrap: { kind: "stock" },
     hopListen: { kind: "stop-owned" },
-    uiListen: { kind: "loopback", host: LOOPBACK, port: UI_PORT },
+    uiListen: { kind: "loopback", host: LOOPBACK, port: SERVICE_PORT },
     secretsPath,
   };
   assert.equal(official.kind, "official");

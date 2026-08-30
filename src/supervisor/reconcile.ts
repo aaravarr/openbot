@@ -1,8 +1,7 @@
 import {
-  HOP_PORT,
   LOOPBACK,
   OPENBOT_MARKER,
-  UI_PORT,
+  SERVICE_PORT,
   type DesiredState,
   type Snapshot,
 } from "../domain/types.ts";
@@ -10,7 +9,7 @@ import { censusHost } from "../host/census.ts";
 import { peelOpengrokToStock, proveWrap, stripWrap, wrapHostSource } from "../host/wrap.ts";
 import { observe, wrapFromSource, type SupervisorDeps } from "./observe.ts";
 import { compileCustomPlan, planToJson } from "./plan.ts";
-import { writeTemp } from "./procs.ts";
+import { parseOwnedPid, writeTemp } from "./procs.ts";
 
 export type ReconcileError =
   | { readonly kind: "host-missing"; readonly path: string }
@@ -49,12 +48,16 @@ function sharedEnv(deps: SupervisorDeps): SharedEnv {
     OPENBOT_SECRETS: deps.paths.secrets,
     OPENBOT_MAPS: deps.paths.maps,
     OPENBOT_HOP_HOST: LOOPBACK,
-    OPENBOT_HOP_PORT: String(HOP_PORT),
+    OPENBOT_HOP_PORT: String(SERVICE_PORT),
     OPENBOT_HOP_PID: deps.paths.hopPid,
     OPENBOT_UI_HOST: LOOPBACK,
-    OPENBOT_UI_PORT: String(UI_PORT),
+    OPENBOT_UI_PORT: String(SERVICE_PORT),
     OPENBOT_UI_PID: deps.paths.uiPid,
   };
+}
+
+function writeMode(deps: SupervisorDeps, kind: "official" | "custom"): void {
+  deps.fs.write(deps.paths.mode, `${kind}\n`, 0o644);
 }
 
 async function bounceHostIfNeeded(deps: SupervisorDeps, wrapBytesChanged: boolean): Promise<void> {
@@ -78,7 +81,7 @@ async function waitPort(deps: SupervisorDeps, port: number, budgetMs: number): P
   return deps.procs.port(LOOPBACK, port);
 }
 
-function startUi(deps: SupervisorDeps): void {
+function startService(deps: SupervisorDeps): void {
   deps.fs.mkdirp(deps.paths.sandData);
   deps.procs.start({
     argv: ["--experimental-strip-types", deps.paths.uiServer],
@@ -88,14 +91,30 @@ function startUi(deps: SupervisorDeps): void {
   });
 }
 
-function startHop(deps: SupervisorDeps): void {
-  deps.fs.mkdirp(deps.paths.sandData);
-  deps.procs.start({
-    argv: [deps.paths.hopServer],
-    env: { ...process.env, ...sharedEnv(deps) },
-    log: deps.paths.hopLog,
-    pidFile: deps.paths.hopPid,
-  });
+function stopLeftoverHopOnly(deps: SupervisorDeps): void {
+  const hopPid = deps.procs.readPidFile(deps.paths.hopPid);
+  const uiPid = deps.procs.readPidFile(deps.paths.uiPid);
+  if (hopPid === undefined || hopPid === uiPid) {
+    return;
+  }
+  if (!deps.procs.pidAlive(hopPid)) {
+    deps.fs.remove(deps.paths.hopPid);
+    return;
+  }
+  deps.procs.stop(parseOwnedPid(hopPid));
+  deps.fs.remove(deps.paths.hopPid);
+}
+
+async function stopStaleService(deps: SupervisorDeps): Promise<void> {
+  const uiPid = deps.procs.readPidFile(deps.paths.uiPid);
+  if (uiPid === undefined || !deps.procs.pidAlive(uiPid)) {
+    return;
+  }
+  if (await deps.procs.port(LOOPBACK, SERVICE_PORT)) {
+    return;
+  }
+  deps.procs.stop(parseOwnedPid(uiPid));
+  deps.fs.remove(deps.paths.uiPid);
 }
 
 function restoreOfficialHost(deps: SupervisorDeps, source: string): boolean {
@@ -165,38 +184,27 @@ export async function reconcile(desired: DesiredState, deps: SupervisorDeps): Pr
   }
   const source = peeled.kind === "stock" ? peeled.source : raw;
 
-  const before = await observe(deps);
-  let hopListen = before.hopListen;
-  if (hopListen.kind === "foreign") {
-    const leftovers = deps.procs.opengrokHopPids();
-    if (leftovers.length === 0) {
-      if (desired.kind === "custom") {
-        return { kind: "refused", error: { kind: "foreign-hop" } };
-      }
-    } else {
-      for (const pid of leftovers) {
-        deps.procs.stop(pid);
-      }
-      hopListen = { kind: "absent" };
-    }
+  for (const pid of deps.procs.opengrokHopPids()) {
+    deps.procs.stop(pid);
   }
+  stopLeftoverHopOnly(deps);
+  await stopStaleService(deps);
+
+  const before = await observe(deps);
   if (before.uiListen.kind === "foreign") {
-    return { kind: "refused", error: { kind: "foreign-ui" } };
+    return { kind: "refused", error: { kind: desired.kind === "custom" ? "foreign-hop" : "foreign-ui" } };
   }
 
   deps.fs.mkdirp(deps.paths.sandData);
   let wrapBytesChanged = false;
 
   if (desired.kind === "official") {
+    writeMode(deps, "official");
     wrapBytesChanged = restoreOfficialHost(deps, raw);
-    if (hopListen.kind === "ours") {
-      deps.procs.stop(hopListen.pid);
-      deps.fs.remove(deps.paths.hopPid);
-    }
     if (before.uiListen.kind === "absent") {
-      startUi(deps);
-      if (!(await waitPort(deps, UI_PORT, 4000))) {
-        return { kind: "refused", error: { kind: "listen-failed", port: UI_PORT } };
+      startService(deps);
+      if (!(await waitPort(deps, SERVICE_PORT, 4000))) {
+        return { kind: "refused", error: { kind: "listen-failed", port: SERVICE_PORT } };
       }
     }
     await bounceHostIfNeeded(deps, wrapBytesChanged);
@@ -216,18 +224,13 @@ export async function reconcile(desired: DesiredState, deps: SupervisorDeps): Pr
     return wrapped;
   }
   wrapBytesChanged = wrapped.changed || raw !== source;
+  writeMode(deps, "custom");
   deps.fs.write(deps.paths.plan, planToJson(compileCustomPlan(desired)), 0o644);
 
-  if (hopListen.kind === "absent") {
-    startHop(deps);
-    if (!(await waitPort(deps, HOP_PORT, 4000))) {
-      return { kind: "refused", error: { kind: "listen-failed", port: HOP_PORT } };
-    }
-  }
   if (before.uiListen.kind === "absent") {
-    startUi(deps);
-    if (!(await waitPort(deps, UI_PORT, 4000))) {
-      return { kind: "refused", error: { kind: "listen-failed", port: UI_PORT } };
+    startService(deps);
+    if (!(await waitPort(deps, SERVICE_PORT, 4000))) {
+      return { kind: "refused", error: { kind: "listen-failed", port: SERVICE_PORT } };
     }
   }
   await bounceHostIfNeeded(deps, wrapBytesChanged);

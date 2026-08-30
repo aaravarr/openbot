@@ -52,12 +52,13 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 }
 
 function publicState(current: SupervisorDeps) {
-  const catalog = catalogFromPlanJson(current.fs.read(current.paths.plan));
+  const saved = catalogFromPlanJson(current.fs.read(current.paths.plan));
   const store = loadSecrets(current.fs, current.paths.secrets);
   const keyedProviders = Object.keys(store.providers);
-  const active = catalog.bindings.find((row) => row.conversation.kind === "wildcard");
+  const active = saved.bindings.find((row) => row.conversation.kind === "wildcard");
   return {
-    catalog,
+    providers: saved.providers,
+    models: saved.models,
     keyedProviders,
     activeModelId: active?.modelId ?? null,
   };
@@ -75,14 +76,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     );
     return;
   }
-  if (req.method === "GET" && url.pathname === "/api/catalog") {
-    send(res, 200, JSON.stringify(publicState(current)), "application/json; charset=utf-8");
-    return;
-  }
   if (req.method === "POST" && url.pathname === "/api/save") {
     const parsedBody: unknown = JSON.parse(await readBody(req));
-    const catalog = catalogFromPlanJson(current.fs.read(current.paths.plan));
-    const parsed = parseUiProviderSave(parsedBody, current.paths, catalog);
+    const saved = catalogFromPlanJson(current.fs.read(current.paths.plan));
+    const parsed = parseUiProviderSave(parsedBody, current.paths, saved);
     const result = await reconcile(parsed.desired, current);
     if (result.kind === "refused") {
       send(res, 409, JSON.stringify(result), "application/json; charset=utf-8");

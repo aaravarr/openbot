@@ -155,15 +155,18 @@ export async function reconcile(desired: DesiredState, deps: SupervisorDeps): Pr
 
   const before = await observe(deps);
   let hopListen = before.hopListen;
-  if (desired.kind === "custom" && hopListen.kind === "foreign") {
+  if (hopListen.kind === "foreign") {
     const leftovers = deps.procs.opengrokHopPids();
     if (leftovers.length === 0) {
-      return { kind: "refused", error: { kind: "foreign-hop" } };
+      if (desired.kind === "custom") {
+        return { kind: "refused", error: { kind: "foreign-hop" } };
+      }
+    } else {
+      for (const pid of leftovers) {
+        deps.procs.stop(pid);
+      }
+      hopListen = { kind: "absent" };
     }
-    for (const pid of leftovers) {
-      deps.procs.stop(pid);
-    }
-    hopListen = { kind: "absent" };
   }
   if (before.uiListen.kind === "foreign") {
     return { kind: "refused", error: { kind: "foreign-ui" } };

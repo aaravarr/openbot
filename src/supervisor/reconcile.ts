@@ -18,7 +18,8 @@ export type ReconcileError =
   | { readonly kind: "foreign-ui" }
   | { readonly kind: "foreign-opengrok" }
   | { readonly kind: "census-refused"; readonly reason: string }
-  | { readonly kind: "syntax-check-failed"; readonly stderr: string };
+  | { readonly kind: "syntax-check-failed"; readonly stderr: string }
+  | { readonly kind: "listen-failed"; readonly port: number };
 
 export type ReconcileResult =
   | { readonly kind: "ok"; readonly snapshot: Snapshot; readonly wrapBytesChanged: boolean }
@@ -64,6 +65,17 @@ async function bounceHostIfNeeded(deps: SupervisorDeps, wrapBytesChanged: boolea
   for (const pid of pids) {
     deps.procs.term(pid);
   }
+}
+
+async function waitPort(deps: SupervisorDeps, port: number, budgetMs: number): Promise<boolean> {
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    if (await deps.procs.port(LOOPBACK, port)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  return deps.procs.port(LOOPBACK, port);
 }
 
 function startUi(deps: SupervisorDeps): void {
@@ -184,6 +196,9 @@ export async function reconcile(desired: DesiredState, deps: SupervisorDeps): Pr
     }
     if (before.uiListen.kind === "absent") {
       startUi(deps);
+      if (!(await waitPort(deps, UI_PORT, 4000))) {
+        return { kind: "refused", error: { kind: "listen-failed", port: UI_PORT } };
+      }
     }
     await bounceHostIfNeeded(deps, wrapBytesChanged);
     return { kind: "ok", snapshot: await observe(deps), wrapBytesChanged };
@@ -206,9 +221,15 @@ export async function reconcile(desired: DesiredState, deps: SupervisorDeps): Pr
 
   if (hopListen.kind === "absent") {
     startHop(deps);
+    if (!(await waitPort(deps, HOP_PORT, 4000))) {
+      return { kind: "refused", error: { kind: "listen-failed", port: HOP_PORT } };
+    }
   }
   if (before.uiListen.kind === "absent") {
     startUi(deps);
+    if (!(await waitPort(deps, UI_PORT, 4000))) {
+      return { kind: "refused", error: { kind: "listen-failed", port: UI_PORT } };
+    }
   }
   await bounceHostIfNeeded(deps, wrapBytesChanged);
   return { kind: "ok", snapshot: await observe(deps), wrapBytesChanged };

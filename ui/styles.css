@@ -4,7 +4,7 @@
   --ink: #26251e;
   --body: #5a5852;
   --muted: #807d72;
-  --muted-soft: #a09d92;
+  --muted-soft: #a09c92;
   --hairline: #e6e5e0;
   --hairline-strong: #cfcdc4;
   --canvas: #f7f7f4;
@@ -15,7 +15,7 @@
   --error: #cf2d56;
   --success: #1f8a65;
   --sans: Inter, system-ui, "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+  --mono: "JetBrains Mono", "Fira Code", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 * {
@@ -209,6 +209,11 @@ button {
   overflow-wrap: anywhere;
 }
 
+.model-slug {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
 form {
   display: grid;
   gap: 16px;
@@ -241,6 +246,35 @@ input:focus {
   justify-content: space-between;
   padding: 12px 0;
   border-top: 1px solid var(--hairline);
+}
+
+.model-add,
+.card-foot {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hairline);
+}
+
+.model-add {
+  margin-top: 8px;
+}
+
+.model-add input,
+.card-foot input {
+  flex: 1;
+  min-width: 12rem;
+}
+
+.card-foot form {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex: 1;
+  margin: 0;
 }
 
 .fine {

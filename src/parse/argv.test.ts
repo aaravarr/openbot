@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseInstallCommand } from "./argv.ts";
+import { pathToFileURL } from "node:url";
+import { parseInstallCommand, repoRootFromMeta } from "./argv.ts";
 
 test("refuses an API key on argv", () => {
   assert.throws(
@@ -49,4 +50,16 @@ test("bare install is official plus UI, not a custom wrap", () => {
   if (parsed.command.kind === "install") {
     assert.equal(parsed.command.custom, undefined);
   }
+});
+
+test("cli file URL resolves to the directory that contains src/", () => {
+  const metaUrl = pathToFileURL("/tmp/openbot-pkg/src/cli.ts").href;
+  assert.equal(repoRootFromMeta(metaUrl), "/tmp/openbot-pkg");
+  const parsed = parseInstallCommand({
+    argv: ["install"],
+    env: {},
+    metaUrl,
+  });
+  assert.equal(parsed.paths.repoRoot, "/tmp/openbot-pkg");
+  assert.equal(parsed.paths.uiServer, "/tmp/openbot-pkg/src/ui/server.ts");
 });

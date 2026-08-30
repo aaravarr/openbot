@@ -34,8 +34,9 @@ export type ParsedCli = {
   readonly paths: BoxPaths;
 };
 
-function repoRootFromMeta(metaUrl: string): string {
-  return fileURLToPath(new URL("../..", metaUrl));
+/** `import.meta.url` already names the file, so one `..` is the package root. */
+export function repoRootFromMeta(metaUrl: string): string {
+  return fileURLToPath(new URL("..", metaUrl)).replace(/\/$/u, "");
 }
 
 function takeFlag(argv: string[], name: string): string | undefined {

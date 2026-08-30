@@ -112,7 +112,9 @@ function installCustomWrap(deps: SupervisorDeps, source: string): ReconcileResul
   }
   deps.fs.mkdirp(deps.paths.sandData);
   deps.fs.write(deps.paths.knownBackup, source, 0o644);
-  const tmp = writeTemp(deps.fs, deps.paths.sandData, "host-main.cjs.openbot-check", proof.source);
+  // Node treats the last suffix as the module type. A name ending in
+  // .openbot-check makes `node --check` fail on current Node.
+  const tmp = writeTemp(deps.fs, deps.paths.sandData, "host-main.openbot-check.cjs", proof.source);
   const check = deps.procs.syntaxCheck(tmp);
   deps.fs.remove(tmp);
   if (!check.ok) {

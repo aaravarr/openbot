@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -52,49 +52,28 @@ function post(port: number, body: unknown, headers: Record<string, string>): Pro
   });
 }
 
-test("hop strips client Authorization and injects the secret store key", async () => {
-  let seenAuth = "";
-  const upstream = await listen((req, res) => {
-    const header = req.headers.authorization;
-    seenAuth = typeof header === "string" ? header : "";
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(
-      JSON.stringify({
-        choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
-      }),
-    );
-  });
+async function freePort(): Promise<number> {
+  const hop = await listen(() => undefined);
+  const port = hop.port;
+  hop.server.close();
+  return port;
+}
+
+async function startHop(input: {
+  plan: unknown;
+  secrets: unknown;
+}): Promise<{ port: number; child: ChildProcess }> {
   const dir = mkdtempSync(path.join(os.tmpdir(), "openbot-hop-"));
   const planPath = path.join(dir, "plan.json");
   const secretsPath = path.join(dir, "secrets.json");
-  writeFileSync(
-    planPath,
-    JSON.stringify({
-      kind: "custom",
-      catalog: {
-        providers: [
-          {
-            id: "zhipu",
-            name: "Zhipu",
-            origin: `http://127.0.0.1:${String(upstream.port)}/v1`,
-            maxTokensDefault: 65536,
-            mapFile: "provider-maps.cjs",
-          },
-        ],
-        models: [{ id: "zhipu:glm", providerId: "zhipu", slug: "glm-5.3-flash", parameters: [] }],
-        bindings: [],
-      },
-    }),
-  );
-  writeFileSync(secretsPath, JSON.stringify({ providers: { zhipu: "sk-real" } }));
-  const hop = await listen(() => undefined);
-  const hopPort = hop.port;
-  hop.server.close();
+  writeFileSync(planPath, JSON.stringify(input.plan));
+  writeFileSync(secretsPath, JSON.stringify(input.secrets));
+  const port = await freePort();
   const child = spawn(process.execPath, [hopServer], {
     env: {
       ...process.env,
       OPENBOT_HOP_HOST: "127.0.0.1",
-      OPENBOT_HOP_PORT: String(hopPort),
+      OPENBOT_HOP_PORT: String(port),
       OPENBOT_PLAN: planPath,
       OPENBOT_SECRETS: secretsPath,
     },
@@ -110,13 +89,88 @@ test("hop strips client Authorization and injects the secret store key", async (
     });
     child.on("error", reject);
   });
+  return { port, child };
+}
+
+test("hop strips client Authorization and injects the secret store key", async () => {
+  let seenAuth = "";
+  const upstream = await listen((req, res) => {
+    const header = req.headers.authorization;
+    seenAuth = typeof header === "string" ? header : "";
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+      }),
+    );
+  });
+  const hop = await startHop({
+    plan: {
+      kind: "custom",
+      catalog: {
+        providers: [
+          {
+            id: "zhipu",
+            name: "Zhipu",
+            origin: `http://127.0.0.1:${String(upstream.port)}/v1`,
+            maxTokensDefault: 65536,
+            mapFile: "provider-maps.cjs",
+          },
+        ],
+        models: [{ id: "zhipu:glm", providerId: "zhipu", slug: "glm-5.3-flash", parameters: [] }],
+        bindings: [],
+      },
+    },
+    secrets: { providers: { zhipu: "sk-real" } },
+  });
   try {
-    const out = await post(hopPort, { model: "glm-5.3-flash", messages: [] }, { Authorization: "Bearer openbot-runtime" });
+    const out = await post(hop.port, { model: "glm-5.3-flash", messages: [] }, { Authorization: "Bearer openbot-runtime" });
     assert.equal(out.status, 200);
     assert.equal(seenAuth, "Bearer sk-real");
     assert.notEqual(seenAuth, "Bearer openbot-runtime");
   } finally {
-    child.kill("SIGTERM");
+    hop.child.kill("SIGTERM");
+    upstream.server.close();
+  }
+});
+
+test("hop prefers the wildcard-bound provider when two models share a slug", async () => {
+  let seenAuth = "";
+  const upstream = await listen((req, res) => {
+    const header = req.headers.authorization;
+    seenAuth = typeof header === "string" ? header : "";
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+      }),
+    );
+  });
+  const origin = `http://127.0.0.1:${String(upstream.port)}/v1`;
+  const hop = await startHop({
+    plan: {
+      kind: "custom",
+      agents: { "*": { modelId: "shared-slug", providerId: "openai" } },
+      catalog: {
+        providers: [
+          { id: "zhipu", name: "Zhipu", origin, maxTokensDefault: 65536, mapFile: "provider-maps.cjs" },
+          { id: "openai", name: "OpenAI", origin, maxTokensDefault: 65536, mapFile: "provider-maps.cjs" },
+        ],
+        models: [
+          { id: "zhipu:shared-slug", providerId: "zhipu", slug: "shared-slug", parameters: [] },
+          { id: "openai:shared-slug", providerId: "openai", slug: "shared-slug", parameters: [] },
+        ],
+        bindings: [],
+      },
+    },
+    secrets: { providers: { zhipu: "sk-zhipu", openai: "sk-openai" } },
+  });
+  try {
+    const out = await post(hop.port, { model: "shared-slug", messages: [] }, { Authorization: "Bearer openbot-runtime" });
+    assert.equal(out.status, 200);
+    assert.equal(seenAuth, "Bearer sk-openai");
+  } finally {
+    hop.child.kill("SIGTERM");
     upstream.server.close();
   }
 });

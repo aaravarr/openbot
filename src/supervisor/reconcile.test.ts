@@ -14,7 +14,7 @@ const STOCK = `function createProtoSessionProvider(client) {
 
 const ORIGIN = parseUpstreamOrigin("https://open.bigmodel.cn/api/paas/v4");
 
-type FakeProcs = ProcDeps & { started: string[]; stopped: number[]; termed: number[] };
+type FakeProcs = ProcDeps & { started: string[]; stopped: number[]; termed: number[]; checked: string[] };
 
 function memoryFs(init: Record<string, string>): FsDeps & { files: Record<string, string> } {
   const files: Record<string, string> = { ...init };
@@ -42,7 +42,7 @@ function memoryFs(init: Record<string, string>): FsDeps & { files: Record<string
   };
 }
 
-function fakeProcs(state: { hopOurs?: boolean; hopForeign?: boolean; uiOurs?: boolean }): FakeProcs {
+function fakeProcs(state: { hopOurs?: boolean; hopForeign?: boolean; uiOurs?: boolean; syntaxFail?: boolean }): FakeProcs {
   let hopOurs = state.hopOurs === true;
   let hopForeign = state.hopForeign === true;
   let uiOurs = state.uiOurs === true;
@@ -51,10 +51,12 @@ function fakeProcs(state: { hopOurs?: boolean; hopForeign?: boolean; uiOurs?: bo
   const started: string[] = [];
   const stopped: number[] = [];
   const termed: number[] = [];
+  const checked: string[] = [];
   const procs: FakeProcs = {
     started,
     stopped,
     termed,
+    checked,
     async port(_host, port) {
       if (port === 18790) {
         return hopOurs || hopForeign;
@@ -99,7 +101,11 @@ function fakeProcs(state: { hopOurs?: boolean; hopForeign?: boolean; uiOurs?: bo
     term(pid) {
       termed.push(pid);
     },
-    syntaxCheck() {
+    syntaxCheck(file) {
+      checked.push(String(file));
+      if (state.syntaxFail === true) {
+        return { ok: false, stderr: "syntax boom" };
+      }
       return { ok: true };
     },
   };
@@ -138,6 +144,25 @@ test("custom wrap writes the marker, backs up stock, and starts hop plus UI", as
   assert.equal(plan?.includes("hopBaseUrl"), true);
   assert.equal(ctx.procs.started.some((row) => row.includes("hop-server")), true);
   assert.equal(ctx.procs.termed.length, 1);
+});
+
+test("wrap syntax-check temp file ends in .cjs", async () => {
+  const ctx = setup(STOCK);
+  const result = await reconcile(zhipu(ctx.paths), ctx.deps);
+  assert.equal(result.kind, "ok");
+  assert.equal(ctx.procs.checked.length, 1);
+  assert.match(ctx.procs.checked[0] ?? "", /host-main\.openbot-check\.cjs$/);
+});
+
+test("syntax-check-failed leaves the stock host unwrapped", async () => {
+  const ctx = setup(STOCK, { syntaxFail: true });
+  const result = await reconcile(zhipu(ctx.paths), ctx.deps);
+  assert.equal(result.kind, "refused");
+  if (result.kind === "refused") {
+    assert.equal(result.error.kind, "syntax-check-failed");
+  }
+  assert.equal(ctx.fs.read(ctx.paths.hostMain), STOCK);
+  assert.equal(ctx.fs.read(ctx.paths.hostMain)?.includes(OPENBOT_MARKER), false);
 });
 
 test("official restores the backup and does not wrap identity", async () => {

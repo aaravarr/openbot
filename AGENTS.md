@@ -29,6 +29,10 @@ The generic hop unwraps `{ jsonSchema }`, maps OpenAI `tool_calls` to host `tool
 
 Default agent `max_tokens` is `HIGH_AGENT_MAX_TOKENS` (65536). Do not default to 8192. Do not write GLM `fast: true` as an installer default. Live maps file is `provider-maps.cjs` only.
 
+## UI
+
+Before changing `ui/`, read `DESIGN.md`. It comes from `npx getdesign@latest add cursor`. Light cream canvas, hairline cards, Cursor Orange only on the primary save CTA. Do not add drop shadows.
+
 ## Git
 
 The first commit is on `main`. Every later change is a PR, then merge. Conventional Commits: `type(scope): subject`.

@@ -8,7 +8,9 @@ Grok Bot 0.30 的聊天路由在 Computer 上，不在 Mac 上。笔记本上绑
 
 ## 现状
 
-supervisor、wrap、hop 和 loopback UI 已经在仓库里。单元测试覆盖 census、wrap/restore、hop 映射和 `reconcile`。还没有在真实的 Grok Bot Computer 上跑过 `install.sh`。下面的 curl 是预定安装方式，不是已经验证过的生产运行。
+supervisor、wrap、hop、目录 UI 和 `install.sh` 已经在仓库里。单元测试覆盖 census、wrap/restore、hop 映射、目录 upsert 和 `reconcile`。还没有在真实的 Grok Bot Computer 上跑过 `install.sh`。下面的 curl 是预定安装方式，不是已经验证过的生产运行。
+
+控制界面遵循 `npx getdesign@latest add cursor` 生成的 `DESIGN.md`：暖米色底、细线卡片、主保存按钮用 Cursor Orange。
 
 ## 安装
 
@@ -18,7 +20,7 @@ supervisor、wrap、hop 和 loopback UI 已经在仓库里。单元测试覆盖 
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
 ```
 
-脚本把 OpenBot 拷到 `/home/box/sand-data/openbot`，在 `http://127.0.0.1:18791` 拉起控制界面，聊天先保持 official。用 Computer 浏览器打开这个地址。填 origin、模型 slug 和 API Key。保存后才会 wrap 唯一的 `createProtoSessionProvider`，并在 `127.0.0.1:18790` 上 adopt 或启动 hop。
+脚本把 OpenBot 拷到 `/home/box/sand-data/openbot`，在 `http://127.0.0.1:18791` 拉起控制界面，聊天先保持 official。用 Computer 浏览器打开这个地址。添加 provider 和模型，粘贴 API Key，再选正在用的模型。保存后才会 wrap 唯一的 `createProtoSessionProvider`，并在 `127.0.0.1:18790` 上 adopt 或启动 hop。
 
 不要把 Key 写在命令行上。CLI 带 `--origin` 和 `--model` 安装时，用环境变量 `OPENBOT_API_KEY`。
 
@@ -29,8 +31,8 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 - 在 Grok Bot Computer 上一行安装
 - 控制界面绑 `127.0.0.1:18791`
 - Provider 列表、模型列表、切模型
-- Key 只放 `/home/box/sand-data/secrets.json`，不进 bindings，不进 git
-- BYOK 是我们界面里粘贴 Key
+- API-key 模式：hop 每次向上游请求时从 `/home/box/sand-data/secrets.json` 注入 Key。bindings 里不会出现 Key。
+- BYOK 是在控制界面里粘贴这把 Key
 - Official：走官方 `createProtoSessionProvider`，无 hop，无 wrap
 - Custom：只劫持 `executor.stream`，经 loopback hop POST OpenAI 兼容的 `/v1/chat/completions`
 

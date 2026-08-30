@@ -7,7 +7,7 @@
 export const OPENBOT_MARKER = "/* openbot-stock-wrap */" as const;
 export const HOST_MAIN = "/home/box/sand-host/host-main.cjs" as const;
 export const SAND_DATA = "/home/box/sand-data" as const;
-export const DEFAULT_SECRETS_PATH = "/home/box/sand-data/secrets" as const;
+export const DEFAULT_SECRETS_PATH = "/home/box/sand-data/secrets.json" as const;
 export const HOP_PORT = 18790 as const;
 export const UI_PORT = 18791 as const;
 export const LOOPBACK = "127.0.0.1" as const;
@@ -126,7 +126,8 @@ export type WrapObserved =
   | { readonly kind: "openbot-marked"; readonly marker: typeof OPENBOT_MARKER }
   | { readonly kind: "foreign-opengrok" }
   | { readonly kind: "private-lane" }
-  | { readonly kind: "gap"; readonly present: HopSymbol; readonly missing: HopSymbol };
+  | { readonly kind: "gap"; readonly present: HopSymbol; readonly missing: HopSymbol }
+  | { readonly kind: "ambiguous-factory"; readonly functionDefs: number; readonly propertyDefs: number };
 
 export type HopSymbol = "createOpenAiHopSession" | "resolvedOpenaiBaseUrl";
 

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenBot</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <header class="mast">
+        <p class="kicker">Grok Bot Computer</p>
+        <h1>OpenBot</h1>
+        <p class="lede">
+          Official is the stock host file. Custom wraps one factory and hops through loopback.
+          Keys stay in the secret store on this box.
+        </p>
+      </header>
+
+      <section class="mode" aria-labelledby="mode-heading">
+        <div class="mode-copy">
+          <h2 id="mode-heading">Chat route</h2>
+          <p id="mode-status">Loading snapshot…</p>
+        </div>
+        <div class="mode-actions">
+          <button type="button" id="btn-official">Official</button>
+          <button type="button" class="ghost" id="btn-refresh">Refresh</button>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="provider-heading">
+        <h2 id="provider-heading">Provider</h2>
+        <p class="hint">
+          Paste an OpenAI-compatible origin, a model slug, and an API key. Saving writes the secret
+          separately from the catalog, then reconciles the box.
+        </p>
+        <form id="provider-form">
+          <label>
+            Name
+            <input name="name" type="text" required placeholder="Zhipu" autocomplete="off" />
+          </label>
+          <label>
+            Origin
+            <input
+              name="origin"
+              type="url"
+              required
+              placeholder="https://open.bigmodel.cn/api/paas/v4"
+              autocomplete="off"
+            />
+          </label>
+          <label>
+            Model slug
+            <input name="modelSlug" type="text" required placeholder="glm-5.3-flash" autocomplete="off" />
+          </label>
+          <label>
+            API key
+            <input name="secret" type="password" required placeholder="will not be stored in bindings" />
+          </label>
+          <div class="form-actions">
+            <button type="submit">Save and use</button>
+            <p class="fine" id="form-note"></p>
+          </div>
+        </form>
+      </section>
+
+      <section class="card" aria-labelledby="catalog-heading">
+        <h2 id="catalog-heading">Catalog</h2>
+        <pre id="catalog">{}</pre>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>

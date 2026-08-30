@@ -1,0 +1,167 @@
+:root {
+  --paper: #f4f1ea;
+  --ink: #1c1914;
+  --muted: #6b6458;
+  --line: #d9d2c5;
+  --card: #fffcf6;
+  --accent: #c45c26;
+  --official: #2f5d50;
+  --shadow: 0 12px 40px rgba(28, 25, 20, 0.08);
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Times New Roman", serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+body {
+  min-height: 100vh;
+}
+
+main {
+  width: min(720px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 64px 0 96px;
+}
+
+.mast h1 {
+  font-size: clamp(40px, 7vw, 68px);
+  letter-spacing: -0.04em;
+  line-height: 0.95;
+  margin: 8px 0 16px;
+  font-weight: 600;
+}
+
+.kicker {
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 12px;
+  color: var(--accent);
+  margin: 0;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.lede,
+.hint,
+.fine,
+#mode-status {
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.lede {
+  font-size: 17px;
+  max-width: 40rem;
+}
+
+.mode,
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  border-radius: 18px;
+  padding: 24px;
+  margin-top: 28px;
+}
+
+.mode {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: flex-end;
+}
+
+.mode h2,
+.card h2 {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+
+#mode-status {
+  margin: 0;
+}
+
+.mode-actions,
+.form-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+button,
+input {
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+button {
+  background: var(--ink);
+  color: var(--card);
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 18px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+#btn-official {
+  background: var(--official);
+}
+
+form {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+input {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 15px;
+  color: var(--ink);
+}
+
+pre {
+  background: #1c1914;
+  color: #f4f1ea;
+  border-radius: 12px;
+  padding: 16px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.fine {
+  margin: 0;
+  font-size: 13px;
+}
+
+@media (max-width: 640px) {
+  .mode {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

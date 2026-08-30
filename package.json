@@ -7,9 +7,14 @@
   "engines": {
     "node": ">=22"
   },
+  "bin": {
+    "openbot": "src/cli.ts"
+  },
   "scripts": {
-    "test": "node --experimental-strip-types --test src/domain/types.test.ts",
-    "typecheck": "tsc --noEmit"
+    "test": "node --experimental-strip-types --test $(find src -name '*.test.ts')",
+    "typecheck": "tsc --noEmit",
+    "start": "node --experimental-strip-types src/cli.ts",
+    "start:ui": "node --experimental-strip-types src/ui/server.ts"
   },
   "repository": {
     "type": "git",

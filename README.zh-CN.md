@@ -22,6 +22,8 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 脚本把 OpenBot 拷到 `/home/box/sand-data/openbot`，在 `http://127.0.0.1:18791` 拉起控制界面，聊天先保持 official。用 Computer 浏览器打开这个地址。添加 provider 和模型，粘贴 API Key，再选正在用的模型。保存后才会 wrap 唯一的 `createProtoSessionProvider`，并在 `127.0.0.1:18790` 上 adopt 或启动 hop。
 
+如果 host 里还留着上一套安装器的 `/* opengrok-stock-wrap */` 头，OpenBot 会先剥回 stock。`:18790` 上残留的 `python …/hop-server.py` 会被停掉。端口上其他不明进程仍然拒绝，不会当成自己的。
+
 不要把 Key 写在命令行上。CLI 带 `--origin` 和 `--model` 安装时，用环境变量 `OPENBOT_API_KEY`。
 
 `--census-only` 只打印 host 符号，不能证明 wrap 会成功。`--dry-run` 才是在副本上跑 wrap。

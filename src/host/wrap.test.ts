@@ -4,8 +4,8 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { proveWrap, stripWrap, wrapHostSource } from "./wrap.ts";
-import { OPENBOT_MARKER } from "../domain/types.ts";
+import { peelOpengrokToStock, proveWrap, stripOpengrokWrap, stripWrap, wrapHostSource } from "./wrap.ts";
+import { OPENBOT_MARKER, OPENGROK_MARKER } from "../domain/types.ts";
 
 const STOCK = `function createProtoSessionProvider(client) {
   return { getSession: function () { return 1; } };
@@ -25,6 +25,17 @@ function outer(options2) {
   ).getSession(imageResizingMiddleware);
 }
 `;
+
+function opengrokWrap(stock: string): string {
+  return (
+    `${OPENGROK_MARKER}\n` +
+    `var __opengrokRuntime = require("/home/box/sand-data/opengrok-runtime.cjs");\n` +
+    `function createProtoSessionProvider() {\n` +
+    `  return __opengrokRuntime.wrapSession(createProtoSessionProvider_stock, arguments);\n` +
+    `}\n` +
+    stock.replaceAll("function createProtoSessionProvider(", "function createProtoSessionProvider_stock(")
+  );
+}
 
 test("wrap prepends the marker and renames the stock factory", () => {
   const proof = wrapHostSource({ source: STOCK, runtimePath: "/home/box/sand-data/openbot/payload/runtime.cjs" });
@@ -66,15 +77,28 @@ test("stripWrap restores the factory name", () => {
   assert.equal(stripped.includes("function createProtoSessionProvider("), true);
 });
 
+test("stripOpengrokWrap restores the stock factory", () => {
+  const wrapped = opengrokWrap(STOCK);
+  const stripped = stripOpengrokWrap(wrapped);
+  assert.equal(stripped.includes(OPENGROK_MARKER), false);
+  assert.equal(stripped.includes("createProtoSessionProvider_stock"), false);
+  assert.equal(stripped, STOCK);
+  const peeled = peelOpengrokToStock(wrapped);
+  assert.equal(peeled.kind, "stock");
+  if (peeled.kind === "stock") {
+    assert.equal(peeled.source, STOCK);
+  }
+});
+
 test("private-lane wrap is refused", () => {
   const src = STOCK + "createOpenAiHopSession();\nresolvedOpenaiBaseUrl();\n";
   const proof = wrapHostSource({ source: src, runtimePath: "/tmp/runtime.cjs" });
   assert.equal(proof.kind, "refused");
 });
 
-test("opengrok wrap is refused", () => {
+test("opengrok wrap is refused without peeling", () => {
   const proof = wrapHostSource({
-    source: "/* opengrok-stock-wrap */\n" + STOCK,
+    source: opengrokWrap(STOCK),
     runtimePath: "/tmp/runtime.cjs",
   });
   assert.equal(proof.kind, "refused");

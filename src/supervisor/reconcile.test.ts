@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { OPENBOT_MARKER } from "../domain/types.ts";
+import { OPENBOT_MARKER, OPENGROK_MARKER } from "../domain/types.ts";
 import { wrapHostSource } from "../host/wrap.ts";
 import { customBoxFromProvider, officialBox, parseUpstreamOrigin } from "../parse/argv.ts";
 import { boxPathsFrom, parseAbsPath } from "./paths.ts";
@@ -15,6 +15,17 @@ const STOCK = `function createProtoSessionProvider(client) {
 const ORIGIN = parseUpstreamOrigin("https://open.bigmodel.cn/api/paas/v4");
 
 type FakeProcs = ProcDeps & { started: string[]; stopped: number[]; termed: number[]; checked: string[] };
+
+function opengrokWrap(stock: string): string {
+  return (
+    `${OPENGROK_MARKER}\n` +
+    `var __opengrokRuntime = require("/home/box/sand-data/opengrok-runtime.cjs");\n` +
+    `function createProtoSessionProvider() {\n` +
+    `  return __opengrokRuntime.wrapSession(createProtoSessionProvider_stock, arguments);\n` +
+    `}\n` +
+    stock.replaceAll("function createProtoSessionProvider(", "function createProtoSessionProvider_stock(")
+  );
+}
 
 function memoryFs(init: Record<string, string>): FsDeps & { files: Record<string, string> } {
   const files: Record<string, string> = { ...init };
@@ -42,7 +53,13 @@ function memoryFs(init: Record<string, string>): FsDeps & { files: Record<string
   };
 }
 
-function fakeProcs(state: { hopOurs?: boolean; hopForeign?: boolean; uiOurs?: boolean; syntaxFail?: boolean }): FakeProcs {
+function fakeProcs(state: {
+  hopOurs?: boolean;
+  hopForeign?: boolean;
+  opengrokHop?: boolean;
+  uiOurs?: boolean;
+  syntaxFail?: boolean;
+}): FakeProcs {
   let hopOurs = state.hopOurs === true;
   let hopForeign = state.hopForeign === true;
   let uiOurs = state.uiOurs === true;
@@ -93,10 +110,17 @@ function fakeProcs(state: { hopOurs?: boolean; hopForeign?: boolean; uiOurs?: bo
     stop(pid) {
       stopped.push(pid);
       hopOurs = false;
+      hopForeign = false;
       hopPid = undefined;
     },
     hostPids() {
       return [parseOwnedPid(99)];
+    },
+    opengrokHopPids() {
+      if (state.opengrokHop === true && hopForeign) {
+        return [parseOwnedPid(7)];
+      }
+      return [];
     },
     term(pid) {
       termed.push(pid);
@@ -180,6 +204,23 @@ test("official restores the backup and does not wrap identity", async () => {
   assert.equal(ctx.fs.exists(ctx.paths.plan), false);
 });
 
+test("official peels a known opengrok wrap back to stock", async () => {
+  const ctx = setup(opengrokWrap(STOCK));
+  const result = await reconcile(officialBox(ctx.paths), ctx.deps);
+  assert.equal(result.kind, "ok");
+  assert.equal(ctx.fs.read(ctx.paths.hostMain), STOCK);
+  assert.equal(ctx.fs.read(ctx.paths.hostMain)?.includes(OPENGROK_MARKER), false);
+});
+
+test("custom wrap peels opengrok first and backs up stock, not the leftover wrap", async () => {
+  const ctx = setup(opengrokWrap(STOCK));
+  const result = await reconcile(zhipu(ctx.paths), ctx.deps);
+  assert.equal(result.kind, "ok");
+  assert.equal(ctx.fs.read(ctx.paths.knownBackup), STOCK);
+  assert.equal(ctx.fs.read(ctx.paths.hostMain)?.includes(OPENBOT_MARKER), true);
+  assert.equal(ctx.fs.read(ctx.paths.hostMain)?.includes(OPENGROK_MARKER), false);
+});
+
 test("official on an unmarked vendor rewrite does not restore an old backup", async () => {
   const vendor = `function createProtoSessionProvider(client) { return "v2"; }\n`;
   const ctx = setup(vendor);
@@ -196,6 +237,14 @@ test("foreign hop is refused, not adopted", async () => {
   if (result.kind === "refused") {
     assert.equal(result.error.kind, "foreign-hop");
   }
+});
+
+test("leftover opengrok hop-server.py is stopped, not adopted", async () => {
+  const ctx = setup(STOCK, { hopForeign: true, opengrokHop: true });
+  const result = await reconcile(zhipu(ctx.paths), ctx.deps);
+  assert.equal(result.kind, "ok");
+  assert.equal(ctx.procs.stopped.includes(7), true);
+  assert.equal(ctx.procs.started.some((row) => row.includes("hop-server")), true);
 });
 
 test("private-lane host is not wrapped", async () => {

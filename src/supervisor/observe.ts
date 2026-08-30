@@ -10,7 +10,7 @@ import {
   type Snapshot,
   type WrapObserved,
 } from "../domain/types.ts";
-import { censusHost, hasForeignOpengrokWrap } from "../host/census.ts";
+import { censusHost } from "../host/census.ts";
 import { type BoxPaths } from "./paths.ts";
 import { classifyPort, type FsDeps, type ProcDeps } from "./procs.ts";
 
@@ -24,13 +24,12 @@ export function wrapFromSource(source: string | undefined): WrapObserved {
   if (source === undefined) {
     return { kind: "stock-unmarked" };
   }
-  if (hasForeignOpengrokWrap(source)) {
-    return { kind: "foreign-opengrok" };
-  }
   const census = censusHost(source);
   switch (census.kind) {
     case "already-openbot":
       return { kind: "openbot-marked", marker: OPENBOT_MARKER };
+    case "foreign-opengrok":
+      return { kind: "foreign-opengrok" };
     case "stock":
       return { kind: "stock-unmarked" };
     case "private-lane":

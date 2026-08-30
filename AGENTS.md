@@ -19,6 +19,8 @@ The domain is a box supervisor. Callers parse input into `DesiredState`, then `r
 - Official: wrap is stock (gone), hop is stop-owned, UI stays on loopback so the user can switch back. No catalog, no hop URL, no upstream.
 - Custom: wrap is marked `/* openbot-stock-wrap */`, hop is adopt-or-start on `127.0.0.1:18790`, UI on `127.0.0.1:18791`. Catalog holds providers, models, and bindings.
 
+A known `/* opengrok-stock-wrap */` header is peeled back to stock before official restore or custom wrap. `python …/hop-server.py` leftovers on `:18790` are SIGTERM'd. Any other foreign listener is still refused, not adopted.
+
 `align(desired, wrap)` returns `needs-reinstall` when desired is custom and the host file is stock unmarked. That is not official.
 
 Bindings are `{ conversation, modelId }`. Derive `hopBaseUrl` with `hopBaseUrl(LOOPBACK_HOP)`. Secret field names are unrepresentable on `Binding`.

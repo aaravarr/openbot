@@ -1,6 +1,6 @@
-import { OPENBOT_MARKER, type HostCensus } from "../domain/types.ts";
+import { OPENBOT_MARKER, OPENGROK_MARKER, type HostCensus } from "../domain/types.ts";
 
-export const OPENGROK_MARKER = "/* opengrok-stock-wrap */" as const;
+export { OPENGROK_MARKER };
 
 const FACTORY_DEF = "function createProtoSessionProvider(";
 const ASYNC_FACTORY_DEF = "async function createProtoSessionProvider(";
@@ -32,6 +32,9 @@ function countMatches(source: string, re: RegExp): number {
 export function censusHost(source: string): HostCensus {
   if (source.includes(OPENBOT_MARKER)) {
     return { kind: "already-openbot", marker: OPENBOT_MARKER };
+  }
+  if (source.includes(OPENGROK_MARKER)) {
+    return { kind: "foreign-opengrok", marker: OPENGROK_MARKER };
   }
 
   const hopSession = countLiteral(source, HOP_SESSION);

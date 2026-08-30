@@ -7,7 +7,7 @@ import {
   type Snapshot,
 } from "../domain/types.ts";
 import { censusHost } from "../host/census.ts";
-import { proveWrap, stripWrap, wrapHostSource } from "../host/wrap.ts";
+import { peelOpengrokToStock, proveWrap, stripWrap, wrapHostSource } from "../host/wrap.ts";
 import { observe, wrapFromSource, type SupervisorDeps } from "./observe.ts";
 import { compileCustomPlan, planToJson } from "./plan.ts";
 import { writeTemp } from "./procs.ts";
@@ -87,6 +87,11 @@ function startHop(deps: SupervisorDeps): void {
 }
 
 function restoreOfficialHost(deps: SupervisorDeps, source: string): boolean {
+  const peeled = peelOpengrokToStock(source);
+  if (peeled.kind === "stock" && peeled.source !== source) {
+    deps.fs.write(deps.paths.hostMain, peeled.source, 0o644);
+    return true;
+  }
   if (!source.includes(OPENBOT_MARKER)) {
     return false;
   }
@@ -131,21 +136,34 @@ export function dryRunWrap(
   if (source === undefined) {
     return { kind: "refused", error: { kind: "host-missing", path: deps.paths.hostMain } };
   }
-  return { kind: "proof", proof: proveWrap({ source, runtimePath: deps.paths.runtime }) };
+  const peeled = peelOpengrokToStock(source);
+  const forProof = peeled.kind === "stock" ? peeled.source : source;
+  return { kind: "proof", proof: proveWrap({ source: forProof, runtimePath: deps.paths.runtime }) };
 }
 
 export async function reconcile(desired: DesiredState, deps: SupervisorDeps): Promise<ReconcileResult> {
-  const source = deps.fs.read(deps.paths.hostMain);
-  if (source === undefined) {
+  const raw = deps.fs.read(deps.paths.hostMain);
+  if (raw === undefined) {
     return { kind: "refused", error: { kind: "host-missing", path: deps.paths.hostMain } };
   }
-  if (wrapFromSource(source).kind === "foreign-opengrok") {
+
+  const peeled = peelOpengrokToStock(raw);
+  if (wrapFromSource(raw).kind === "foreign-opengrok" && peeled.kind === "still-foreign") {
     return { kind: "refused", error: { kind: "foreign-opengrok" } };
   }
+  const source = peeled.kind === "stock" ? peeled.source : raw;
 
   const before = await observe(deps);
-  if (desired.kind === "custom" && before.hopListen.kind === "foreign") {
-    return { kind: "refused", error: { kind: "foreign-hop" } };
+  let hopListen = before.hopListen;
+  if (desired.kind === "custom" && hopListen.kind === "foreign") {
+    const leftovers = deps.procs.opengrokHopPids();
+    if (leftovers.length === 0) {
+      return { kind: "refused", error: { kind: "foreign-hop" } };
+    }
+    for (const pid of leftovers) {
+      deps.procs.stop(pid);
+    }
+    hopListen = { kind: "absent" };
   }
   if (before.uiListen.kind === "foreign") {
     return { kind: "refused", error: { kind: "foreign-ui" } };
@@ -155,10 +173,10 @@ export async function reconcile(desired: DesiredState, deps: SupervisorDeps): Pr
   let wrapBytesChanged = false;
 
   if (desired.kind === "official") {
-    wrapBytesChanged = restoreOfficialHost(deps, source);
+    wrapBytesChanged = restoreOfficialHost(deps, raw);
     deps.fs.remove(deps.paths.plan);
-    if (before.hopListen.kind === "ours") {
-      deps.procs.stop(before.hopListen.pid);
+    if (hopListen.kind === "ours") {
+      deps.procs.stop(hopListen.pid);
       deps.fs.remove(deps.paths.hopPid);
     }
     if (before.uiListen.kind === "absent") {
@@ -180,10 +198,10 @@ export async function reconcile(desired: DesiredState, deps: SupervisorDeps): Pr
   if ("kind" in wrapped) {
     return wrapped;
   }
-  wrapBytesChanged = wrapped.changed;
+  wrapBytesChanged = wrapped.changed || raw !== source;
   deps.fs.write(deps.paths.plan, planToJson(compileCustomPlan(desired)), 0o644);
 
-  if (before.hopListen.kind === "absent") {
+  if (hopListen.kind === "absent") {
     startHop(deps);
   }
   if (before.uiListen.kind === "absent") {

@@ -1,4 +1,4 @@
-import { OPENBOT_MARKER, type HostCensus } from "../domain/types.ts";
+import { OPENBOT_MARKER, OPENGROK_MARKER, type HostCensus } from "../domain/types.ts";
 import { censusHost, hasForeignOpengrokWrap } from "./census.ts";
 
 export type WrapProof =
@@ -13,6 +13,9 @@ const WRAPPER = `function createProtoSessionProvider() {
 
 const HEADER_RE =
   /^\/\* openbot-stock-wrap \*\/\nvar __openbotRuntime = require\((?:'[^']+'|"[^"]+")\);\nfunction createProtoSessionProvider\(\) \{\n  return __openbotRuntime\.wrapSession\(createProtoSessionProvider_stock, arguments\);\n\}\n/;
+
+const OPENGROK_HEADER_RE =
+  /^\/\* opengrok-stock-wrap \*\/\nvar __opengrokRuntime = require\((?:'[^']+'|"[^"]+")\);\n(?:async )?function createProtoSessionProvider\(\) \{\n  return __opengrokRuntime\.wrapSession\(createProtoSessionProvider_stock, arguments\);\n\}\n/;
 
 export function wrapHostSource(input: { source: string; runtimePath: string }): WrapProof {
   const { source, runtimePath } = input;
@@ -53,4 +56,23 @@ export function stripWrap(source: string): string {
   }
   const stripped = source.replace(HEADER_RE, "");
   return stripped.replaceAll("createProtoSessionProvider_stock", "createProtoSessionProvider");
+}
+
+export function stripOpengrokWrap(source: string): string {
+  if (!source.includes(OPENGROK_MARKER)) {
+    return source;
+  }
+  const stripped = source.replace(OPENGROK_HEADER_RE, "");
+  return stripped.replaceAll("createProtoSessionProvider_stock", "createProtoSessionProvider");
+}
+
+export function peelOpengrokToStock(source: string): { kind: "stock"; source: string } | { kind: "still-foreign" } {
+  if (!hasForeignOpengrokWrap(source)) {
+    return censusHost(source).kind === "stock" ? { kind: "stock", source } : { kind: "still-foreign" };
+  }
+  const peeled = stripOpengrokWrap(source);
+  if (censusHost(peeled).kind === "stock") {
+    return { kind: "stock", source: peeled };
+  }
+  return { kind: "still-foreign" };
 }

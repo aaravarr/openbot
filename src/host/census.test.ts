@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { censusHost, countLiteral, hasForeignOpengrokWrap } from "./census.ts";
+import { OPENGROK_MARKER } from "../domain/types.ts";
 
 const STOCK = `
 function helper() { return 1; }
@@ -77,6 +78,8 @@ test("async factory is not stock", () => {
   assert.equal(censusHost(src).kind, "ambiguous-factory");
 });
 
-test("opengrok marker is foreign", () => {
-  assert.equal(hasForeignOpengrokWrap("/* opengrok-stock-wrap */\n" + STOCK), true);
+test("opengrok marker is a foreign-opengrok census", () => {
+  const src = `${OPENGROK_MARKER}\n` + STOCK;
+  assert.equal(hasForeignOpengrokWrap(src), true);
+  assert.equal(censusHost(src).kind, "foreign-opengrok");
 });

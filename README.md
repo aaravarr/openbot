@@ -22,6 +22,8 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 The script copies OpenBot into `/home/box/sand-data/openbot`, starts the control UI on `http://127.0.0.1:18791`, and leaves chat official until you save a provider. Open that URL in the Computer browser. Add providers and models, paste an API key, and pick which model is in use. Saving wraps the unique `createProtoSessionProvider` factory and adopts or starts hop on `127.0.0.1:18790`.
 
+If the host still has a known `/* opengrok-stock-wrap */` header from a previous installer, OpenBot peels it back to stock. A leftover `python …/hop-server.py` on `:18790` is stopped. An unknown listener on that port is refused.
+
 Do not put a key on the command line. `OPENBOT_API_KEY` is the env var if you install from the CLI with `--origin` and `--model`.
 
 `--census-only` prints host symbols. It is not proof that wrap would succeed. `--dry-run` runs the wrap transform on a copy.

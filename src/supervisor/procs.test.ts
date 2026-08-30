@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isHostMainArgv } from "./procs.ts";
+import { isHostMainArgv, isOpengrokHopArgv } from "./procs.ts";
 
 const host = "/home/box/sand-host/host-main.cjs";
 
@@ -26,4 +26,10 @@ test("host pid matcher ignores shells that only mention the path", () => {
 
 test("host pid matcher ignores the current process", () => {
   assert.equal(isHostMainArgv("node /home/box/sand-host/host-main.cjs", host, 88, 88), false);
+});
+
+test("opengrok hop matcher is python plus hop-server.py", () => {
+  assert.equal(isOpengrokHopArgv("python3 /home/box/sand-data/hop-server.py", 1, 88), true);
+  assert.equal(isOpengrokHopArgv("node /home/box/sand-data/openbot/payload/hop-server.cjs", 1, 88), false);
+  assert.equal(isOpengrokHopArgv("/bin/zsh -c python3 /home/box/sand-data/hop-server.py", 1, 88), false);
 });

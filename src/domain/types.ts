@@ -5,6 +5,7 @@
  */
 
 export const OPENBOT_MARKER = "/* openbot-stock-wrap */" as const;
+export const OPENGROK_MARKER = "/* opengrok-stock-wrap */" as const;
 export const HOST_MAIN = "/home/box/sand-host/host-main.cjs" as const;
 export const SAND_DATA = "/home/box/sand-data" as const;
 export const DEFAULT_SECRETS_PATH = "/home/box/sand-data/secrets.json" as const;
@@ -174,6 +175,7 @@ export type HostCensus =
       readonly alreadyMarked: false;
     }
   | { readonly kind: "already-openbot"; readonly marker: typeof OPENBOT_MARKER }
+  | { readonly kind: "foreign-opengrok"; readonly marker: typeof OPENGROK_MARKER }
   | {
       readonly kind: "private-lane";
       readonly createOpenAiHopSession: number;

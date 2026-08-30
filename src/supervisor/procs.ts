@@ -31,6 +31,7 @@ export type ProcDeps = {
   }): OwnedPid;
   stop(pid: OwnedPid): void;
   hostPids(hostMain: AbsPath): OwnedPid[];
+  opengrokHopPids(): OwnedPid[];
   term(pid: OwnedPid): void;
   syntaxCheck(file: AbsPath): { ok: true } | { ok: false; stderr: string };
 };
@@ -143,6 +144,42 @@ export function isHostMainArgv(args: string, hostMain: string, selfPid: number, 
   return hasNode && hasHost;
 }
 
+export function isOpengrokHopArgv(args: string, selfPid: number, pid: number): boolean {
+  if (pid === selfPid) {
+    return false;
+  }
+  if (/\b(zsh|bash|sh|dash)\b/.test(args) && args.includes(" -c ")) {
+    return false;
+  }
+  const tokens = args.trim().split(/\s+/u);
+  const hasPy = tokens.some((token) => /(^|\/)python(\d+(\.\d+)*)?$/.test(token));
+  const hasHop = tokens.some((token) => token.endsWith("hop-server.py"));
+  return hasPy && hasHop;
+}
+
+function eachPsLine(visit: (pid: number, args: string) => void): void {
+  const result = spawnSync("ps", ["-ax", "-o", "pid=,args="], { encoding: "utf8" });
+  if (result.status !== 0 && result.status !== 1) {
+    return;
+  }
+  for (const line of (result.stdout || "").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const splitAt = trimmed.search(/\s/u);
+    if (splitAt < 0) {
+      continue;
+    }
+    const pid = Number(trimmed.slice(0, splitAt));
+    const args = trimmed.slice(splitAt + 1).trim();
+    if (!Number.isInteger(pid) || pid <= 0) {
+      continue;
+    }
+    visit(pid, args);
+  }
+}
+
 export function nodeProcs(): ProcDeps {
   return {
     port: portOpen,
@@ -193,29 +230,21 @@ export function nodeProcs(): ProcDeps {
       }
     },
     hostPids(hostMain) {
-      const result = spawnSync("ps", ["-ax", "-o", "pid=,args="], { encoding: "utf8" });
-      if (result.status !== 0 && result.status !== 1) {
-        return [];
-      }
       const pids: OwnedPid[] = [];
-      for (const line of (result.stdout || "").split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed) {
-          continue;
-        }
-        const splitAt = trimmed.search(/\s/u);
-        if (splitAt < 0) {
-          continue;
-        }
-        const pid = Number(trimmed.slice(0, splitAt));
-        const args = trimmed.slice(splitAt + 1).trim();
-        if (!Number.isInteger(pid) || pid <= 0) {
-          continue;
-        }
+      eachPsLine((pid, args) => {
         if (isHostMainArgv(args, hostMain, process.pid, pid)) {
           pids.push(parseOwnedPid(pid));
         }
-      }
+      });
+      return pids;
+    },
+    opengrokHopPids() {
+      const pids: OwnedPid[] = [];
+      eachPsLine((pid, args) => {
+        if (isOpengrokHopArgv(args, process.pid, pid)) {
+          pids.push(parseOwnedPid(pid));
+        }
+      });
       return pids;
     },
     term(pid) {

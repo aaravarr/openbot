@@ -97,6 +97,7 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     assert.match(html.body, /id="root"/);
     assert.match(html.body, /app\.js/);
     assert.match(html.body, /styles\.css/);
+    assert.match(html.body, /favicon\.svg/);
     assert.equal(html.body.includes("Catalog"), false);
     assert.equal(html.body.includes("Origin"), false);
     assert.equal(html.body.includes("Model slug"), false);
@@ -123,6 +124,11 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     assert.match(css.body, /#f7f7f4/);
     assert.match(css.body, /#f54e00/);
     assert.equal(css.body.includes("box-shadow"), false);
+    const favicon = await get(`${UI}/favicon.svg`);
+    assert.equal(favicon.status, 200);
+    assert.match(favicon.body, /svg/i);
+    const missing = await get(`${UI}/favicon.ico`);
+    assert.equal(missing.status, 404);
     const health = await get(`${UI}/healthz`);
     assert.equal(health.status, 200);
     assert.match(health.body, /openbot/);

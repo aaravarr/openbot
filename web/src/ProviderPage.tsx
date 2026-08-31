@@ -26,8 +26,7 @@ export function ProviderPage({
 }) {
   const models = modelsFor(state, provider.id);
   const hasKey = keyedSet(state).has(provider.id);
-  const liveId =
-    state.snapshot?.wrap.kind === "openbot-marked" ? state.activeModelId : null;
+  const liveId = state.snapshot?.wrap.kind === "openbot-marked" ? state.activeModelId : null;
   const [adding, setAdding] = useState(false);
   const [slug, setSlug] = useState("");
   const [limits, setLimits] = useState<ModelLimits>(defaultLimits);
@@ -113,6 +112,7 @@ export function ProviderPage({
                   <button
                     type="button"
                     className="model-row-hit"
+                    aria-label={`Configure ${model.slug}`}
                     onClick={() =>
                       go({
                         kind: "model",
@@ -128,35 +128,17 @@ export function ProviderPage({
                     {on ? (
                       <span className="badge badge-live">On</span>
                     ) : (
-                      <button
-                        type="button"
-                        className="row-link"
-                        disabled={busy}
-                        onClick={() => onUse(model.id)}
-                      >
+                      <button type="button" className="row-link" disabled={busy} onClick={() => onUse(model.id)}>
                         Use
                       </button>
                     )}
-                    <button
-                      type="button"
-                      className="row-link"
-                      disabled={busy}
-                      onClick={() =>
-                        go({
-                          kind: "model",
-                          providerId: provider.id,
-                          modelId: model.id,
-                        })
-                      }
-                    >
-                      Configure
-                    </button>
                   </div>
                 </div>
               );
             })
           )}
         </div>
+        <p className="hint-soft">Open a model to configure limits. Use puts it on Chat.</p>
       </div>
 
       {adding ? (
@@ -193,7 +175,7 @@ export function ProviderPage({
               disabled={busy}
             />
           </label>
-          <ModelConfig value={limits} onChange={setLimits} />
+          <ModelConfig value={limits} onChange={setLimits} live={false} />
           <div className="form-actions">
             <BusyButton type="submit" className="button-secondary" busy={busy} busyLabel="Adding…">
               Add
@@ -255,9 +237,7 @@ export function ProviderPage({
 
       {confirmRemove ? (
         <div className="confirm-row">
-          <p className="fine">
-            Remove {provider.name}? Models on it go away. Official Grok stays available.
-          </p>
+          <p className="fine">Remove {provider.name}? Models on it go away. Official Grok stays available.</p>
           <div className="confirm-actions">
             <button type="button" className="button-secondary" onClick={() => setConfirmRemove(false)}>
               Cancel

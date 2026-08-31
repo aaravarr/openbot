@@ -13,6 +13,7 @@ export type ModelLimits = {
   maxOutputTokens: number;
   reasoningLevels: ReasoningLevel[];
   modalities: Modality[];
+  activeReasoning: ReasoningLevel;
 };
 
 const REASONING_SET = new Set<string>(REASONING_LEVELS);
@@ -32,6 +33,7 @@ export function defaultLimits(): ModelLimits {
     maxOutputTokens: DEFAULT_MAX_OUTPUT,
     reasoningLevels: [...DEFAULT_REASONING_LEVELS],
     modalities: [...DEFAULT_MODALITIES],
+    activeReasoning: "default",
   };
 }
 
@@ -77,6 +79,28 @@ export function toggleReasoning(list: readonly ReasoningLevel[], level: Reasonin
   return keepOrder(REASONING_LEVELS, set);
 }
 
+export function coerceActiveReasoning(
+  levels: readonly ReasoningLevel[],
+  requested: string | undefined,
+): ReasoningLevel {
+  if (requested && isReasoningLevel(requested) && levels.includes(requested)) {
+    return requested;
+  }
+  if (levels.includes("default")) {
+    return "default";
+  }
+  return levels[0] ?? "default";
+}
+
+export function withReasoningToggle(limits: ModelLimits, level: ReasoningLevel): ModelLimits {
+  const reasoningLevels = toggleReasoning(limits.reasoningLevels, level);
+  return {
+    ...limits,
+    reasoningLevels,
+    activeReasoning: coerceActiveReasoning(reasoningLevels, limits.activeReasoning),
+  };
+}
+
 export function toggleModality(list: readonly Modality[], item: Modality): Modality[] {
   const set = new Set(list);
   if (set.has(item)) {
@@ -114,14 +138,36 @@ export function limitsFromModel(model: {
   maxOutputTokens?: number;
   reasoningLevels?: readonly string[];
   modalities?: readonly string[];
+  activeReasoning?: string;
 }): ModelLimits {
   const filtered = (model.reasoningLevels ?? DEFAULT_REASONING_LEVELS).filter(isReasoningLevel);
   const withDefault = filtered.includes("default") ? filtered : (["default", ...filtered] as ReasoningLevel[]);
   const modalities = (model.modalities ?? DEFAULT_MODALITIES).filter(isModality);
+  const reasoningLevels = withDefault.length ? withDefault : [...DEFAULT_REASONING_LEVELS];
   return {
     contextTokens: model.contextTokens && model.contextTokens > 0 ? model.contextTokens : DEFAULT_CONTEXT_TOKENS,
     maxOutputTokens: model.maxOutputTokens && model.maxOutputTokens > 0 ? model.maxOutputTokens : DEFAULT_MAX_OUTPUT,
-    reasoningLevels: withDefault.length ? withDefault : [...DEFAULT_REASONING_LEVELS],
+    reasoningLevels,
     modalities: modalities.length ? modalities : [...DEFAULT_MODALITIES],
+    activeReasoning: coerceActiveReasoning(reasoningLevels, model.activeReasoning),
   };
+}
+
+export function limitsSignature(model: {
+  id?: string;
+  contextTokens?: number;
+  maxOutputTokens?: number;
+  reasoningLevels?: readonly string[];
+  modalities?: readonly string[];
+  activeReasoning?: string;
+}): string {
+  const limits = limitsFromModel(model);
+  return [
+    model.id ?? "",
+    String(limits.contextTokens),
+    String(limits.maxOutputTokens),
+    limits.reasoningLevels.join(","),
+    limits.modalities.join(","),
+    limits.activeReasoning,
+  ].join("|");
 }

@@ -3,8 +3,8 @@ import http from "node:http";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { LOOPBACK, SERVICE_PORT, type Snapshot, type TunnelObserved } from "../domain/types.ts";
-import { parseUiProviderSave } from "../parse/ui.ts";
+import { LOOPBACK, SERVICE_PORT, type Catalog, type Snapshot, type TunnelObserved } from "../domain/types.ts";
+import { catalogAfterSave, parseUiProviderSave } from "../parse/ui.ts";
 import { renderQrAscii } from "../qrcode.ts";
 import { boxPathsFrom } from "../supervisor/paths.ts";
 import { catalogFromPlanJson } from "../supervisor/plan.ts";
@@ -23,6 +23,17 @@ const repoRoot = process.env.OPENBOT_REPO ?? fileURLToPath(new URL("../..", impo
 const uiDir = path.join(repoRoot, "ui");
 const host = process.env.OPENBOT_UI_HOST ?? LOOPBACK;
 const port = Number(process.env.OPENBOT_UI_PORT ?? String(SERVICE_PORT));
+
+let saveChain: Promise<void> = Promise.resolve();
+
+function enqueueSave<T>(work: () => Promise<T>): Promise<T> {
+  const run = saveChain.then(work, work);
+  saveChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
 
 function paths() {
   return boxPathsFrom({
@@ -48,8 +59,8 @@ function send(res: http.ServerResponse, status: number, body: string | Buffer, t
   const buf = typeof body === "string" ? Buffer.from(body) : body;
   res.writeHead(status, {
     "Content-Type": type,
-    "Content-Length": String(buf.length),
     "Cache-Control": "no-store",
+    "Content-Length": String(buf.length),
   });
   res.end(buf);
 }
@@ -82,8 +93,8 @@ function snapshotForUi(snapshot: Snapshot): Snapshot & { tunnel: TunnelObserved 
   return { ...snapshot, tunnel: tunnelForUi(snapshot.tunnel) };
 }
 
-function publicState(current: SupervisorDeps) {
-  const saved = catalogFromPlanJson(current.fs.read(current.paths.plan));
+function publicState(current: SupervisorDeps, catalog?: Catalog) {
+  const saved = catalog ?? catalogFromPlanJson(current.fs.read(current.paths.plan));
   const store = loadSecrets(current.fs, current.paths.secrets);
   const keyedProviders = Object.keys(store.providers);
   const active = saved.bindings.find((row) => row.conversation.kind === "wildcard");
@@ -108,35 +119,42 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     return;
   }
   if (req.method === "POST" && url.pathname === "/api/save") {
-    const parsedBody: unknown = JSON.parse(await readBody(req));
-    const saved = catalogFromPlanJson(current.fs.read(current.paths.plan));
-    const parsed = parseUiProviderSave(parsedBody, current.paths, saved, {
-      expose: readExposeFile(current.fs, current.paths.expose),
-      mode: wrapMode(current.fs.read(current.paths.mode)),
+    await enqueueSave(async () => {
+      const parsedBody: unknown = JSON.parse(await readBody(req));
+      const saved = catalogFromPlanJson(current.fs.read(current.paths.plan));
+      const parsed = parseUiProviderSave(parsedBody, current.paths, saved, {
+        expose: readExposeFile(current.fs, current.paths.expose),
+        mode: wrapMode(current.fs.read(current.paths.mode)),
+      });
+      const result = await reconcile(parsed.desired, current);
+      if (result.kind === "refused") {
+        send(res, 409, JSON.stringify(result), "application/json; charset=utf-8");
+        return;
+      }
+      if (parsed.catalogWrite && parsed.catalogWrite.providers.length === 0) {
+        current.fs.remove(current.paths.plan);
+      }
+      if (parsed.secret) {
+        const store = loadSecrets(current.fs, current.paths.secrets);
+        saveSecrets(
+          current.fs,
+          current.paths.secrets,
+          upsertSecret(store, parsed.secret.providerId, parsed.secret.bytes),
+        );
+      }
+      const catalog = catalogAfterSave(parsed, catalogFromPlanJson(current.fs.read(current.paths.plan)));
+      send(
+        res,
+        200,
+        JSON.stringify({
+          ok: true,
+          wrapBytesChanged: result.wrapBytesChanged,
+          snapshot: snapshotForUi(result.snapshot),
+          ...publicState(current, catalog),
+        }),
+        "application/json; charset=utf-8",
+      );
     });
-    const result = await reconcile(parsed.desired, current);
-    if (result.kind === "refused") {
-      send(res, 409, JSON.stringify(result), "application/json; charset=utf-8");
-      return;
-    }
-    if (parsed.catalogWrite && parsed.catalogWrite.providers.length === 0) {
-      current.fs.remove(current.paths.plan);
-    }
-    if (parsed.secret) {
-      const store = loadSecrets(current.fs, current.paths.secrets);
-      saveSecrets(current.fs, current.paths.secrets, upsertSecret(store, parsed.secret.providerId, parsed.secret.bytes));
-    }
-    send(
-      res,
-      200,
-      JSON.stringify({
-        ok: true,
-        wrapBytesChanged: result.wrapBytesChanged,
-        snapshot: snapshotForUi(result.snapshot),
-        ...publicState(current),
-      }),
-      "application/json; charset=utf-8",
-    );
     return;
   }
   send(res, 404, JSON.stringify({ error: "not found" }), "application/json; charset=utf-8");

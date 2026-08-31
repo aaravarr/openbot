@@ -125,12 +125,14 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     assert.match(app.body, /Configure/);
     assert.match(app.body, /Max output/);
     assert.match(app.body, /Reasoning levels/);
+    assert.match(app.body, /On Chat now/);
     assert.match(app.body, /Input types/);
     assert.match(app.body, /Default omits thinking fields/);
     assert.match(app.body, /Open from phone with Cloudflare Tunnel/);
-    assert.match(app.body, /Thinking for /);
+    assert.match(app.body, /Grok Bot sends this on the next message/);
+    assert.match(app.body, /Skip to content/);
+    assert.match(app.body, /thinking-now-label/);
     assert.match(app.body, /\bOff\b/);
-    assert.match(app.body, /menu-trigger/);
     assert.equal(app.body.includes("<select"), false);
     assert.equal(app.body.includes("Catalog"), false);
     assert.equal(app.body.includes("Model slug"), false);

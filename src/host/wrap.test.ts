@@ -65,6 +65,13 @@ test("proveWrap is the copy transform, not a file write", () => {
   assert.equal(STOCK.includes(OPENBOT_MARKER), false);
 });
 
+test("stripWrap peels a leftover marker when the wrap header is gone", () => {
+  const leftover = `${OPENBOT_MARKER}\n${STOCK}`;
+  const stripped = stripWrap(leftover);
+  assert.equal(stripped.includes(OPENBOT_MARKER), false);
+  assert.equal(stripped, STOCK);
+});
+
 test("stripWrap restores the factory name", () => {
   const proof = wrapHostSource({ source: STOCK, runtimePath: "/tmp/runtime.cjs" });
   assert.equal(proof.kind, "wrapped");

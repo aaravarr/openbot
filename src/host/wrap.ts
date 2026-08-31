@@ -17,6 +17,8 @@ const HEADER_RE =
 const OPENGROK_HEADER_RE =
   /^\/\* opengrok-stock-wrap \*\/\nvar __opengrokRuntime = require\((?:'[^']+'|"[^"]+")\);\n(?:async )?function createProtoSessionProvider\(\) \{\n  return __opengrokRuntime\.wrapSession\(createProtoSessionProvider_stock, arguments\);\n\}\n/;
 
+const LEFTOVER_MARKER_RE = /^\s*\/\* openbot-stock-wrap \*\/\s*\n/;
+
 export function wrapHostSource(input: { source: string; runtimePath: string }): WrapProof {
   const { source, runtimePath } = input;
   if (source.includes(OPENBOT_MARKER)) {
@@ -55,7 +57,15 @@ export function stripWrap(source: string): string {
     return source;
   }
   const stripped = source.replace(HEADER_RE, "");
-  return stripped.replaceAll("createProtoSessionProvider_stock", "createProtoSessionProvider");
+  const renamed = stripped.replaceAll("createProtoSessionProvider_stock", "createProtoSessionProvider");
+  if (!renamed.includes(OPENBOT_MARKER)) {
+    return renamed;
+  }
+  const leftover = renamed.replace(LEFTOVER_MARKER_RE, "");
+  if (leftover !== renamed && censusHost(leftover).kind === "stock") {
+    return leftover;
+  }
+  return renamed;
 }
 
 export function stripOpengrokWrap(source: string): string {

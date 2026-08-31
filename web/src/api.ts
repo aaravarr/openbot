@@ -30,7 +30,7 @@ export type TunnelState =
 
 export type Snapshot = {
   wrap: { kind: string };
-  alignment?: { kind: string };
+  alignment?: { kind: string; desired?: string };
   tunnel?: TunnelState;
 };
 
@@ -153,6 +153,9 @@ export async function save(command: Command): Promise<BoxState> {
 }
 
 export function isCustom(state: BoxState): boolean {
+  if (state.snapshot?.alignment?.desired === "official") {
+    return false;
+  }
   return state.snapshot?.wrap.kind === "openbot-marked";
 }
 

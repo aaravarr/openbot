@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { go } from "./route";
-import { keyedSet, modelsFor, type BoxState, type Model, type Provider } from "./api";
+import { isCustom, keyedSet, modelsFor, type BoxState, type Model, type Provider } from "./api";
 import { BusyButton, InlineNote, SecretField, TextField, prevent } from "./fields";
 import { Dialog } from "./Dialog";
 import { ModelConfig } from "./ModelConfig";
@@ -35,7 +35,7 @@ export function ProviderPage({
 }) {
   const models = modelsFor(state, provider.id);
   const hasKey = keyedSet(state).has(provider.id);
-  const liveId = state.snapshot?.wrap.kind === "openbot-marked" ? state.activeModelId : null;
+  const liveId = isCustom(state) ? state.activeModelId : null;
   const [sheet, setSheet] = useState<Sheet>(null);
   const [slug, setSlug] = useState("");
   const [addLimits, setAddLimits] = useState<ModelLimits>(defaultLimits);

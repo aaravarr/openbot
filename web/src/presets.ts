@@ -6,6 +6,13 @@ export type Preset = {
   hint: string;
 };
 
+export type ProviderDraft = {
+  name: string;
+  origin: string;
+  modelSlug: string;
+  secret: string;
+};
+
 export const PRESETS: readonly Preset[] = [
   {
     id: "openai",
@@ -71,3 +78,15 @@ export const PRESETS: readonly Preset[] = [
     hint: "Any HTTPS endpoint that speaks OpenAI Chat Completions.",
   },
 ];
+
+export function draftFromPreset(preset: Preset): ProviderDraft {
+  if (preset.id === "custom") {
+    return { name: "", origin: "", modelSlug: "", secret: "" };
+  }
+  return {
+    name: preset.name,
+    origin: preset.origin,
+    modelSlug: preset.model,
+    secret: "",
+  };
+}

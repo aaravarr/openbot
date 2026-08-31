@@ -223,6 +223,7 @@ export function App() {
             )}
           </>
         )}
+        <p className="page-foot">Keys stay on this Computer. Open Grok Bot and send a new message after you switch.</p>
       </main>
       {toast ? (
         <div className={toast.error ? "toast toast-error" : "toast"} role="status">

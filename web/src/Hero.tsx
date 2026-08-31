@@ -26,14 +26,14 @@ export function Hero({
         </h2>
         <p className="now-body">
           {saved
-            ? "Grok Bot is on the stock model. Your providers stay saved — click one below to come back."
+            ? "Grok Bot is on the stock model. Your providers stay saved — pick one below to come back."
             : "Grok Bot is on the stock model until you connect a provider."}
         </p>
         {saved && active ? (
           <div className="now-actions">
             <BusyButton
               type="button"
-              className="button-primary"
+              className="button-secondary"
               busy={busy}
               busyLabel="Switching…"
               onClick={() => onResume(active.id)}

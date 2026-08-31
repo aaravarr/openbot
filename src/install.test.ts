@@ -32,7 +32,7 @@ function get(url: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const req = http.get(url, (res) => {
       const chunks: Buffer[] = [];
-      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
       res.on("end", () => {
         resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") });
       });
@@ -106,6 +106,8 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     assert.equal(app.status, 200);
     assert.match(app.body, /Start chatting/);
     assert.match(app.body, /Use any model in Grok Bot/);
+    assert.match(app.body, /Choose a provider to continue/);
+    assert.match(app.body, /Your endpoint/);
     assert.match(app.body, /Base URL/);
     assert.match(app.body, /Model ID/);
     assert.match(app.body, /API Key/);

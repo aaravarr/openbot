@@ -130,6 +130,34 @@ main {
   max-width: 46ch;
 }
 
+.steps {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 20px;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.steps li {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  color: var(--body);
+  font-size: 14px;
+  counter-increment: step;
+}
+
+.steps li::before {
+  content: counter(step);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.88px;
+  color: var(--muted);
+  width: 1.5em;
+  flex-shrink: 0;
+}
+
 .now-title {
   margin: 0 0 8px;
   font-size: 22px;
@@ -207,9 +235,14 @@ main {
   font-weight: 500;
 }
 
-.preset.selected {
+.preset.selected,
+.preset:hover {
   border-color: var(--ink);
   background: var(--canvas-soft);
+}
+
+.preset-wide {
+  grid-column: 1 / -1;
 }
 
 .preset-name {
@@ -229,6 +262,12 @@ main {
   margin-top: 20px;
   padding-top: 20px;
   border-top: 1px solid var(--hairline);
+}
+
+.setup-form-open {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
 }
 
 .list-card {
@@ -537,6 +576,12 @@ input {
 .toast-error {
   color: var(--error);
   border-color: var(--error);
+}
+
+.page-foot {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--muted);
 }
 
 @media (max-width: 640px) {

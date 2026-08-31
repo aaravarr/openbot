@@ -68,6 +68,7 @@ export type Command =
   | { kind: "use-model"; modelId: string; reasoning?: string }
   | { kind: "remove-provider"; providerId: string }
   | { kind: "set-secret"; providerId: string; secret: string }
+  | { kind: "update-provider"; providerId: string; name: string; origin: string; secret?: string }
   | { kind: "set-expose"; expose: "cloudflare" | "off" };
 
 function asError(data: unknown, fallback: string): Error {

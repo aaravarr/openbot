@@ -20,6 +20,13 @@ import { labelReasoning, type ModelLimits } from "./model";
 
 type Toast = { text: string; error: boolean };
 
+function friendlyError(text: string): string {
+  if (text.includes("unknown UI command")) {
+    return "This Computer is still running an old OpenBot process. Run the install command again so the service reloads, then retry.";
+  }
+  return text;
+}
+
 function limitsPayload(limits: ModelLimits) {
   return {
     contextTokens: limits.contextTokens,
@@ -112,7 +119,7 @@ export function App() {
         setToast({ text: ok(next), error: false });
         return next;
       } catch (err) {
-        const text = err instanceof Error ? err.message : "Something went wrong";
+        const text = friendlyError(err instanceof Error ? err.message : "Something went wrong");
         setFormError(text);
         setToast({ text, error: true });
         throw err;
@@ -321,9 +328,9 @@ export function App() {
             () => `Added ${slug}.`,
           );
         }}
-        onSetSecret={async (providerId, secret) => {
+        onUpdate={async (input) => {
           setFocusProviderId(null);
-          await run("secret", { kind: "set-secret", providerId, secret }, () => "API key saved.");
+          await run("provider", { kind: "update-provider", ...input }, () => "Provider saved.");
         }}
         onRemove={async (providerId) => {
           await run("remove", { kind: "remove-provider", providerId }, (next) =>

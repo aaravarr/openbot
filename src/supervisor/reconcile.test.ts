@@ -311,3 +311,17 @@ test("owned service is adopted, not started again", async () => {
 });
 
 void parseAbsPath;
+
+test("CLI reload restarts the owned loopback service", async () => {
+  const wrapped = wrapHostSource({ source: STOCK, runtimePath: "/tmp/runtime.cjs" });
+  assert.equal(wrapped.kind, "wrapped");
+  if (wrapped.kind !== "wrapped") {
+    return;
+  }
+  const ctx = setup(wrapped.source, { serviceOurs: true });
+  const result = await reconcile(zhipu(ctx.paths), ctx.deps, { reloadService: true });
+  assert.equal(result.kind, "ok");
+  assert.equal(ctx.procs.stopped.includes(43), true);
+  assert.equal(ctx.procs.started.some((row) => row.includes("server.ts")), true);
+});
+

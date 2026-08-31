@@ -348,3 +348,44 @@ test("catalogAfterSave keeps the plan catalog on official", () => {
   assert.equal(next.models[0]?.id, disk.models[0]?.id);
   assert.equal(next.bindings[0]?.modelId, disk.bindings[0]?.modelId);
 });
+
+test("update-provider keeps the provider id and rewrites name and origin", () => {
+  const parsed = parseUiProviderSave(
+    {
+      kind: "update-provider",
+      providerId: "zhipu",
+      name: "Zhipu GLM",
+      origin: "https://open.bigmodel.cn/api/paas/v4/new",
+    },
+    paths(),
+    zhipuCatalog(),
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") {
+    return;
+  }
+  assert.equal(parsed.desired.catalog.providers.length, 1);
+  assert.equal(parsed.desired.catalog.providers[0]?.id, "zhipu");
+  assert.equal(parsed.desired.catalog.providers[0]?.name, "Zhipu GLM");
+  assert.equal(parsed.desired.catalog.providers[0]?.origin, "https://open.bigmodel.cn/api/paas/v4/new");
+  assert.equal(parsed.desired.catalog.models[0]?.id, "zhipu:glm-5.3-flash");
+  assert.equal(parsed.secret, undefined);
+});
+
+test("update-provider writes a secret when one is sent", () => {
+  const parsed = parseUiProviderSave(
+    {
+      kind: "update-provider",
+      providerId: "zhipu",
+      name: "Zhipu",
+      origin: "https://open.bigmodel.cn/api/paas/v4",
+      secret: "sk-rotated",
+    },
+    paths(),
+    zhipuCatalog(),
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  assert.equal(parsed.secret?.bytes, "sk-rotated");
+  assert.equal("secret" in parsed.desired, false);
+});
+

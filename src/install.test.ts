@@ -122,6 +122,8 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     assert.match(app.body, /Add model/);
     assert.match(app.body, /New model/);
     assert.match(app.body, /Save model/);
+    assert.match(app.body, /Save provider/);
+    assert.match(app.body, /Leave blank to keep the saved key/);
     assert.match(app.body, /Configure/);
     assert.match(app.body, /Max output/);
     assert.match(app.body, /Reasoning levels/);

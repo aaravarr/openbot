@@ -26,11 +26,6 @@ function printTunnel(tunnel: TunnelObserved | undefined): void {
     return;
   }
   console.log("");
-  console.log("  This Computer     " + internal);
-  console.log("  Phone             " + tunnel.url);
-  console.log("");
-  console.log("Anyone with the phone URL can open the control page. Keys stay on this Computer.");
-  console.log("");
   console.log("Scan from your phone:");
   console.log("");
   try {
@@ -38,6 +33,11 @@ function printTunnel(tunnel: TunnelObserved | undefined): void {
   } catch {
     console.log("(QR skipped — open the phone URL in a browser.)");
   }
+  console.log("");
+  console.log("  This Computer     " + internal);
+  console.log("  Phone             " + tunnel.url);
+  console.log("");
+  console.log("Anyone with the phone URL can open the control page. Keys stay on this Computer.");
   console.log("");
   console.log("Cloudflare Tunnel is running in the background.");
   console.log("Stop it with: openbot tunnel off");

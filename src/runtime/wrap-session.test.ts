@@ -26,7 +26,8 @@ test("wrapSession is sync, replaces stream, and throws without a binding", () =>
     wrapSession: (stockFn: (...args: unknown[]) => unknown, args: unknown) => unknown;
     unwrapJsonSchemaTools: (tools: unknown[]) => { function: { parameters: { properties: Record<string, unknown> } } }[];
     mapToolCalls: (calls: unknown[]) => { toolName: string }[];
-    defaultMaxTokens: (n: number | undefined) => number;
+    defaultMaxTokens: (n: number | undefined, cap?: number) => number;
+    resolveAgent: (args: unknown[]) => { modelId: string; maxOutputTokens: number } | null;
   };
 
   const tools = runtime.unwrapJsonSchemaTools([
@@ -40,6 +41,7 @@ test("wrapSession is sync, replaces stream, and throws without a binding", () =>
   ]);
   assert.equal(twice.length, 2);
   assert.equal(runtime.defaultMaxTokens(undefined), 65536);
+  assert.equal(runtime.defaultMaxTokens(99999, 4096), 4096);
 
   function stockFn() {
     return {
@@ -72,6 +74,22 @@ test("wrapSession is sync, replaces stream, and throws without a binding", () =>
     (exec: { stream: unknown }) => exec,
   );
   assert.equal(typeof session.getExecutor().stream, "function");
+
+  writeFileSync(
+    planPath,
+    JSON.stringify({
+      kind: "custom",
+      agents: { "*": { modelId: "gpt-4.1", providerId: "openai" } },
+      catalog: {
+        providers: [],
+        models: [{ id: "openai:gpt-4.1", providerId: "openai", slug: "gpt-4.1", maxOutputTokens: 2048 }],
+        bindings: [],
+      },
+    }),
+  );
+  const agent = runtime.resolveAgent([{ conversationId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }]);
+  assert.equal(agent?.modelId, "gpt-4.1");
+  assert.equal(agent?.maxOutputTokens, 2048);
 
   writeFileSync(planPath, JSON.stringify({ kind: "custom", agents: {}, catalog: { providers: [], models: [], bindings: [] } }));
   assert.throws(() => runtime.wrapSession(stockFn, [{}]), /no model binding/);

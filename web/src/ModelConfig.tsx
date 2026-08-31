@@ -1,0 +1,91 @@
+import { MODALITIES, REASONING_LEVELS, labelModality, labelReasoning, toggleModality, toggleReasoning, type ModelLimits } from "./model";
+
+export function ModelConfig({
+  value,
+  onChange,
+}: {
+  value: ModelLimits;
+  onChange: (next: ModelLimits) => void;
+}) {
+  return (
+    <div className="model-config">
+      <div className="limits-grid">
+        <label>
+          Context
+          <input
+            type="number"
+            min={1}
+            max={10000000}
+            value={value.contextTokens}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              if (!Number.isFinite(next) || next <= 0) {
+                return;
+              }
+              onChange({ ...value, contextTokens: Math.floor(next) });
+            }}
+          />
+        </label>
+        <label>
+          Max output
+          <input
+            type="number"
+            min={1}
+            max={10000000}
+            value={value.maxOutputTokens}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              if (!Number.isFinite(next) || next <= 0) {
+                return;
+              }
+              onChange({ ...value, maxOutputTokens: Math.floor(next) });
+            }}
+          />
+        </label>
+      </div>
+      <div>
+        <p className="model-config-title" id="reasoning-levels-label">
+          Reasoning levels
+        </p>
+        <div className="chip-row" role="group" aria-labelledby="reasoning-levels-label">
+          {REASONING_LEVELS.map((level) => {
+            const on = value.reasoningLevels.includes(level);
+            return (
+              <button
+                key={level}
+                type="button"
+                className={on ? "chip chip-on" : "chip"}
+                aria-pressed={on}
+                onClick={() => onChange({ ...value, reasoningLevels: toggleReasoning(value.reasoningLevels, level) })}
+              >
+                {labelReasoning(level)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div>
+        <p className="model-config-title" id="modalities-label">
+          Input types
+        </p>
+        <div className="chip-row" role="group" aria-labelledby="modalities-label">
+          {MODALITIES.map((item) => {
+            const on = value.modalities.includes(item);
+            return (
+              <button
+                key={item}
+                type="button"
+                className={on ? "chip chip-on" : "chip"}
+                aria-pressed={on}
+                onClick={() => onChange({ ...value, modalities: toggleModality(value.modalities, item) })}
+              >
+                {labelModality(item)}
+              </button>
+            );
+          })}
+        </div>
+        <p className="hint-soft">Image, video, and audio are saved on the model. Chat still sends text.</p>
+      </div>
+    </div>
+  );
+}

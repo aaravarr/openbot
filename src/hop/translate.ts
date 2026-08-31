@@ -121,9 +121,10 @@ export function mapFinishReason(reason: string | undefined): FinishReason {
   return "stop";
 }
 
-export function defaultMaxTokens(requested: number | undefined): number {
+export function defaultMaxTokens(requested: number | undefined, cap: number = HIGH_AGENT_MAX_TOKENS): number {
+  const limit = Number.isFinite(cap) && cap > 0 ? Math.floor(cap) : HIGH_AGENT_MAX_TOKENS;
   if (requested != null && Number.isFinite(requested) && requested > 0) {
-    return requested;
+    return Math.min(Math.floor(requested), limit);
   }
-  return HIGH_AGENT_MAX_TOKENS;
+  return limit;
 }

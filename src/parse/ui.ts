@@ -1,14 +1,22 @@
+import { HIGH_AGENT_MAX_TOKENS, type Catalog, type DesiredState, type Model, type Provider } from "../domain/types.ts";
 import {
-  HIGH_AGENT_MAX_TOKENS,
-  type Catalog,
-  type DesiredState,
-  type Model,
-  type Provider,
-} from "../domain/types.ts";
+  DEFAULT_CONTEXT_TOKENS,
+  DEFAULT_MODALITIES,
+  DEFAULT_REASONING_LEVELS,
+  makeModel,
+} from "../domain/model.ts";
 import { parseModelId, parseModelSlug } from "../supervisor/plan.ts";
 import { type BoxPaths } from "../supervisor/paths.ts";
 import { parseProviderId, parseSecretBytes } from "../supervisor/secrets.ts";
 import { customBoxFromCatalog, officialBox, parseUpstreamOrigin, slugify } from "./argv.ts";
+
+export type ModelLimitsInput = {
+  readonly contextTokens?: unknown;
+  readonly maxOutputTokens?: unknown;
+  readonly reasoningLevels?: unknown;
+  readonly modalities?: unknown;
+  readonly activeReasoning?: unknown;
+};
 
 export type UiCommand =
   | { readonly kind: "official" }
@@ -18,14 +26,53 @@ export type UiCommand =
       readonly origin: string;
       readonly modelSlug: string;
       readonly secret: string;
+      readonly contextTokens?: unknown;
+      readonly maxOutputTokens?: unknown;
+      readonly reasoningLevels?: unknown;
+      readonly modalities?: unknown;
     }
-  | { readonly kind: "upsert-model"; readonly providerId: string; readonly slug: string }
-  | { readonly kind: "use-model"; readonly modelId: string }
+  | {
+      readonly kind: "upsert-model";
+      readonly providerId: string;
+      readonly slug: string;
+      readonly contextTokens?: unknown;
+      readonly maxOutputTokens?: unknown;
+      readonly reasoningLevels?: unknown;
+      readonly modalities?: unknown;
+      readonly activeReasoning?: unknown;
+    }
+  | { readonly kind: "use-model"; readonly modelId: string; readonly reasoning?: unknown }
   | { readonly kind: "remove-provider"; readonly providerId: string }
   | { readonly kind: "set-secret"; readonly providerId: string; readonly secret: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function limitsFrom(input: Record<string, unknown>): ModelLimitsInput {
+  const next: {
+    contextTokens?: unknown;
+    maxOutputTokens?: unknown;
+    reasoningLevels?: unknown;
+    modalities?: unknown;
+    activeReasoning?: unknown;
+  } = {};
+  if (input.contextTokens !== undefined) {
+    next.contextTokens = input.contextTokens;
+  }
+  if (input.maxOutputTokens !== undefined) {
+    next.maxOutputTokens = input.maxOutputTokens;
+  }
+  if (input.reasoningLevels !== undefined) {
+    next.reasoningLevels = input.reasoningLevels;
+  }
+  if (input.modalities !== undefined) {
+    next.modalities = input.modalities;
+  }
+  if (input.activeReasoning !== undefined) {
+    next.activeReasoning = input.activeReasoning;
+  }
+  return next;
 }
 
 export function parseUiCommand(input: unknown): UiCommand {
@@ -48,19 +95,28 @@ export function parseUiCommand(input: unknown): UiCommand {
       origin: input.origin,
       modelSlug: input.modelSlug,
       secret: input.secret,
+      ...limitsFrom(input),
     };
   }
   if (input.kind === "upsert-model") {
     if (typeof input.providerId !== "string" || typeof input.slug !== "string") {
       throw new Error("OpenBot: upsert-model needs providerId and slug");
     }
-    return { kind: "upsert-model", providerId: input.providerId, slug: input.slug };
+    return {
+      kind: "upsert-model",
+      providerId: input.providerId,
+      slug: input.slug,
+      ...limitsFrom(input),
+    };
   }
   if (input.kind === "use-model") {
     if (typeof input.modelId !== "string") {
       throw new Error("OpenBot: use-model needs modelId");
     }
-    return { kind: "use-model", modelId: input.modelId };
+    if (input.reasoning === undefined) {
+      return { kind: "use-model", modelId: input.modelId };
+    }
+    return { kind: "use-model", modelId: input.modelId, reasoning: input.reasoning };
   }
   if (input.kind === "remove-provider") {
     if (typeof input.providerId !== "string") {
@@ -103,6 +159,27 @@ function upsertModelRow(catalog: Catalog, model: Model): Catalog {
   return withWildcard({ ...catalog, models }, model.id);
 }
 
+function modelFromLimits(input: {
+  id: Model["id"];
+  providerId: Model["providerId"];
+  slug: Model["slug"];
+  existing: Model | undefined;
+  limits: ModelLimitsInput;
+}): Model {
+  const existing = input.existing;
+  return makeModel({
+    id: input.id,
+    providerId: input.providerId,
+    slug: input.slug,
+    contextTokens: input.limits.contextTokens ?? existing?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
+    maxOutputTokens: input.limits.maxOutputTokens ?? existing?.maxOutputTokens ?? HIGH_AGENT_MAX_TOKENS,
+    reasoningLevels: input.limits.reasoningLevels ?? existing?.reasoningLevels ?? DEFAULT_REASONING_LEVELS,
+    modalities: input.limits.modalities ?? existing?.modalities ?? DEFAULT_MODALITIES,
+    activeReasoning: input.limits.activeReasoning ?? existing?.activeReasoning ?? "none",
+    parameters: existing?.parameters ?? [],
+  });
+}
+
 export type UiSave = {
   readonly desired: DesiredState;
   readonly secret?: { providerId: ReturnType<typeof parseProviderId>; bytes: ReturnType<typeof parseSecretBytes> };
@@ -136,6 +213,7 @@ export function applyUiCommand(input: {
     const origin = parseUpstreamOrigin(command.origin);
     const slug = parseModelSlug(command.modelSlug);
     const modelId = parseModelId(`${providerId}:${command.modelSlug}`);
+    const existing = catalog.models.find((row) => row.id === modelId);
     const next = upsertModelRow(
       upsertProviderRow(catalog, {
         id: providerId,
@@ -144,7 +222,13 @@ export function applyUiCommand(input: {
         maxTokensDefault: HIGH_AGENT_MAX_TOKENS,
         mapFile: "provider-maps.cjs",
       }),
-      { id: modelId, providerId, slug, parameters: [] },
+      modelFromLimits({
+        id: modelId,
+        providerId,
+        slug,
+        existing,
+        limits: command,
+      }),
     );
     return {
       desired: customBoxFromCatalog({ paths, catalog: withWildcard(next, modelId) }),
@@ -158,7 +242,17 @@ export function applyUiCommand(input: {
     }
     const slug = parseModelSlug(command.slug);
     const modelId = parseModelId(`${providerId}:${command.slug}`);
-    const next = upsertModelRow(catalog, { id: modelId, providerId, slug, parameters: [] });
+    const existing = catalog.models.find((row) => row.id === modelId);
+    const next = upsertModelRow(
+      catalog,
+      modelFromLimits({
+        id: modelId,
+        providerId,
+        slug,
+        existing,
+        limits: command,
+      }),
+    );
     return { desired: customBoxFromCatalog({ paths, catalog: next }) };
   }
   if (command.kind === "use-model") {
@@ -167,7 +261,19 @@ export function applyUiCommand(input: {
     if (!model) {
       throw new Error("OpenBot: unknown model");
     }
-    return { desired: customBoxFromCatalog({ paths, catalog: withWildcard(catalog, modelId) }) };
+    const nextModel = makeModel({
+      id: model.id,
+      providerId: model.providerId,
+      slug: model.slug,
+      contextTokens: model.contextTokens,
+      maxOutputTokens: model.maxOutputTokens,
+      reasoningLevels: model.reasoningLevels,
+      modalities: model.modalities,
+      activeReasoning: command.reasoning ?? model.activeReasoning,
+      parameters: model.parameters,
+    });
+    const next = upsertModelRow(catalog, nextModel);
+    return { desired: customBoxFromCatalog({ paths, catalog: withWildcard(next, modelId) }) };
   }
   const providerId = parseProviderId(command.providerId);
   const providers = catalog.providers.filter((row) => row.id !== providerId);

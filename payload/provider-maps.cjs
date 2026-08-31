@@ -62,6 +62,17 @@ function applyGrok(body, maxMode, parameters) {
   return null;
 }
 
+function applyGeneric(body, parameters) {
+  var effort = param(parameters, "effort");
+  var openaiEffort = { low: "low", medium: "medium", high: "high", max: "high", xhigh: "high" };
+  var token = effort != null ? openaiEffort[String(effort)] : undefined;
+  if (token && body.reasoning_effort == null) {
+    body.reasoning_effort = token;
+    return "openai-effort";
+  }
+  return "none";
+}
+
 function applyProviderReasoningControls(body, ctx) {
   ctx = ctx || {};
   var modelId = String(ctx.modelId || "");
@@ -72,7 +83,7 @@ function applyProviderReasoningControls(body, ctx) {
   if (isGlmRoute(modelId, baseUrl)) {
     return applyGlm(body, ctx.parameters) || "glm-passthrough";
   }
-  return "none";
+  return applyGeneric(body, ctx.parameters);
 }
 
 module.exports = {

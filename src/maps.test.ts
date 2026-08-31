@@ -34,3 +34,48 @@ test("GLM fast is opt-in through a model parameter, not an installer default", (
   assert.equal(result, "glm-fast-off");
   assert.deepEqual(body.thinking, { type: "disabled" });
 });
+
+test("GLM effort enables thinking and sets reasoning_effort", () => {
+  const body: Record<string, unknown> = { model: "glm-4.6" };
+  const result = maps.applyProviderReasoningControls(body, {
+    modelId: "glm-4.6",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    parameters: [{ id: "effort", value: "high" }],
+  });
+  assert.equal(result, "glm-effort");
+  assert.deepEqual(body.thinking, { type: "enabled" });
+  assert.equal(body.reasoning_effort, "high");
+});
+
+test("Grok effort maps max to xhigh", () => {
+  const body: Record<string, unknown> = { model: "grok-3" };
+  const result = maps.applyProviderReasoningControls(body, {
+    modelId: "grok-3",
+    baseUrl: "https://api.x.ai/v1",
+    parameters: [{ id: "effort", value: "max" }],
+  });
+  assert.equal(result, "grok-effort");
+  assert.equal(body.reasoning_effort, "xhigh");
+});
+
+test("generic OpenAI maps effort to reasoning_effort", () => {
+  const body: Record<string, unknown> = { model: "gpt-4.1" };
+  const result = maps.applyProviderReasoningControls(body, {
+    modelId: "gpt-4.1",
+    baseUrl: "https://api.openai.com/v1",
+    parameters: [{ id: "effort", value: "high" }],
+  });
+  assert.equal(result, "openai-effort");
+  assert.equal(body.reasoning_effort, "high");
+});
+
+test("generic OpenAI does not set reasoning_effort without effort", () => {
+  const body: Record<string, unknown> = { model: "gpt-4.1" };
+  const result = maps.applyProviderReasoningControls(body, {
+    modelId: "gpt-4.1",
+    baseUrl: "https://api.openai.com/v1",
+    parameters: [],
+  });
+  assert.equal(result, "none");
+  assert.equal(body.reasoning_effort, undefined);
+});

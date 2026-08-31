@@ -32,7 +32,7 @@ function get(url: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const req = http.get(url, (res) => {
       const chunks: Buffer[] = [];
-      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
       res.on("end", () => {
         resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") });
       });
@@ -93,16 +93,31 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     assert.equal(readFileSync(hostMain, "utf8").includes("function createProtoSessionProvider(client)"), true);
     const html = await get(`${UI}/`);
     assert.equal(html.status, 200);
-    assert.match(html.body, /Save and use/);
-    assert.match(html.body, /Base URL/);
-    assert.match(html.body, /Model ID/);
-    assert.match(html.body, /API Key/);
-    assert.match(html.body, />Now</);
-    assert.match(html.body, /Add provider/);
+    assert.match(html.body, /OpenBot/);
+    assert.match(html.body, /id="root"/);
+    assert.match(html.body, /app\.js/);
+    assert.match(html.body, /styles\.css/);
     assert.equal(html.body.includes("Catalog"), false);
     assert.equal(html.body.includes("Origin"), false);
     assert.equal(html.body.includes("Model slug"), false);
     assert.equal(html.body.includes("Your models. Stock Grok"), false);
+    assert.equal(html.body.includes(">Now<"), false);
+    const app = await get(`${UI}/app.js`);
+    assert.equal(app.status, 200);
+    assert.match(app.body, /Start chatting/);
+    assert.match(app.body, /Use any model in Grok Bot/);
+    assert.match(app.body, /Choose a provider to continue/);
+    assert.match(app.body, /Your endpoint/);
+    assert.match(app.body, /Base URL/);
+    assert.match(app.body, /Model ID/);
+    assert.match(app.body, /API Key/);
+    assert.match(app.body, /Add provider/);
+    assert.match(app.body, /Official Grok/);
+    assert.match(app.body, /Max output/);
+    assert.match(app.body, /Reasoning levels/);
+    assert.match(app.body, /Input types/);
+    assert.equal(app.body.includes("Catalog"), false);
+    assert.equal(app.body.includes("Model slug"), false);
     const css = await get(`${UI}/styles.css`);
     assert.equal(css.status, 200);
     assert.match(css.body, /#f7f7f4/);

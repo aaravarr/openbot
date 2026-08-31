@@ -44,7 +44,11 @@ const TYPES: Record<string, string> = {
 
 function send(res: http.ServerResponse, status: number, body: string | Buffer, type: string): void {
   const buf = typeof body === "string" ? Buffer.from(body) : body;
-  res.writeHead(status, { "Content-Type": type, "Content-Length": String(buf.length) });
+  res.writeHead(status, {
+    "Content-Type": type,
+    "Content-Length": String(buf.length),
+    "Cache-Control": "no-store",
+  });
   res.end(buf);
 }
 

@@ -2,68 +2,69 @@
 
 [English](README.md) · [中文](README.zh-CN.md)
 
-把你自己的模型接到 [Grok Bot](https://grok.x.ai/)。在 Bot 的 Computer 上安装，打开本机控制界面，粘贴 API Key，然后聊天。要恢复官方 Grok 时切到 **Official**。这一步会还原厂商的 host，不会留一个假装官方的包装层。
+**在 Grok Bot 里用你自己的模型。**
 
-Grok Bot 0.30 的聊天路由在 Computer 上，不在 Mac 上。笔记本上绑 `127.0.0.1` 的 hop 收不到回合。OpenBot 跑在盒子里。
-
-## 现状
-
-`install.sh` 会拷仓库、保持聊天 official，并拉起一个 loopback 服务（控制界面和聊天 hop 共用）。测试用假 Computer host 覆盖了这条安装路径，以及 census、wrap/restore、hop 映射和 provider upsert。
-
-安装脚本已在真实的 Grok Bot Computer 上跑过。切 Official 会保留已保存的 provider。桌面端 Grok Bot 聊天仍需在 App 里证明。
-
-## 安装
-
-在 **Computer 终端**里跑，不要在 Mac 上跑。需要 Node 22 或更新。如果盒子只有 Node 20，脚本会把 Node 22 装进 `sand-data`，不替换系统 Node。
+Grok Bot 0.30 已经有一台 Computer。OpenBot 让这台 Computer 去调用你已经在付费的模型 —— OpenAI、GLM、DeepSeek、Kimi、Groq、OpenRouter，或任何 OpenAI 兼容接口 —— 不用离开 Grok Bot。想用回官方 Grok 时，一键即可。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
 ```
 
-然后用 Computer 浏览器打开 `http://127.0.0.1:9280`。
+然后用 **Computer 的浏览器** 打开 [http://127.0.0.1:9280](http://127.0.0.1:9280)。
 
-1. 裸安装保持 official，聊天仍是官方 Grok。
-2. 在界面里保存 provider、模型和 API Key。这时才会 wrap `createProtoSessionProvider`。聊天在同一个 loopback 服务上 POST `/v1/chat/completions`。
-3. Use 会切换通配模型。bindings 里不会出现 Key。hop 从 `/home/box/sand-data/secrets.json` 注入。
-4. Official 会剥掉我们的 wrap（如果还有 `/* opengrok-stock-wrap */` 也会剥），控制界面留着方便再切回去，已保存的 provider 不会删。
+## 你能得到什么
 
-不要把 Key 写在命令行上。CLI 带 `--origin` 和 `--model` 安装时，用环境变量 `OPENBOT_API_KEY`。
+- **还是 Grok Bot，只是脑子换成你选的。** 同一个聊天窗口，同一套工具，由你的模型来回答。
+- **随时回到官方 Grok。** 切回去就是原厂聊天。已保存的服务商还在，再切回来不用重新粘贴 Key。
+- **Key 留在 Computer 上。** 不会进聊天，不会出现在命令行，也不会离开这台盒子。
+- **本机一页控制，不是再装一个 App。** 装一次，打开 `127.0.0.1` 上的页面，选服务商、选模型，回到 Grok Bot 继续聊。
 
-`--census-only` 只打印 host 符号，不能证明 wrap 会成功。`--dry-run` 才是在副本上跑 wrap。
+## 安装
 
-`:9280` 上不明进程会拒绝。残留的 `python …/hop-server.py` 会被停掉。
+在 **Computer 终端**里运行，不要在 Mac 上运行。Grok Bot 的聊天走 Computer；笔记本上的代理收不到回合。
 
-## 会做什么
-
-- 在 Grok Bot Computer 上一行安装
-- 控制界面和聊天 hop 都绑 `127.0.0.1:9280`
-- Provider 列表、模型列表、切模型
-- API-key 模式和 BYOK 都在这个界面里
-- Official：官方 factory，无 wrap
-- Custom：只劫持 `executor.stream`，经 loopback POST OpenAI 兼容的 `/v1/chat/completions`
-
-按会话覆盖模型不在 v1。
-
-## 规则
-
-- Official 是拆掉 wrap。你还想用 custom、厂商却把 host 写回 stock 时，状态是 `needs-reinstall`，不是 Official。
-- Binding 只把会话映射到模型 id。不能带 `apiKey`，也不能带 hop URL。hop URL 永远是 `http://127.0.0.1:9280/v1`。
-- 通用 hop 展开 AI SDK 的 `jsonSchema`，并忠实映射 `tool_calls`。不会靠丢掉后续 `SendToUser` 来强行结束回合。
-- Agent 的 `max_tokens` 默认是 65536，不是 8192。
-- 调用方把输入解析成 `DesiredState`，再 `reconcile`。不要自己串 wrap、启动 hop、bounce host。
-
-见 `src/domain/types.ts` 和 `AGENTS.md`。
-
-## 开发
+需要 Node 22 或更新。如果盒子里只有 Node 20，安装脚本会把 Node 22 放到 `sand-data`，不替换系统 Node。
 
 ```bash
-npm install
-npm test
-npm run typecheck
+curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
 ```
 
-需要 Node 22 或更新。测试用假 host 文件和假进程。它们不能证明 Bot 消息打到了盒子的 `:9280`。
+看到 `OpenBot UI: http://127.0.0.1:9280` 后，用 Computer 浏览器打开这个地址。
+
+在你接入服务商之前，聊天仍是官方 Grok。这是故意的。
+
+## 接入一个模型
+
+1. 打开控制页。
+2. 选一个服务商；或选 **Custom**，粘贴任何 OpenAI 兼容的 Base URL。
+3. 粘贴 API Key 和模型 ID。
+4. 设置该模型的**上下文**、**最大输出**、它支持的**推理等级**，以及接受的**输入类型**（文本、图片、视频、音频）。
+5. 点 **Start chatting**。
+6. 回到 Grok Bot，发一条**新消息**。
+
+下一回合就会走你刚接上的模型。
+
+图片、视频、音频会记在模型配置里，供以后使用。当前聊天仍只发送文本。
+
+## 之后怎么切换
+
+每个已接入的模型都会出现在列表里，和 **Official Grok** 排在一起。点一行，如果模型有多个推理等级，再选一个**推理等级**。Grok Bot 的下一条消息会跟着这个选择走。
+
+如果某个模型还没有 Key，OpenBot 会带你去填 Key，而不是悄悄失败。
+
+之后也可以在服务商卡片里改上下文、最大输出、推理等级列表和输入类型。
+
+## 回到官方 Grok
+
+点 **Official Grok**（或顶部的 **Use official Grok**）。聊天回到原厂。服务商和 Key 仍留在 Computer 上，之后还能切回自定义模型，不用重配。
+
+## 使用前请知道
+
+- 不要把 Key 写在命令行上。如果用 CLI 带 `--origin` 和 `--model` 安装，请用环境变量 `OPENBOT_API_KEY`。
+- 同一时间只有一个模型在生效。按会话覆盖模型不在当前版本。
+- 如果 `9280` 端口已经被别的程序占用，OpenBot 不会抢过去。
+- OpenBot 面向 **Computer 上的 Grok Bot 0.30**，不会改 Mac 上的应用。
 
 ## 许可
 
-MIT。见 [LICENSE](LICENSE)。
+MIT。见 [LICENSE](LICENSE)。OpenBot 是独立项目，与 xAI 无关。

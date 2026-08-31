@@ -47,8 +47,8 @@ The next turn uses the model you just connected. Context, max output, reasoning 
 
 The page has three levels. They are not stacked on one scroll.
 
-- **Chat** — what this conversation uses. Official Grok or one custom model. Reasoning chips belong to the active model only. A quiet list switches `slug · provider`. No keys, no limits.
-- **Provider** — the account: name, base URL, API key, and child model rows. Add a model by id. Open a row to configure it. **Save API Key** lives here.
+- **Chat** — which model Grok Bot uses on this Computer. Official Grok or one custom model. Reasoning chips belong to the active model only. A quiet list switches `slug · provider`. No keys, no limits. Not per-conversation — one model at a time.
+- **Provider** — the account: name, base URL, API key, and child model rows. **Add model** opens a form for the model ID plus context, max output, reasoning levels, and input types. **Save API Key** lives here.
 - **Model** — a child of a provider. Breadcrumb like `OpenAI / gpt-4.1`. Context, max output, reasoning levels, and input types. **Save model** lives here.
 
 If a model still needs a key, Chat takes you to that provider instead of failing silently. You can still open **Configure** and set limits before a key exists.
@@ -57,7 +57,7 @@ Image, video, and audio are stored on the model for later. Chat still sends text
 
 ## Back to official Grok
 
-On **Chat**, click **Official Grok** (or **Use official Grok**). Stock chat comes back. Providers and keys remain on the Computer, so you can return to a custom model without setting it up again.
+On **Chat**, click **Official Grok** in the list. Stock chat comes back. Providers and keys remain on the Computer, so you can return to a custom model without setting it up again.
 
 ## Good to know
 

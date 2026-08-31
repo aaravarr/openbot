@@ -47,8 +47,8 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 控制页是三层，不会把所有东西平铺在同一页滚动。
 
-- **Chat** —— 当前这场对话用谁。官方 Grok，或一个自定义模型。推理等级只出现在正在使用的模型上。下面一行安静的列表用来切换 `slug · 服务商`。这里不填 Key，也不改限额。
-- **Provider** —— 账号：名称、Base URL、API Key，以及它下面的模型行。用模型 ID 添加模型。点进一行才配置限额。**Save API Key** 在这一层。
+- **Chat** —— 这台 Computer 上 Grok Bot 用哪个模型。官方 Grok，或一个自定义模型。推理等级只出现在正在使用的模型上。下面一行列表用来切换 `slug · 服务商`。不是按会话配置——同一时间只有一个模型。这里不填 Key，也不改限额。
+- **Provider** —— 账号：名称、Base URL、API Key，以及它下面的模型行。点 **Add model** 展开表单，填写模型 ID、上下文、最大输出、推理等级和输入类型。**Save API Key** 在这一层。
 - **Model** —— 某个服务商的子项。面包屑类似 `OpenAI / gpt-4.1`。上下文、最大输出、推理等级、输入类型。**Save model** 在这一层。
 
 如果某个模型还没有 Key，Chat 会带你去对应的服务商页，而不是悄悄失败。没有 Key 也可以先点 **Configure** 改限额。
@@ -57,7 +57,7 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 ## 回到官方 Grok
 
-在 **Chat** 里点 **Official Grok**（或 **Use official Grok**）。聊天回到原厂。服务商和 Key 仍留在 Computer 上，之后还能切回自定义模型，不用重配。
+在 **Chat** 里点列表中的 **Official Grok**。聊天回到原厂。服务商和 Key 仍留在 Computer 上，之后还能切回自定义模型，不用重配。
 
 ## 使用前请知道
 

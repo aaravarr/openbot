@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { go } from "./route";
 import { keyedSet, modelsFor, type BoxState, type Provider } from "./api";
 import { BusyButton, InlineNote, SecretField, prevent } from "./fields";
-import { formatTokens, limitsFromModel } from "./model";
+import { ModelConfig } from "./ModelConfig";
+import { defaultLimits, formatTokens, limitsFromModel, type ModelLimits } from "./model";
 
 export function ProviderPage({
   state,
@@ -18,7 +19,7 @@ export function ProviderPage({
   provider: Provider;
   busy: boolean;
   focusKey: boolean;
-  onAddModel: (providerId: string, slug: string) => Promise<void>;
+  onAddModel: (providerId: string, slug: string, limits: ModelLimits) => Promise<void>;
   onSetSecret: (providerId: string, secret: string) => Promise<void>;
   onRemove: (providerId: string) => Promise<void>;
   onUse: (modelId: string) => void;
@@ -27,17 +28,22 @@ export function ProviderPage({
   const hasKey = keyedSet(state).has(provider.id);
   const liveId =
     state.snapshot?.wrap.kind === "openbot-marked" ? state.activeModelId : null;
+  const [adding, setAdding] = useState(false);
   const [slug, setSlug] = useState("");
+  const [limits, setLimits] = useState<ModelLimits>(defaultLimits);
   const [secret, setSecret] = useState("");
   const [replaceKey, setReplaceKey] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [note, setNote] = useState("");
   const [noteError, setNoteError] = useState(false);
   const keyForm = useRef<HTMLFormElement>(null);
+  const slugField = useRef<HTMLInputElement>(null);
   const showKey = !hasKey || replaceKey || focusKey;
 
   useEffect(() => {
+    setAdding(false);
     setSlug("");
+    setLimits(defaultLimits());
     setSecret("");
     setReplaceKey(false);
     setConfirmRemove(false);
@@ -58,6 +64,12 @@ export function ProviderPage({
     keyForm.current?.querySelector("input")?.focus();
   }, [showKey, provider.id, focusKey]);
 
+  useEffect(() => {
+    if (adding) {
+      slugField.current?.focus();
+    }
+  }, [adding]);
+
   async function run(label: string, work: () => Promise<void>) {
     setNote("");
     setNoteError(false);
@@ -69,6 +81,12 @@ export function ProviderPage({
       setNote(err instanceof Error ? err.message : "Something went wrong");
       setNoteError(true);
     }
+  }
+
+  function closeAdd() {
+    setAdding(false);
+    setSlug("");
+    setLimits(defaultLimits());
   }
 
   return (
@@ -112,7 +130,7 @@ export function ProviderPage({
                     ) : (
                       <button
                         type="button"
-                        className="button-secondary"
+                        className="row-link"
                         disabled={busy}
                         onClick={() => onUse(model.id)}
                       >
@@ -121,7 +139,7 @@ export function ProviderPage({
                     )}
                     <button
                       type="button"
-                      className="button-tertiary"
+                      className="row-link"
                       disabled={busy}
                       onClick={() =>
                         go({
@@ -141,37 +159,55 @@ export function ProviderPage({
         </div>
       </div>
 
-      <form
-        className="add-model"
-        onSubmit={prevent(async () => {
-          const next = slug.trim();
-          if (!next) {
-            setNote("Enter a model ID.");
-            setNoteError(true);
-            return;
-          }
-          await run(`Added ${next}.`, async () => {
-            await onAddModel(provider.id, next);
-            setSlug("");
-          });
-        })}
-      >
-        <label>
+      {adding ? (
+        <form
+          className="add-model-form"
+          onSubmit={prevent(async () => {
+            const next = slug.trim();
+            if (!next) {
+              setNote("Enter a model ID.");
+              setNoteError(true);
+              return;
+            }
+            if (models.some((row) => row.slug === next)) {
+              setNote("That model is already on this provider.");
+              setNoteError(true);
+              return;
+            }
+            await run(`Added ${next}.`, async () => {
+              await onAddModel(provider.id, next, limits);
+              closeAdd();
+            });
+          })}
+        >
+          <p className="section-label">New model</p>
+          <label>
+            Model ID
+            <input
+              ref={slugField}
+              value={slug}
+              onChange={(event) => setSlug(event.target.value)}
+              placeholder="glm-5.3"
+              autoComplete="off"
+              className="mono-input"
+              disabled={busy}
+            />
+          </label>
+          <ModelConfig value={limits} onChange={setLimits} />
+          <div className="form-actions">
+            <BusyButton type="submit" className="button-secondary" busy={busy} busyLabel="Adding…">
+              Add
+            </BusyButton>
+            <button type="button" className="button-tertiary" disabled={busy} onClick={closeAdd}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : (
+        <button type="button" className="button-tertiary" disabled={busy} onClick={() => setAdding(true)}>
           Add model
-          <input
-            value={slug}
-            onChange={(event) => setSlug(event.target.value)}
-            placeholder="Model ID"
-            autoComplete="off"
-            className="mono-input"
-            aria-label="Model ID"
-            disabled={busy}
-          />
-        </label>
-        <BusyButton type="submit" className="button-secondary" busy={busy} busyLabel="Adding…">
-          Add
-        </BusyButton>
-      </form>
+        </button>
+      )}
 
       {showKey ? (
         <form

@@ -52,7 +52,7 @@ export function ModelPage({
         {isOn ? (
           <span className="badge badge-live">On</span>
         ) : (
-          <button type="button" className="button-secondary" disabled={busy} onClick={() => onUse(model.id)}>
+          <button type="button" className="row-link" disabled={busy} onClick={() => onUse(model.id)}>
             Use this model
           </button>
         )}

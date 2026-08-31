@@ -246,10 +246,18 @@ export function App() {
         provider={provider}
         busy={busy}
         focusKey={focusProviderId === provider.id}
-        onAddModel={async (providerId, slug) => {
+        onAddModel={async (providerId, slug, limits) => {
           await run(
             "model",
-            { kind: "upsert-model", providerId, slug },
+            {
+              kind: "upsert-model",
+              providerId,
+              slug,
+              contextTokens: limits.contextTokens,
+              maxOutputTokens: limits.maxOutputTokens,
+              reasoningLevels: limits.reasoningLevels,
+              modalities: limits.modalities,
+            },
             () => `Added ${slug}.`,
           );
         }}

@@ -152,6 +152,33 @@ test("upsert-model updates limits without dropping the wildcard", () => {
   assert.equal(parsed.desired.catalog.bindings[0]?.modelId, "zhipu:glm-5.3-flash");
 });
 
+test("upsert-model adds a new slug without switching the wildcard", () => {
+  const parsed = parseUiProviderSave(
+    {
+      kind: "upsert-model",
+      providerId: "zhipu",
+      slug: "glm-5.3",
+      contextTokens: 200000,
+      maxOutputTokens: 65536,
+      reasoningLevels: ["none", "low", "medium", "high"],
+      modalities: ["text", "image"],
+    },
+    paths(),
+    zhipuCatalog(),
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") {
+    return;
+  }
+  assert.equal(parsed.desired.catalog.models.length, 2);
+  const added = parsed.desired.catalog.models.find((row) => row.slug === "glm-5.3");
+  assert.equal(added?.contextTokens, 200000);
+  assert.equal(added?.maxOutputTokens, 65536);
+  assert.deepEqual(added?.reasoningLevels, ["none", "low", "medium", "high"]);
+  assert.deepEqual(added?.modalities, ["text", "image"]);
+  assert.equal(parsed.desired.catalog.bindings[0]?.modelId, "zhipu:glm-5.3-flash");
+});
+
 test("use-model switches the wildcard without dropping providers", () => {
   const parsed = parseUiProviderSave({ kind: "use-model", modelId: "openai:gpt-4.1" }, paths(), twoProviderCatalog());
   assert.equal(parsed.desired.kind, "custom");

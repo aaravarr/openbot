@@ -1,6 +1,37 @@
 import { go, type Route } from "./route";
 import type { Provider } from "./api";
 
+function IconChat() {
+  return (
+    <svg className="rail-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M3 3.5h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H6.5L3.5 14v-2.5H3a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function IconProvider() {
+  return (
+    <svg className="rail-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="2.5" y="3.5" width="11" height="9" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.25" />
+      <path d="M5 8h6M5 10.5h4" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconAdd() {
+  return (
+    <svg className="rail-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M8 3.5v9M3.5 8h9" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function Rail({
   providers,
   route,
@@ -30,7 +61,10 @@ export function Rail({
           aria-current={chatOn ? "page" : undefined}
           onClick={() => go({ kind: "chat" })}
         >
-          <span className="rail-item-name">Chat</span>
+          <span className="rail-item-main">
+            <IconChat />
+            <span className="rail-item-name">Chat</span>
+          </span>
         </button>
         <p className="rail-label">Providers</p>
         {providers.map((provider) => {
@@ -44,7 +78,10 @@ export function Rail({
               aria-current={current ? "page" : undefined}
               onClick={() => go({ kind: "provider", providerId: provider.id })}
             >
-              <span className="rail-item-name">{provider.name}</span>
+              <span className="rail-item-main">
+                <IconProvider />
+                <span className="rail-item-name">{provider.name}</span>
+              </span>
               {on ? <span className="rail-on">On</span> : null}
             </button>
           );
@@ -55,7 +92,10 @@ export function Rail({
           aria-current={addOn ? "page" : undefined}
           onClick={() => go({ kind: "add" })}
         >
-          <span className="rail-item-name">Add provider</span>
+          <span className="rail-item-main">
+            <IconAdd />
+            <span className="rail-item-name">Add provider</span>
+          </span>
         </button>
       </nav>
     </aside>

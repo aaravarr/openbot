@@ -24,7 +24,6 @@ export function Chat({
   const keyed = keyedSet(state);
   const active = modelById(state, state.activeModelId);
   const activeProvider = active ? providerById(state, active.providerId) : undefined;
-  const last = modelById(state, state.activeModelId);
   const limits = active ? limitsFromModel(active) : null;
   const showReason = custom && active && hasSelectableReasoning(limits?.reasoningLevels);
   const activeNeedsKey = Boolean(active && !keyed.has(active.providerId));
@@ -75,35 +74,10 @@ export function Chat({
             </div>
           </div>
         ) : null}
-
-        {custom ? (
-          <div className="now-actions">
-            <button type="button" className="button-secondary" disabled={busy} onClick={onOfficial}>
-              Use official Grok
-            </button>
-          </div>
-        ) : last ? (
-          <div className="now-actions">
-            <button
-              type="button"
-              className="button-secondary"
-              disabled={busy}
-              onClick={() => {
-                if (!keyed.has(last.providerId)) {
-                  onNeedKey(last.providerId);
-                  return;
-                }
-                onUse(last.id);
-              }}
-            >
-              Use {last.slug}
-            </button>
-          </div>
-        ) : null}
       </div>
 
       <p className="section-label" id="models-heading">
-        This chat
+        Models
       </p>
       <div className="list-card" role="list" aria-labelledby="models-heading">
         <button
@@ -156,7 +130,7 @@ export function Chat({
         })}
       </div>
       <p className="page-foot">
-        Keys stay on this Computer. Send a new message in Grok Bot after you switch.
+        Grok Bot uses one model at a time. Keys stay on this Computer. Send a new message after you switch.
       </p>
     </section>
   );

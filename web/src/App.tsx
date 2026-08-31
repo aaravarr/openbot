@@ -2,16 +2,20 @@ import { useCallback, useEffect, useState } from "react";
 import {
   hostBlocked,
   isCustom,
+  keyedSet,
   loadState,
   modelById,
+  providerById,
   save,
   type BoxState,
   type Command,
 } from "./api";
-import { Hero } from "./Hero";
-import { Providers } from "./Providers";
+import { Chat } from "./Chat";
+import { ModelPage } from "./ModelPage";
+import { ProviderPage } from "./ProviderPage";
+import { Rail } from "./Rail";
 import { Setup, type ProviderDraft } from "./Setup";
-import { Switcher } from "./Switcher";
+import { go, paneKind, parseHash, type Route } from "./route";
 import { labelReasoning, type ModelLimits } from "./model";
 
 type Toast = { text: string; error: boolean };
@@ -21,9 +25,9 @@ export function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [formError, setFormError] = useState("");
-  const [adding, setAdding] = useState(false);
   const [focusProviderId, setFocusProviderId] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash));
 
   const refresh = useCallback(async () => {
     try {
@@ -40,6 +44,12 @@ export function App() {
   }, [refresh]);
 
   useEffect(() => {
+    const onHash = () => setRoute(parseHash(window.location.hash));
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  useEffect(() => {
     if (!toast) {
       return;
     }
@@ -48,14 +58,22 @@ export function App() {
   }, [toast]);
 
   useEffect(() => {
-    if (!focusProviderId) {
+    if (!state || state.providers.length === 0) {
       return;
     }
-    const node = document.getElementById(`provider-${focusProviderId}`);
-    node?.scrollIntoView({ behavior: "smooth", block: "center" });
-    const timer = window.setTimeout(() => setFocusProviderId(null), 2400);
-    return () => window.clearTimeout(timer);
-  }, [focusProviderId]);
+    const current = parseHash(window.location.hash);
+    if (current.kind === "provider" && !providerById(state, current.providerId)) {
+      go({ kind: "chat" });
+      return;
+    }
+    if (current.kind === "model") {
+      const owner = providerById(state, current.providerId);
+      const row = modelById(state, current.modelId);
+      if (!owner || !row || row.providerId !== current.providerId) {
+        go({ kind: "chat" });
+      }
+    }
+  }, [state]);
 
   async function run(id: string, command: Command, ok: (next: BoxState) => string): Promise<BoxState> {
     setBusyId(id);
@@ -75,7 +93,7 @@ export function App() {
     }
   }
 
-  function useModel(modelId: string, reasoning?: string): Command {
+  function useModelCommand(modelId: string, reasoning?: string): Command {
     if (reasoning === undefined) {
       return { kind: "use-model", modelId };
     }
@@ -102,70 +120,66 @@ export function App() {
         origin: draft.origin.trim(),
         modelSlug: draft.modelSlug.trim(),
         secret: draft.secret,
-        contextTokens: draft.contextTokens,
-        maxOutputTokens: draft.maxOutputTokens,
-        reasoningLevels: draft.reasoningLevels,
-        modalities: draft.modalities,
       },
       usedMessage,
     );
-    setAdding(false);
+    go({ kind: "chat" });
   }
 
-  async function saveModel(providerId: string, slug: string, limits: ModelLimits, added: boolean) {
-    await run(
-      "model",
-      {
-        kind: "upsert-model",
-        providerId,
-        slug,
-        contextTokens: limits.contextTokens,
-        maxOutputTokens: limits.maxOutputTokens,
-        reasoningLevels: limits.reasoningLevels,
-        modalities: limits.modalities,
-      },
-      () => (added ? `Added ${slug}.` : `Saved ${slug}.`),
-    );
+  function needKey(providerId: string) {
+    setFocusProviderId(providerId);
+    go({ kind: "provider", providerId });
+  }
+
+  async function useChosen(modelId: string, reasoning?: string) {
+    const current = state;
+    if (!current) {
+      return;
+    }
+    const model = modelById(current, modelId);
+    if (model && !keyedSet(current).has(model.providerId)) {
+      needKey(model.providerId);
+      return;
+    }
+    await run("use", useModelCommand(modelId, reasoning), usedMessage);
   }
 
   if (loadError && !state) {
     return (
-      <>
-        <Header label="Offline" />
-        <main>
-          <section className="hero-card">
-            <h2 className="now-title">Cannot reach OpenBot</h2>
-            <p className="now-body error">{loadError}</p>
-            <div className="now-actions">
-              <button type="button" className="button-primary" onClick={() => void refresh()}>
-                Try again
-              </button>
-            </div>
-          </section>
-        </main>
-      </>
+      <div className="first-run">
+        <p className="wordmark first-run-brand">OpenBot</p>
+        <section className="setup">
+          <h1 className="display">Cannot reach OpenBot</h1>
+          <p className="lede error">{loadError}</p>
+          <div className="form-actions">
+            <button type="button" className="button-primary" onClick={() => void refresh()}>
+              Try again
+            </button>
+          </div>
+        </section>
+      </div>
     );
   }
 
   if (!state) {
     return (
-      <>
-        <Header label="Loading" />
-        <main>
-          <section className="hero-card" aria-busy="true">
-            <p className="kicker">OpenBot</p>
-            <h2 className="now-title">Loading…</h2>
-            <p className="now-body">Checking this Computer.</p>
-          </section>
-        </main>
-      </>
+      <div className="first-run" aria-busy="true">
+        <p className="wordmark first-run-brand">OpenBot</p>
+        <section className="setup">
+          <p className="kicker">OpenBot</p>
+          <h1 className="display">Loading…</h1>
+          <p className="lede">Checking this Computer.</p>
+        </section>
+      </div>
     );
   }
 
   const custom = isCustom(state);
   const empty = state.providers.length === 0;
   const blocked = hostBlocked(state);
+  const busy = busyId !== null;
   const active = modelById(state, state.activeModelId);
+  const liveProviderId = custom && active ? active.providerId : null;
   const status = custom
     ? active
       ? active.activeReasoning && active.activeReasoning !== "none"
@@ -174,98 +188,155 @@ export function App() {
       : "Your model"
     : "Official Grok";
 
+  if (empty) {
+    return (
+      <>
+        <div className="first-run">
+          <p className="wordmark first-run-brand">OpenBot</p>
+          {blocked ? (
+            <p className="banner" role="alert">
+              {blocked}
+            </p>
+          ) : null}
+          <Setup busy={busyId === "connect"} error={formError} onSubmit={connect} />
+        </div>
+        {toast ? (
+          <div className={toast.error ? "toast toast-error" : "toast"} role="status">
+            {toast.text}
+          </div>
+        ) : null}
+      </>
+    );
+  }
+
+  const pane = paneKind(route);
+  const provider =
+    route.kind === "provider" || route.kind === "model"
+      ? providerById(state, route.providerId)
+      : undefined;
+  const model = route.kind === "model" ? modelById(state, route.modelId) : undefined;
+  const missing = (route.kind === "provider" && !provider) || (route.kind === "model" && (!provider || !model));
+  const shown: Route = missing ? { kind: "chat" } : route;
+  const shownPane = missing ? "chat" : pane;
+
+  function back() {
+    if (shown.kind === "model" && provider) {
+      go({ kind: "provider", providerId: provider.id });
+      return;
+    }
+    go({ kind: "chat" });
+  }
+
+  let body;
+  if (shown.kind === "add") {
+    body = (
+      <Setup
+        compact
+        busy={busyId === "connect"}
+        error={formError}
+        onSubmit={connect}
+        onCancel={() => go({ kind: "chat" })}
+      />
+    );
+  } else if (shown.kind === "provider" && provider) {
+    body = (
+      <ProviderPage
+        key={provider.id}
+        state={state}
+        provider={provider}
+        busy={busy}
+        focusKey={focusProviderId === provider.id}
+        onAddModel={async (providerId, slug) => {
+          await run(
+            "model",
+            { kind: "upsert-model", providerId, slug },
+            () => `Added ${slug}.`,
+          );
+        }}
+        onSetSecret={async (providerId, secret) => {
+          setFocusProviderId(null);
+          await run("secret", { kind: "set-secret", providerId, secret }, () => "API key saved.");
+        }}
+        onRemove={async (providerId) => {
+          await run("remove", { kind: "remove-provider", providerId }, (next) =>
+            next.providers.length ? "Provider removed." : "Last provider removed. Chat is official Grok.",
+          );
+          go({ kind: "chat" });
+        }}
+        onUse={(modelId) => {
+          void useChosen(modelId);
+        }}
+      />
+    );
+  } else if (shown.kind === "model" && provider && model) {
+    body = (
+      <ModelPage
+        key={model.id}
+        provider={provider}
+        model={model}
+        busy={busy}
+        isOn={custom && state.activeModelId === model.id}
+        onSave={async (providerId, slug, limits: ModelLimits) => {
+          await run(
+            "model",
+            {
+              kind: "upsert-model",
+              providerId,
+              slug,
+              contextTokens: limits.contextTokens,
+              maxOutputTokens: limits.maxOutputTokens,
+              reasoningLevels: limits.reasoningLevels,
+              modalities: limits.modalities,
+            },
+            () => `Saved ${slug}.`,
+          );
+        }}
+        onUse={(modelId) => {
+          void useChosen(modelId);
+        }}
+      />
+    );
+  } else {
+    body = (
+      <Chat
+        state={state}
+        busy={busy}
+        onOfficial={() => {
+          void run("official", { kind: "official" }, () => "Chat is back on official Grok.");
+        }}
+        onUse={(modelId, reasoning) => {
+          void useChosen(modelId, reasoning);
+        }}
+        onNeedKey={needKey}
+      />
+    );
+  }
+
   return (
     <>
-      <Header label={status} />
-      <main>
-        {blocked ? (
-          <p className="banner error" role="alert">
-            {blocked}
-          </p>
-        ) : null}
-
-        {empty ? (
-          <Setup
-            busy={busyId === "connect"}
-            error={formError}
-            onSubmit={connect}
-          />
-        ) : (
-          <>
-            <Hero
-              state={state}
-              busy={busyId === "official" || busyId === "resume"}
-              onOfficial={() => {
-                void run("official", { kind: "official" }, () => "Chat is back on official Grok.");
-              }}
-              onResume={(modelId) => {
-                void run("resume", useModel(modelId), usedMessage);
-              }}
-            />
-            <Switcher
-              state={state}
-              busyId={busyId}
-              onOfficial={() => {
-                void run("official", { kind: "official" }, () => "Chat is back on official Grok.");
-              }}
-              onUse={(modelId, reasoning) => {
-                void run("use", useModel(modelId, reasoning), usedMessage);
-              }}
-              onNeedKey={(providerId) => setFocusProviderId(providerId)}
-            />
-            <Providers
-              state={state}
-              busyId={busyId}
-              focusProviderId={focusProviderId}
-              onAddModel={async (providerId, slug, limits) => {
-                await saveModel(providerId, slug, limits, true);
-              }}
-              onSaveModel={async (providerId, slug, limits) => {
-                await saveModel(providerId, slug, limits, false);
-              }}
-              onSetSecret={async (providerId, secret) => {
-                await run("secret", { kind: "set-secret", providerId, secret }, () => "API key saved.");
-              }}
-              onRemove={async (providerId) => {
-                await run("remove", { kind: "remove-provider", providerId }, (next) =>
-                  next.providers.length ? "Provider removed." : "Last provider removed. Chat is official Grok.",
-                );
-              }}
-              onUse={(modelId) => {
-                void run("use", useModel(modelId), usedMessage);
-              }}
-            />
-            {adding ? (
-              <Setup
-                compact
-                busy={busyId === "connect"}
-                error={formError}
-                onSubmit={connect}
-                onCancel={() => setAdding(false)}
-              />
-            ) : (
-              <button type="button" className="button-secondary add-another" onClick={() => setAdding(true)}>
-                Add provider
+      <div className="shell" data-pane={shownPane}>
+        <Rail providers={state.providers} route={shown} status={status} liveProviderId={liveProviderId} />
+        <div className="pane-wrap">
+          <main className="pane" id="main">
+            {shownPane !== "chat" ? (
+              <button type="button" className="pane-back" onClick={back}>
+                Back
               </button>
-            )}
-          </>
-        )}
-        <p className="page-foot">Keys stay on this Computer. Open Grok Bot and send a new message after you switch.</p>
-      </main>
+            ) : null}
+            {blocked ? (
+              <p className="banner" role="alert">
+                {blocked}
+              </p>
+            ) : null}
+            {body}
+          </main>
+        </div>
+      </div>
       {toast ? (
         <div className={toast.error ? "toast toast-error" : "toast"} role="status">
           {toast.text}
         </div>
       ) : null}
     </>
-  );
-}
-
-function Header({ label }: { label: string }) {
-  return (
-    <header className="top-nav">
-      <h1 className="wordmark">OpenBot</h1>
-      <p className="nav-status">{label}</p>
-    </header>
   );
 }

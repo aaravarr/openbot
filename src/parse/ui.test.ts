@@ -4,6 +4,7 @@ import { parseUiProviderSave } from "./ui.ts";
 import { boxPathsFrom } from "../supervisor/paths.ts";
 import { parseUpstreamOrigin } from "./argv.ts";
 import { HIGH_AGENT_MAX_TOKENS, type Catalog } from "../domain/types.ts";
+import { makeModel } from "../domain/model.ts";
 import { parseModelId, parseModelSlug } from "../supervisor/plan.ts";
 import { parseProviderId } from "../supervisor/secrets.ts";
 
@@ -24,7 +25,7 @@ function zhipuCatalog(): Catalog {
         mapFile: "provider-maps.cjs",
       },
     ],
-    models: [{ id: modelId, providerId, slug: parseModelSlug("glm-5.3-flash"), parameters: [] }],
+    models: [makeModel({ id: modelId, providerId, slug: parseModelSlug("glm-5.3-flash") })],
     bindings: [{ conversation: { kind: "wildcard" }, modelId }],
   };
 }
@@ -44,7 +45,7 @@ function twoProviderCatalog(): Catalog {
         mapFile: "provider-maps.cjs",
       },
     ],
-    models: [...catalog.models, { id: gpt, providerId: openaiId, slug: parseModelSlug("gpt-4.1"), parameters: [] }],
+    models: [...catalog.models, makeModel({ id: gpt, providerId: openaiId, slug: parseModelSlug("gpt-4.1") })],
     bindings: catalog.bindings,
   };
 }
@@ -67,6 +68,11 @@ test("UI custom save keeps the secret off DesiredState", () => {
     assert.ok(binding);
     assert.equal("apiKey" in binding, false);
     assert.equal("hopBaseUrl" in binding, false);
+    const model = parsed.desired.catalog.models[0];
+    assert.equal(model?.contextTokens, 128000);
+    assert.equal(model?.maxOutputTokens, HIGH_AGENT_MAX_TOKENS);
+    assert.equal(model?.activeReasoning, "none");
+    assert.deepEqual(model?.modalities, ["text"]);
   }
   assert.equal(parsed.secret?.bytes, "sk-live");
 });
@@ -93,6 +99,59 @@ test("upsert-provider keeps an existing origin in the catalog", () => {
   assert.equal(used?.modelId, "openai:gpt-4.1");
 });
 
+test("upsert-provider stores context, output, reasoning levels, and modalities", () => {
+  const parsed = parseUiProviderSave(
+    {
+      kind: "upsert-provider",
+      name: "OpenAI",
+      origin: "https://api.openai.com/v1",
+      modelSlug: "gpt-4.1",
+      secret: "sk-openai",
+      contextTokens: 200000,
+      maxOutputTokens: 8192,
+      reasoningLevels: ["none", "low", "high"],
+      modalities: ["text", "image"],
+    },
+    paths(),
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") {
+    return;
+  }
+  const model = parsed.desired.catalog.models[0];
+  assert.equal(model?.contextTokens, 200000);
+  assert.equal(model?.maxOutputTokens, 8192);
+  assert.deepEqual(model?.reasoningLevels, ["none", "low", "high"]);
+  assert.deepEqual(model?.modalities, ["text", "image"]);
+});
+
+test("upsert-model updates limits without dropping the wildcard", () => {
+  const parsed = parseUiProviderSave(
+    {
+      kind: "upsert-model",
+      providerId: "zhipu",
+      slug: "glm-5.3-flash",
+      contextTokens: 96000,
+      maxOutputTokens: 4096,
+      reasoningLevels: ["low", "high"],
+      modalities: ["text", "video"],
+    },
+    paths(),
+    zhipuCatalog(),
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") {
+    return;
+  }
+  const model = parsed.desired.catalog.models[0];
+  assert.equal(model?.contextTokens, 96000);
+  assert.equal(model?.maxOutputTokens, 4096);
+  assert.deepEqual(model?.reasoningLevels, ["low", "high"]);
+  assert.equal(model?.activeReasoning, "low");
+  assert.deepEqual(model?.modalities, ["text", "video"]);
+  assert.equal(parsed.desired.catalog.bindings[0]?.modelId, "zhipu:glm-5.3-flash");
+});
+
 test("use-model switches the wildcard without dropping providers", () => {
   const parsed = parseUiProviderSave({ kind: "use-model", modelId: "openai:gpt-4.1" }, paths(), twoProviderCatalog());
   assert.equal(parsed.desired.kind, "custom");
@@ -101,6 +160,34 @@ test("use-model switches the wildcard without dropping providers", () => {
   }
   assert.equal(parsed.desired.catalog.providers.length, 2);
   assert.equal(parsed.desired.catalog.bindings[0]?.modelId, "openai:gpt-4.1");
+});
+
+test("use-model records the selected reasoning level", () => {
+  const parsed = parseUiProviderSave(
+    { kind: "use-model", modelId: "openai:gpt-4.1", reasoning: "high" },
+    paths(),
+    twoProviderCatalog(),
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") {
+    return;
+  }
+  const model = parsed.desired.catalog.models.find((row) => row.id === "openai:gpt-4.1");
+  assert.equal(model?.activeReasoning, "high");
+  assert.equal(parsed.desired.catalog.bindings[0]?.modelId, "openai:gpt-4.1");
+});
+
+test("use-model ignores a reasoning level the model does not list", () => {
+  const parsed = parseUiProviderSave(
+    { kind: "use-model", modelId: "zhipu:glm-5.3-flash", reasoning: "xhigh" },
+    paths(),
+    zhipuCatalog(),
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") {
+    return;
+  }
+  assert.equal(parsed.desired.catalog.models[0]?.activeReasoning, "none");
 });
 
 test("official does not request a catalog wipe", () => {

@@ -1,6 +1,8 @@
-import { useState } from "react";
-import { BusyButton, InlineNote, SecretField, TextField, prevent } from "./fields";
 import { draftFromPreset, PRESETS, type Preset, type ProviderDraft } from "./presets";
+import { BusyButton, InlineNote, SecretField, TextField, prevent } from "./fields";
+import { ModelConfig } from "./ModelConfig";
+import { defaultLimits } from "./model";
+import { useState } from "react";
 
 export type { ProviderDraft };
 
@@ -18,12 +20,7 @@ export function Setup({
   onCancel?: () => void;
 }) {
   const [preset, setPreset] = useState<Preset | null>(null);
-  const [draft, setDraft] = useState<ProviderDraft>({
-    name: "",
-    origin: "",
-    modelSlug: "",
-    secret: "",
-  });
+  const [draft, setDraft] = useState<ProviderDraft>(emptyDraft());
 
   function pick(next: Preset) {
     setPreset(next);
@@ -32,7 +29,7 @@ export function Setup({
 
   function backToPresets() {
     setPreset(null);
-    setDraft({ name: "", origin: "", modelSlug: "", secret: "" });
+    setDraft(emptyDraft());
   }
 
   if (!preset) {
@@ -125,6 +122,15 @@ export function Setup({
           placeholder="sk-…"
           onChange={(secret) => setDraft((current) => ({ ...current, secret }))}
         />
+        <ModelConfig
+          value={{
+            contextTokens: draft.contextTokens,
+            maxOutputTokens: draft.maxOutputTokens,
+            reasoningLevels: draft.reasoningLevels,
+            modalities: draft.modalities,
+          }}
+          onChange={(limits) => setDraft((current) => ({ ...current, ...limits }))}
+        />
         <div className="form-actions">
           <BusyButton type="submit" className="button-primary" busy={busy} busyLabel="Connecting…">
             Start chatting
@@ -142,6 +148,10 @@ export function Setup({
       </form>
     </section>
   );
+}
+
+function emptyDraft(): ProviderDraft {
+  return { name: "", origin: "", modelSlug: "", secret: "", ...defaultLimits() };
 }
 
 function hostOf(origin: string): string {

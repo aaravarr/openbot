@@ -12,6 +12,7 @@ import { Hero } from "./Hero";
 import { Providers } from "./Providers";
 import { Setup, type ProviderDraft } from "./Setup";
 import { Switcher } from "./Switcher";
+import { labelReasoning, type ModelLimits } from "./model";
 
 type Toast = { text: string; error: boolean };
 
@@ -74,6 +75,24 @@ export function App() {
     }
   }
 
+  function useModel(modelId: string, reasoning?: string): Command {
+    if (reasoning === undefined) {
+      return { kind: "use-model", modelId };
+    }
+    return { kind: "use-model", modelId, reasoning };
+  }
+
+  function usedMessage(next: BoxState): string {
+    const model = modelById(next, next.activeModelId);
+    if (!model) {
+      return "Model switched.";
+    }
+    if (model.activeReasoning && model.activeReasoning !== "none") {
+      return `Grok Bot will use ${model.slug} (${labelReasoning(model.activeReasoning)}) on the next message.`;
+    }
+    return `Grok Bot will use ${model.slug} on the next message.`;
+  }
+
   async function connect(draft: ProviderDraft) {
     await run(
       "connect",
@@ -83,15 +102,30 @@ export function App() {
         origin: draft.origin.trim(),
         modelSlug: draft.modelSlug.trim(),
         secret: draft.secret,
+        contextTokens: draft.contextTokens,
+        maxOutputTokens: draft.maxOutputTokens,
+        reasoningLevels: draft.reasoningLevels,
+        modalities: draft.modalities,
       },
-      (next) => {
-        const model = modelById(next, next.activeModelId);
-        return model
-          ? `Grok Bot will use ${model.slug} on the next message.`
-          : "Provider saved. Send a new message in Grok Bot.";
-      },
+      usedMessage,
     );
     setAdding(false);
+  }
+
+  async function saveModel(providerId: string, slug: string, limits: ModelLimits, added: boolean) {
+    await run(
+      "model",
+      {
+        kind: "upsert-model",
+        providerId,
+        slug,
+        contextTokens: limits.contextTokens,
+        maxOutputTokens: limits.maxOutputTokens,
+        reasoningLevels: limits.reasoningLevels,
+        modalities: limits.modalities,
+      },
+      () => (added ? `Added ${slug}.` : `Saved ${slug}.`),
+    );
   }
 
   if (loadError && !state) {
@@ -131,8 +165,13 @@ export function App() {
   const custom = isCustom(state);
   const empty = state.providers.length === 0;
   const blocked = hostBlocked(state);
+  const active = modelById(state, state.activeModelId);
   const status = custom
-    ? modelById(state, state.activeModelId)?.slug || "Your model"
+    ? active
+      ? active.activeReasoning && active.activeReasoning !== "none"
+        ? `${active.slug} · ${labelReasoning(active.activeReasoning)}`
+        : active.slug
+      : "Your model"
     : "Official Grok";
 
   return (
@@ -160,12 +199,7 @@ export function App() {
                 void run("official", { kind: "official" }, () => "Chat is back on official Grok.");
               }}
               onResume={(modelId) => {
-                void run("resume", { kind: "use-model", modelId }, (next) => {
-                  const model = modelById(next, next.activeModelId);
-                  return model
-                    ? `Grok Bot will use ${model.slug} on the next message.`
-                    : "Custom model is on.";
-                });
+                void run("resume", useModel(modelId), usedMessage);
               }}
             />
             <Switcher
@@ -174,13 +208,8 @@ export function App() {
               onOfficial={() => {
                 void run("official", { kind: "official" }, () => "Chat is back on official Grok.");
               }}
-              onUse={(modelId) => {
-                void run("use", { kind: "use-model", modelId }, (next) => {
-                  const model = modelById(next, next.activeModelId);
-                  return model
-                    ? `Grok Bot will use ${model.slug} on the next message.`
-                    : "Model switched.";
-                });
+              onUse={(modelId, reasoning) => {
+                void run("use", useModel(modelId, reasoning), usedMessage);
               }}
               onNeedKey={(providerId) => setFocusProviderId(providerId)}
             />
@@ -188,8 +217,11 @@ export function App() {
               state={state}
               busyId={busyId}
               focusProviderId={focusProviderId}
-              onAddModel={async (providerId, slug) => {
-                await run("model", { kind: "upsert-model", providerId, slug }, () => `Added ${slug}.`);
+              onAddModel={async (providerId, slug, limits) => {
+                await saveModel(providerId, slug, limits, true);
+              }}
+              onSaveModel={async (providerId, slug, limits) => {
+                await saveModel(providerId, slug, limits, false);
               }}
               onSetSecret={async (providerId, secret) => {
                 await run("secret", { kind: "set-secret", providerId, secret }, () => "API key saved.");
@@ -200,12 +232,7 @@ export function App() {
                 );
               }}
               onUse={(modelId) => {
-                void run("use", { kind: "use-model", modelId }, (next) => {
-                  const model = modelById(next, next.activeModelId);
-                  return model
-                    ? `Grok Bot will use ${model.slug} on the next message.`
-                    : "Model switched.";
-                });
+                void run("use", useModel(modelId), usedMessage);
               }}
             />
             {adding ? (

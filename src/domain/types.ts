@@ -54,6 +54,10 @@ type SecretKeys = "apiKey" | "Authorization" | "API_SERVER_KEY" | "secret" | "ke
 
 export type ProviderParameter = { readonly id: string; readonly value: string };
 
+export type ReasoningLevel = "none" | "low" | "medium" | "high" | "max" | "xhigh";
+
+export type Modality = "text" | "image" | "video" | "audio";
+
 export type Provider = {
   readonly id: ProviderId;
   readonly name: string;
@@ -66,6 +70,11 @@ export type Model = {
   readonly id: ModelId;
   readonly providerId: ProviderId;
   readonly slug: ModelSlug;
+  readonly contextTokens: number;
+  readonly maxOutputTokens: number;
+  readonly reasoningLevels: readonly ReasoningLevel[];
+  readonly activeReasoning: ReasoningLevel;
+  readonly modalities: readonly Modality[];
   readonly parameters: readonly ProviderParameter[];
 };
 

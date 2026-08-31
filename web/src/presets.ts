@@ -1,3 +1,5 @@
+import { defaultLimits, type Modality, type ReasoningLevel } from "./model";
+
 export type Preset = {
   id: string;
   name: string;
@@ -11,6 +13,10 @@ export type ProviderDraft = {
   origin: string;
   modelSlug: string;
   secret: string;
+  contextTokens: number;
+  maxOutputTokens: number;
+  reasoningLevels: ReasoningLevel[];
+  modalities: Modality[];
 };
 
 export const PRESETS: readonly Preset[] = [
@@ -80,13 +86,15 @@ export const PRESETS: readonly Preset[] = [
 ];
 
 export function draftFromPreset(preset: Preset): ProviderDraft {
+  const limits = defaultLimits();
   if (preset.id === "custom") {
-    return { name: "", origin: "", modelSlug: "", secret: "" };
+    return { name: "", origin: "", modelSlug: "", secret: "", ...limits };
   }
   return {
     name: preset.name,
     origin: preset.origin,
     modelSlug: preset.model,
     secret: "",
+    ...limits,
   };
 }

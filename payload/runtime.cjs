@@ -89,8 +89,25 @@ function mapFinishReason(reason) {
   return "stop";
 }
 
-function defaultMaxTokens(requested) {
-  if (requested != null && Number.isFinite(requested) && requested > 0) return requested;
+function defaultMaxTokens(requested, cap) {
+  var limit = Number.isFinite(cap) && cap > 0 ? Math.floor(cap) : HIGH_AGENT_MAX_TOKENS;
+  if (requested != null && Number.isFinite(requested) && requested > 0) {
+    return Math.min(Math.floor(requested), limit);
+  }
+  return limit;
+}
+
+function lookupMaxOutput(plan, agent) {
+  var models = plan && plan.catalog && plan.catalog.models;
+  if (!Array.isArray(models) || !agent) return HIGH_AGENT_MAX_TOKENS;
+  for (var i = 0; i < models.length; i++) {
+    var row = models[i];
+    if (!row) continue;
+    if (row.slug === agent.modelId || row.id === agent.modelId) {
+      var n = Number(row.maxOutputTokens);
+      if (Number.isFinite(n) && n > 0) return Math.floor(n);
+    }
+  }
   return HIGH_AGENT_MAX_TOKENS;
 }
 
@@ -133,11 +150,20 @@ function resolveAgent(args) {
   }
   if (!plan || plan.kind !== "custom" || !plan.agents) return null;
   var ids = collectIds(args);
+  var found = null;
   for (var i = 0; i < ids.length; i++) {
-    if (plan.agents[ids[i]]) return plan.agents[ids[i]];
+    if (plan.agents[ids[i]]) {
+      found = plan.agents[ids[i]];
+      break;
+    }
   }
-  if (plan.agents["*"]) return plan.agents["*"];
-  return null;
+  if (!found && plan.agents["*"]) found = plan.agents["*"];
+  if (!found || !found.modelId) return null;
+  return {
+    modelId: found.modelId,
+    providerId: found.providerId,
+    maxOutputTokens: lookupMaxOutput(plan, found),
+  };
 }
 
 function contentToText(content) {
@@ -257,7 +283,7 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
         model: agent.modelId,
         messages: toOpenAIMessages(msgs),
         stream: false,
-        max_tokens: defaultMaxTokens(options2 && options2.maxTokens),
+        max_tokens: defaultMaxTokens(options2 && options2.maxTokens, agent.maxOutputTokens),
       };
       var openaiTools = unwrapJsonSchemaTools(tools);
       if (openaiTools) body.tools = openaiTools;
@@ -379,5 +405,6 @@ module.exports = {
   mapFinishReason: mapFinishReason,
   defaultMaxTokens: defaultMaxTokens,
   resolveAgent: resolveAgent,
+  lookupMaxOutput: lookupMaxOutput,
   HIGH_AGENT_MAX_TOKENS: HIGH_AGENT_MAX_TOKENS,
 };

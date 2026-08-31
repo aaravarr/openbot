@@ -38,16 +38,21 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 1. 打开控制页。
 2. 选一个服务商；或选 **Custom**，粘贴任何 OpenAI 兼容的 Base URL。
 3. 粘贴 API Key 和模型 ID。
-4. 点 **Start chatting**。
-5. 回到 Grok Bot，发一条**新消息**。
+4. 设置该模型的**上下文**、**最大输出**、它支持的**推理等级**，以及接受的**输入类型**（文本、图片、视频、音频）。
+5. 点 **Start chatting**。
+6. 回到 Grok Bot，发一条**新消息**。
 
 下一回合就会走你刚接上的模型。
 
+图片、视频、音频会记在模型配置里，供以后使用。当前聊天仍只发送文本。
+
 ## 之后怎么切换
 
-每个已接入的模型都会出现在列表里，和 **Official Grok** 排在一起。点一行即可。Grok Bot 的下一条消息会跟着这个选择走。
+每个已接入的模型都会出现在列表里，和 **Official Grok** 排在一起。点一行，如果模型有多个推理等级，再选一个**推理等级**。Grok Bot 的下一条消息会跟着这个选择走。
 
 如果某个模型还没有 Key，OpenBot 会带你去填 Key，而不是悄悄失败。
+
+之后也可以在服务商卡片里改上下文、最大输出、推理等级列表和输入类型。
 
 ## 回到官方 Grok
 

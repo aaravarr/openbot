@@ -50,3 +50,9 @@ test("default max tokens is 65536, not 8192", () => {
   assert.equal(defaultMaxTokens(undefined), 65536);
   assert.notEqual(defaultMaxTokens(undefined), 8192);
 });
+
+test("default max tokens caps at the model max output", () => {
+  assert.equal(defaultMaxTokens(undefined, 4096), 4096);
+  assert.equal(defaultMaxTokens(99999, 4096), 4096);
+  assert.equal(defaultMaxTokens(1024, 4096), 1024);
+});

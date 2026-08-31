@@ -1,5 +1,6 @@
 import { BusyButton } from "./fields";
 import { isCustom, modelById, providerById, type BoxState } from "./api";
+import { labelReasoning } from "./model";
 
 export function Hero({
   state,
@@ -16,6 +17,10 @@ export function Hero({
   const active = modelById(state, state.activeModelId);
   const provider = active ? providerById(state, active.providerId) : undefined;
   const saved = Boolean(state.providers.length);
+  const reasoning =
+    active && active.activeReasoning && active.activeReasoning !== "none"
+      ? labelReasoning(active.activeReasoning)
+      : null;
 
   if (!custom) {
     return (
@@ -54,7 +59,7 @@ export function Hero({
       </h2>
       <p className="now-body">
         {provider
-          ? `${provider.name}. Send a new message in Grok Bot.`
+          ? `${provider.name}${reasoning ? ` · ${reasoning}` : ""}. Send a new message in Grok Bot.`
           : "Send a new message in Grok Bot."}
       </p>
       {provider?.origin ? <p className="code">{provider.origin}</p> : null}

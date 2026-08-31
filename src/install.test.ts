@@ -113,6 +113,9 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     assert.match(app.body, /API Key/);
     assert.match(app.body, /Add provider/);
     assert.match(app.body, /Official Grok/);
+    assert.match(app.body, /Max output/);
+    assert.match(app.body, /Reasoning levels/);
+    assert.match(app.body, /Input types/);
     assert.equal(app.body.includes("Catalog"), false);
     assert.equal(app.body.includes("Model slug"), false);
     const css = await get(`${UI}/styles.css`);

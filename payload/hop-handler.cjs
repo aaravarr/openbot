@@ -7,6 +7,7 @@ var { URL } = require("url");
 var path = require("path");
 
 var TIMEOUT_MS = Number(process.env.OPENBOT_HOP_TIMEOUT || "1800000");
+var HIGH_AGENT_MAX_TOKENS = 65536;
 
 function planPath() {
   return process.env.OPENBOT_PLAN || "/home/box/sand-data/openbot-plan.json";
@@ -98,6 +99,33 @@ function loadKey(providerId) {
     return "";
   }
   return providers[providerId];
+}
+
+function hopParameters(model) {
+  var params = [];
+  var rows = model && model.parameters;
+  if (Array.isArray(rows)) {
+    for (var i = 0; i < rows.length; i++) {
+      var p = rows[i];
+      if (p && p.id && p.id !== "effort") params.push(p);
+    }
+  }
+  var level = model && typeof model.activeReasoning === "string" ? model.activeReasoning : "none";
+  if (level && level !== "none") {
+    params.push({ id: "effort", value: String(level) });
+  }
+  return params;
+}
+
+function applyMaxTokens(body, model) {
+  var cap = Number(model && model.maxOutputTokens);
+  if (!Number.isFinite(cap) || cap <= 0) cap = HIGH_AGENT_MAX_TOKENS;
+  var requested = Number(body.max_tokens);
+  if (!Number.isFinite(requested) || requested <= 0) {
+    body.max_tokens = cap;
+    return;
+  }
+  if (requested > cap) body.max_tokens = cap;
 }
 
 function applyMaps(body, ctx) {
@@ -203,11 +231,12 @@ async function handleCompletions(req, res) {
     return;
   }
   body.model = route.model.slug;
+  applyMaxTokens(body, route.model);
   applyMaps(body, {
     modelId: route.model.slug,
     baseUrl: route.provider.origin,
     maxMode: false,
-    parameters: route.model.parameters || [],
+    parameters: hopParameters(route.model),
   });
   var key = loadKey(route.provider.id);
   if (!key) {
@@ -243,3 +272,5 @@ exports.handleHopRequest = handleHopRequest;
 exports.sendJson = sendJson;
 exports.lookupRoute = lookupRoute;
 exports.completionsUrl = completionsUrl;
+exports.hopParameters = hopParameters;
+exports.applyMaxTokens = applyMaxTokens;

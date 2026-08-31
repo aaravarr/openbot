@@ -38,16 +38,21 @@ Chat stays on official Grok until you connect a provider. That is on purpose.
 1. Open the control page.
 2. Choose a provider, or pick **Custom** and paste any OpenAI-compatible base URL.
 3. Paste an API key and a model id.
-4. Click **Start chatting**.
-5. Go back to Grok Bot and send a **new** message.
+4. Set the model's **context**, **max output**, the **reasoning levels** it supports, and which **input types** it accepts (text, image, video, audio).
+5. Click **Start chatting**.
+6. Go back to Grok Bot and send a **new** message.
 
 The next turn uses the model you just connected.
 
+Image, video, and audio are stored on the model for later. Chat still sends text.
+
 ## Switch later
 
-Every connected model sits in a list next to **Official Grok**. Click a row. The next message in Grok Bot follows that choice.
+Every connected model sits in a list next to **Official Grok**. Click a row, then pick a **reasoning level** if the model has more than none. The next message in Grok Bot follows that choice.
 
 If a model still needs a key, OpenBot takes you to the key field instead of failing silently.
+
+You can edit context, max output, reasoning levels, and input types later on the provider card.
 
 ## Back to official Grok
 

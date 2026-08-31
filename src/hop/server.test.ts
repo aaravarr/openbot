@@ -22,14 +22,19 @@ function listen(handler: http.RequestListener): Promise<{ server: http.Server; p
   });
 }
 
-function post(port: number, body: unknown, headers: Record<string, string>): Promise<{ status: number; json: unknown }> {
+function post(
+  port: number,
+  body: unknown,
+  headers: Record<string, string>,
+  pathname = "/v1/chat/completions",
+): Promise<{ status: number; json: unknown }> {
   return new Promise((resolve, reject) => {
     const payload = Buffer.from(JSON.stringify(body));
     const req = http.request(
       {
         host: "127.0.0.1",
         port,
-        path: "/v1/chat/completions",
+        path: pathname,
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -92,18 +97,34 @@ async function startHop(input: {
   return { port, child };
 }
 
-test("hop strips client Authorization and injects the secret store key", async () => {
-  let seenAuth = "";
-  const upstream = await listen((req, res) => {
+async function captureUpstream(): Promise<{
+  server: http.Server;
+  port: number;
+  getAuth: () => string;
+  getBody: () => Record<string, unknown> | undefined;
+}> {
+  let auth = "";
+  let body: Record<string, unknown> | undefined;
+  const { server, port } = await listen((req, res) => {
     const header = req.headers.authorization;
-    seenAuth = typeof header === "string" ? header : "";
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(
-      JSON.stringify({
-        choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
-      }),
-    );
+    auth = typeof header === "string" ? header : "";
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+        }),
+      );
+    });
   });
+  return { server, port, getAuth: () => auth, getBody: () => body };
+}
+
+test("hop strips client Authorization and injects the secret store key", async () => {
+  const upstream = await captureUpstream();
   const hop = await startHop({
     plan: {
       kind: "custom",
@@ -126,8 +147,8 @@ test("hop strips client Authorization and injects the secret store key", async (
   try {
     const out = await post(hop.port, { model: "glm-5.3-flash", messages: [] }, { Authorization: "Bearer openbot-runtime" });
     assert.equal(out.status, 200);
-    assert.equal(seenAuth, "Bearer sk-real");
-    assert.notEqual(seenAuth, "Bearer openbot-runtime");
+    assert.equal(upstream.getAuth(), "Bearer sk-real");
+    assert.notEqual(upstream.getAuth(), "Bearer openbot-runtime");
   } finally {
     hop.child.kill("SIGTERM");
     upstream.server.close();
@@ -135,17 +156,7 @@ test("hop strips client Authorization and injects the secret store key", async (
 });
 
 test("hop prefers the wildcard-bound provider when two models share a slug", async () => {
-  let seenAuth = "";
-  const upstream = await listen((req, res) => {
-    const header = req.headers.authorization;
-    seenAuth = typeof header === "string" ? header : "";
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(
-      JSON.stringify({
-        choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
-      }),
-    );
-  });
+  const upstream = await captureUpstream();
   const origin = `http://127.0.0.1:${String(upstream.port)}/v1`;
   const hop = await startHop({
     plan: {
@@ -168,9 +179,113 @@ test("hop prefers the wildcard-bound provider when two models share a slug", asy
   try {
     const out = await post(hop.port, { model: "shared-slug", messages: [] }, { Authorization: "Bearer openbot-runtime" });
     assert.equal(out.status, 200);
-    assert.equal(seenAuth, "Bearer sk-openai");
+    assert.equal(upstream.getAuth(), "Bearer sk-openai");
   } finally {
     hop.child.kill("SIGTERM");
     upstream.server.close();
+  }
+});
+
+test("hop caps max_tokens and maps active reasoning to reasoning_effort", async () => {
+  const upstream = await captureUpstream();
+  const hop = await startHop({
+    plan: {
+      kind: "custom",
+      catalog: {
+        providers: [
+          {
+            id: "openai",
+            name: "OpenAI",
+            origin: `http://127.0.0.1:${String(upstream.port)}/v1`,
+            maxTokensDefault: 65536,
+            mapFile: "provider-maps.cjs",
+          },
+        ],
+        models: [
+          {
+            id: "openai:gpt-4.1",
+            providerId: "openai",
+            slug: "gpt-4.1",
+            maxOutputTokens: 4096,
+            activeReasoning: "high",
+            parameters: [],
+          },
+        ],
+        bindings: [],
+      },
+    },
+    secrets: { providers: { openai: "sk-openai" } },
+  });
+  try {
+    const out = await post(
+      hop.port,
+      { model: "gpt-4.1", messages: [], max_tokens: 99999 },
+      { Authorization: "Bearer openbot-runtime" },
+    );
+    assert.equal(out.status, 200);
+    const body = upstream.getBody();
+    assert.equal(body?.model, "gpt-4.1");
+    assert.equal(body?.max_tokens, 4096);
+    assert.equal(body?.reasoning_effort, "high");
+  } finally {
+    hop.child.kill("SIGTERM");
+    upstream.server.close();
+  }
+});
+
+test("hop leaves GLM thinking unset when reasoning is none", async () => {
+  const upstream = await captureUpstream();
+  const hop = await startHop({
+    plan: {
+      kind: "custom",
+      catalog: {
+        providers: [
+          {
+            id: "zhipu",
+            name: "Zhipu",
+            origin: `http://127.0.0.1:${String(upstream.port)}/v1`,
+            maxTokensDefault: 65536,
+            mapFile: "provider-maps.cjs",
+          },
+        ],
+        models: [
+          {
+            id: "zhipu:glm",
+            providerId: "zhipu",
+            slug: "glm-5.3-flash",
+            activeReasoning: "none",
+            parameters: [],
+          },
+        ],
+        bindings: [],
+      },
+    },
+    secrets: { providers: { zhipu: "sk-real" } },
+  });
+  try {
+    const out = await post(hop.port, { model: "glm-5.3-flash", messages: [] }, { Authorization: "Bearer openbot-runtime" });
+    assert.equal(out.status, 200);
+    const body = upstream.getBody();
+    assert.equal(body?.thinking, undefined);
+    assert.equal(body?.reasoning_effort, undefined);
+    assert.equal(body?.max_tokens, 65536);
+  } finally {
+    hop.child.kill("SIGTERM");
+    upstream.server.close();
+  }
+});
+
+test("hop does not serve /v1/responses or /v1/messages", async () => {
+  const hop = await startHop({
+    plan: { kind: "custom", catalog: { providers: [], models: [], bindings: [] } },
+    secrets: { providers: {} },
+  });
+  try {
+    const responses = await post(hop.port, { model: "gpt-4.1" }, {}, "/v1/responses");
+    const messages = await post(hop.port, { model: "claude" }, {}, "/v1/messages");
+    assert.equal(responses.status, 404);
+    assert.equal(messages.status, 404);
+  } finally {
+    hop.child.kill("SIGTERM");
   }
 });

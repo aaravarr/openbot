@@ -1,12 +1,15 @@
 import { useState } from "react";
-import { keyedSet, modelsFor, type BoxState } from "./api";
+import { keyedSet, modelsFor, type BoxState, type Model } from "./api";
 import { BusyButton, InlineNote, SecretField, prevent } from "./fields";
+import { ModelConfig } from "./ModelConfig";
+import { defaultLimits, formatModelMeta, limitsFromModel, type ModelLimits } from "./model";
 
 export function Providers({
   state,
   busyId,
   focusProviderId,
   onAddModel,
+  onSaveModel,
   onSetSecret,
   onRemove,
   onUse,
@@ -14,7 +17,8 @@ export function Providers({
   state: BoxState;
   busyId: string | null;
   focusProviderId: string | null;
-  onAddModel: (providerId: string, slug: string) => Promise<void>;
+  onAddModel: (providerId: string, slug: string, limits: ModelLimits) => Promise<void>;
+  onSaveModel: (providerId: string, slug: string, limits: ModelLimits) => Promise<void>;
   onSetSecret: (providerId: string, secret: string) => Promise<void>;
   onRemove: (providerId: string) => Promise<void>;
   onUse: (modelId: string) => void;
@@ -24,7 +28,7 @@ export function Providers({
       <h2 id="providers-heading" className="section-title">
         Providers
       </h2>
-      <p className="section-copy">Keys and extra model ids live here. Switching models is the list above.</p>
+      <p className="section-copy">Keys and model limits live here. Switching models is the list above.</p>
       <div className="stack">
         {state.providers.map((provider) => (
           <ProviderCard
@@ -34,6 +38,7 @@ export function Providers({
             busyId={busyId}
             focusKey={focusProviderId === provider.id}
             onAddModel={onAddModel}
+            onSaveModel={onSaveModel}
             onSetSecret={onSetSecret}
             onRemove={onRemove}
             onUse={onUse}
@@ -50,6 +55,7 @@ function ProviderCard({
   busyId,
   focusKey,
   onAddModel,
+  onSaveModel,
   onSetSecret,
   onRemove,
   onUse,
@@ -58,7 +64,8 @@ function ProviderCard({
   providerId: string;
   busyId: string | null;
   focusKey: boolean;
-  onAddModel: (providerId: string, slug: string) => Promise<void>;
+  onAddModel: (providerId: string, slug: string, limits: ModelLimits) => Promise<void>;
+  onSaveModel: (providerId: string, slug: string, limits: ModelLimits) => Promise<void>;
   onSetSecret: (providerId: string, secret: string) => Promise<void>;
   onRemove: (providerId: string) => Promise<void>;
   onUse: (modelId: string) => void;
@@ -67,6 +74,7 @@ function ProviderCard({
   const models = modelsFor(state, providerId);
   const hasKey = keyedSet(state).has(providerId);
   const [slug, setSlug] = useState("");
+  const [limits, setLimits] = useState<ModelLimits>(defaultLimits);
   const [secret, setSecret] = useState("");
   const [replaceKey, setReplaceKey] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -106,40 +114,31 @@ function ProviderCard({
       </header>
 
       <ul className="model-list">
-        {models.map((model) => {
-          const on = state.snapshot?.wrap.kind === "openbot-marked" && state.activeModelId === model.id;
-          return (
-            <li key={model.id} className="model-row">
-              <span className="model-id">{model.slug}</span>
-              <span className="row-actions">
-                {on ? (
-                  <span className="badge badge-live">On</span>
-                ) : (
-                  <button
-                    type="button"
-                    className="button-secondary"
-                    disabled={busy || !hasKey}
-                    onClick={() => onUse(model.id)}
-                  >
-                    Use
-                  </button>
-                )}
-              </span>
-            </li>
-          );
-        })}
+        {models.map((model) => (
+          <ModelBlock
+            key={model.id}
+            state={state}
+            model={model}
+            busy={busy}
+            hasKey={hasKey}
+            onSaveModel={onSaveModel}
+            onUse={onUse}
+            onNote={run}
+          />
+        ))}
       </ul>
 
       <form
-        className="inline-form"
+        className="stack-form"
         onSubmit={prevent(async () => {
           const next = slug.trim();
           if (!next) {
             return;
           }
           await run("Model added.", async () => {
-            await onAddModel(provider.id, next);
+            await onAddModel(provider.id, next, limits);
             setSlug("");
+            setLimits(defaultLimits());
           });
         })}
       >
@@ -154,6 +153,7 @@ function ProviderCard({
             aria-label="Model ID"
           />
         </label>
+        <ModelConfig value={limits} onChange={setLimits} />
         <BusyButton type="submit" className="button-secondary" busy={busy} busyLabel="Adding…">
           Add
         </BusyButton>
@@ -226,5 +226,74 @@ function ProviderCard({
 
       <InlineNote text={note} error={noteError} />
     </article>
+  );
+}
+
+function ModelBlock({
+  state,
+  model,
+  busy,
+  hasKey,
+  onSaveModel,
+  onUse,
+  onNote,
+}: {
+  state: BoxState;
+  model: Model;
+  busy: boolean;
+  hasKey: boolean;
+  onSaveModel: (providerId: string, slug: string, limits: ModelLimits) => Promise<void>;
+  onUse: (modelId: string) => void;
+  onNote: (label: string, work: () => Promise<void>) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [limits, setLimits] = useState(() => limitsFromModel(model));
+  const on = state.snapshot?.wrap.kind === "openbot-marked" && state.activeModelId === model.id;
+
+  return (
+    <li className="model-block">
+      <div className="model-row">
+        <span className="model-copy">
+          <span className="model-id">{model.slug}</span>
+          <span className="model-meta">{formatModelMeta(model)}</span>
+        </span>
+        <span className="row-actions">
+          {on ? (
+            <span className="badge badge-live">On</span>
+          ) : (
+            <button type="button" className="button-secondary" disabled={busy || !hasKey} onClick={() => onUse(model.id)}>
+              Use
+            </button>
+          )}
+          <button
+            type="button"
+            className="button-tertiary"
+            disabled={busy}
+            onClick={() => {
+              setLimits(limitsFromModel(model));
+              setEditing((current) => !current);
+            }}
+          >
+            {editing ? "Close" : "Edit"}
+          </button>
+        </span>
+      </div>
+      {editing ? (
+        <form
+          className="stack-form"
+          onSubmit={prevent(async () => {
+            await onNote("Model saved.", async () => {
+              await onSaveModel(model.providerId, model.slug, limits);
+              setEditing(false);
+            });
+          })}
+        >
+          <ModelConfig value={limits} onChange={setLimits} />
+          <BusyButton type="submit" className="button-secondary" busy={busy} busyLabel="Saving…">
+            Save model
+          </BusyButton>
+        </form>
+      ) : null}
+    </li>
   );
 }

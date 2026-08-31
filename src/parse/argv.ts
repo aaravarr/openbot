@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { makeModel } from "../domain/model.ts";
 import {
   HIGH_AGENT_MAX_TOKENS,
   LOOPBACK,
@@ -178,14 +179,7 @@ export function customBoxFromProvider(input: {
           mapFile: "provider-maps.cjs",
         },
       ],
-      models: [
-        {
-          id: modelId,
-          providerId,
-          slug,
-          parameters: [],
-        },
-      ],
+      models: [makeModel({ id: modelId, providerId, slug })],
       bindings: [{ conversation: { kind: "wildcard" }, modelId }],
     },
   });

@@ -8,6 +8,11 @@ export type Model = {
   id: string;
   providerId: string;
   slug: string;
+  contextTokens: number;
+  maxOutputTokens: number;
+  reasoningLevels: string[];
+  activeReasoning: string;
+  modalities: string[];
 };
 
 export type Snapshot = {
@@ -24,17 +29,28 @@ export type BoxState = {
   wrapBytesChanged?: boolean;
 };
 
+export type ModelLimitsPayload = {
+  contextTokens?: number;
+  maxOutputTokens?: number;
+  reasoningLevels?: readonly string[];
+  modalities?: readonly string[];
+};
+
 export type Command =
   | { kind: "official" }
-  | {
+  | ({
       kind: "upsert-provider";
       name: string;
       origin: string;
       modelSlug: string;
       secret: string;
-    }
-  | { kind: "upsert-model"; providerId: string; slug: string }
-  | { kind: "use-model"; modelId: string }
+    } & ModelLimitsPayload)
+  | ({
+      kind: "upsert-model";
+      providerId: string;
+      slug: string;
+    } & ModelLimitsPayload)
+  | { kind: "use-model"; modelId: string; reasoning?: string }
   | { kind: "remove-provider"; providerId: string }
   | { kind: "set-secret"; providerId: string; secret: string };
 

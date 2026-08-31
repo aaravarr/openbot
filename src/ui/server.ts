@@ -143,9 +143,25 @@ const server = http.createServer((req, res) => {
         send(res, 403, "forbidden", "text/plain; charset=utf-8");
         return;
       }
+      let body: Buffer;
+      try {
+        const stat = fs.statSync(file);
+        if (!stat.isFile()) {
+          send(res, 404, "not found", "text/plain; charset=utf-8");
+          return;
+        }
+        body = fs.readFileSync(file);
+      } catch (err) {
+        const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
+        if (code === "ENOENT") {
+          send(res, 404, "not found", "text/plain; charset=utf-8");
+          return;
+        }
+        throw err;
+      }
       const ext = path.extname(file);
       const type = TYPES[ext] ?? "application/octet-stream";
-      send(res, 200, fs.readFileSync(file), type);
+      send(res, 200, body, type);
     } catch (err) {
       const message = err instanceof Error ? err.message : "error";
       if (!res.headersSent) {

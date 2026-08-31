@@ -49,8 +49,8 @@ export function labelModality(item: string): string {
   return item.slice(0, 1).toUpperCase() + item.slice(1);
 }
 
-export function hasSelectableReasoning(levels: readonly string[]): boolean {
-  return levels.some((level) => level !== "none");
+export function hasSelectableReasoning(levels: readonly string[] | undefined): boolean {
+  return Array.isArray(levels) && levels.some((level) => level !== "none");
 }
 
 function keepOrder<T extends string>(universe: readonly T[], selected: ReadonlySet<string>): T[] {
@@ -94,11 +94,12 @@ export function formatTokens(value: number): string {
 }
 
 export function formatModelMeta(model: {
-  contextTokens: number;
-  maxOutputTokens: number;
-  modalities: readonly string[];
+  contextTokens?: number;
+  maxOutputTokens?: number;
+  modalities?: readonly string[];
 }): string {
-  return `${formatTokens(model.contextTokens)} context · ${formatTokens(model.maxOutputTokens)} output · ${model.modalities.join(", ")}`;
+  const limits = limitsFromModel(model);
+  return `${formatTokens(limits.contextTokens)} context · ${formatTokens(limits.maxOutputTokens)} output · ${limits.modalities.join(", ")}`;
 }
 
 export function limitsFromModel(model: {

@@ -1,3 +1,5 @@
+import { isReasoningLevel, limitsFromModel } from "./model";
+
 export type Provider = {
   id: string;
   name: string;
@@ -77,6 +79,36 @@ function asError(data: unknown, fallback: string): Error {
   return new Error(fallback);
 }
 
+function hydrateModel(row: Model): Model {
+  const limits = limitsFromModel(row);
+  const active = typeof row.activeReasoning === "string" ? row.activeReasoning : "";
+  const activeReasoning = isReasoningLevel(active) && limits.reasoningLevels.includes(active)
+    ? active
+    : limits.reasoningLevels.includes("none")
+      ? "none"
+      : limits.reasoningLevels[0] ?? "none";
+  return {
+    id: row.id,
+    providerId: row.providerId,
+    slug: row.slug,
+    contextTokens: limits.contextTokens,
+    maxOutputTokens: limits.maxOutputTokens,
+    reasoningLevels: limits.reasoningLevels,
+    activeReasoning,
+    modalities: limits.modalities,
+  };
+}
+
+function hydrateState(data: BoxState): BoxState {
+  return {
+    ...data,
+    providers: Array.isArray(data.providers) ? data.providers : [],
+    models: Array.isArray(data.models) ? data.models.map(hydrateModel) : [],
+    keyedProviders: Array.isArray(data.keyedProviders) ? data.keyedProviders : [],
+    activeModelId: data.activeModelId ?? null,
+  };
+}
+
 async function getJson(url: string, options?: RequestInit): Promise<BoxState> {
   const res = await fetch(url, options);
   const text = await res.text();
@@ -89,7 +121,7 @@ async function getJson(url: string, options?: RequestInit): Promise<BoxState> {
   if (!res.ok) {
     throw asError(data, text || res.statusText || "Request failed");
   }
-  return data as BoxState;
+  return hydrateState(data as BoxState);
 }
 
 export async function loadState(): Promise<BoxState> {

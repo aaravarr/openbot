@@ -1,5 +1,5 @@
 import { isCustom, keyedSet, providerById, type BoxState } from "./api";
-import { hasSelectableReasoning, isReasoningLevel, labelReasoning } from "./model";
+import { hasSelectableReasoning, isReasoningLevel, labelReasoning, limitsFromModel } from "./model";
 
 export function Switcher({
   state,
@@ -44,7 +44,8 @@ export function Switcher({
           const on = custom && state.activeModelId === model.id;
           const hasKey = keyed.has(model.providerId);
           const meta = [provider?.name, hasKey ? null : "needs an API key"].filter(Boolean).join(" · ");
-          const showReasoning = hasSelectableReasoning(model.reasoningLevels);
+          const limits = limitsFromModel(model);
+          const showReasoning = hasSelectableReasoning(limits.reasoningLevels);
           return (
             <div key={model.id} className={on ? "choice-body choice-on" : "choice-body"}>
               <div className="choice-copy">
@@ -66,7 +67,7 @@ export function Switcher({
                 </button>
                 {showReasoning ? (
                   <div className="chip-row reason-row" role="group" aria-label={`Reasoning for ${model.slug}`}>
-                    {model.reasoningLevels.map((level) => {
+                    {limits.reasoningLevels.map((level) => {
                       const selected = on && model.activeReasoning === level;
                       return (
                         <button

@@ -581,6 +581,10 @@ body {
   overflow: hidden;
 }
 
+.model-rows .empty {
+  padding: 12px 14px;
+}
+
 .model-row {
   display: flex;
   align-items: center;

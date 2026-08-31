@@ -537,7 +537,7 @@
         </header>
         <div>
           <p class="section-label">Models</p>
-          <div class="model-rows">${rows || `<p class="fine" style="padding:12px 14px">No models yet.</p>`}</div>
+          <div class="model-rows">${rows || `<p class="fine empty">No models yet.</p>`}</div>
         </div>
         <form class="add-model" id="form-add-model">
           <div class="field">

@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenBot</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body data-screen="chat">
+    <a class="skip" href="#main">Skip to content</a>
+
+    <!--
+      Screens (one pane at a time after first-run):
+      A. First-run — #view-first-run (no rail)
+      B. Chat / Now — #screen-chat
+      C. Provider — #screen-provider
+      D. Model — #screen-model
+      E. Add provider — #screen-add
+      F. Blocked host — #host-banner inside the pane
+    -->
+
+    <div id="app">
+      <section class="first-run" id="view-first-run" hidden>
+        <p class="wordmark first-run-brand">OpenBot</p>
+        <div id="first-presets" class="setup">
+          <p class="kicker">Get started</p>
+          <h1 class="display">Use any model in Grok Bot</h1>
+          <p class="lede">
+            Official Grok stays until you connect a provider. Keys stay on this Computer — never in chat.
+          </p>
+          <ol class="steps">
+            <li>Pick a provider</li>
+            <li>Paste a key</li>
+            <li>Send a message in Grok Bot</li>
+          </ol>
+          <p class="section-label">Choose a provider</p>
+          <div class="preset-grid" id="first-preset-grid"></div>
+        </div>
+        <div id="first-form" class="setup" hidden>
+          <p class="kicker">Connect</p>
+          <h1 class="display" id="first-form-title">OpenAI</h1>
+          <p class="lede" id="first-form-hint">A platform API key. A ChatGPT password will not work.</p>
+          <form id="form-first">
+            <div class="field">
+              <label for="first-name">Name</label>
+              <input id="first-name" name="name" required autocomplete="off" placeholder="OpenAI" />
+            </div>
+            <div class="field">
+              <label for="first-origin">Base URL</label>
+              <input
+                id="first-origin"
+                name="origin"
+                class="mono-input"
+                type="url"
+                required
+                autocomplete="off"
+                placeholder="https://api.openai.com/v1"
+              />
+            </div>
+            <div class="field">
+              <label for="first-slug">Model ID</label>
+              <input
+                id="first-slug"
+                name="modelSlug"
+                class="mono-input"
+                required
+                autocomplete="off"
+                placeholder="gpt-4.1"
+              />
+            </div>
+            <div class="field">
+              <label for="first-secret">API Key</label>
+              <div class="password-field">
+                <input
+                  id="first-secret"
+                  name="secret"
+                  type="password"
+                  required
+                  autocomplete="new-password"
+                  placeholder="sk-…"
+                />
+                <button type="button" class="button-tertiary" data-act="toggle-secret" data-for="first-secret">
+                  Show
+                </button>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="button-primary">Start chatting</button>
+              <button type="button" class="button-tertiary" data-act="first-change">Change provider</button>
+              <p class="fine error" id="first-error" hidden></p>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <div class="shell" id="view-shell">
+        <aside class="rail" aria-label="OpenBot">
+          <div class="rail-brand">
+            <p class="wordmark">OpenBot</p>
+            <p class="rail-status" id="rail-status">gpt-4.1 · High</p>
+          </div>
+          <nav class="rail-nav" aria-label="Sections">
+            <button
+              type="button"
+              class="rail-item is-current"
+              id="nav-chat"
+              data-act="nav-chat"
+              aria-current="page"
+            >
+              <span class="rail-item-name">Chat</span>
+            </button>
+            <p class="rail-label" id="providers-label">Providers</p>
+            <div id="rail-providers"></div>
+            <button type="button" class="rail-item rail-add" id="nav-add" data-act="nav-add">
+              <span class="rail-item-name">Add provider</span>
+            </button>
+          </nav>
+        </aside>
+
+        <div class="pane-wrap">
+          <main class="pane" id="main">
+            <button type="button" class="pane-back" data-act="back">Back</button>
+            <p class="banner" id="host-banner" hidden role="alert">
+              Another overlay is still attached to Grok Bot. OpenBot left it alone.
+            </p>
+
+            <section id="screen-chat" aria-labelledby="now-title">
+              <div class="now" id="chat-now"></div>
+              <p class="section-label" id="models-heading">Models</p>
+              <div class="list-card" id="chat-lines" role="list" aria-labelledby="models-heading"></div>
+              <p class="page-foot">
+                Keys stay on this Computer. Send a new message in Grok Bot after you switch.
+              </p>
+            </section>
+
+            <section id="screen-provider" hidden aria-labelledby="provider-title"></section>
+
+            <section id="screen-model" hidden aria-labelledby="model-title"></section>
+
+            <section id="screen-add" hidden aria-labelledby="add-heading">
+              <div id="add-presets" class="setup setup-compact">
+                <p class="kicker">Another provider</p>
+                <h1 class="display" id="add-heading">Add a provider</h1>
+                <p class="lede">Same Grok Bot app. A different endpoint and key.</p>
+                <p class="section-label">Choose a provider</p>
+                <div class="preset-grid" id="add-preset-grid"></div>
+                <div class="form-actions">
+                  <button type="button" class="button-tertiary" data-act="add-cancel">Cancel</button>
+                </div>
+              </div>
+              <div id="add-form" class="setup setup-compact" hidden>
+                <p class="kicker">Connect</p>
+                <h1 class="display" id="add-form-title">OpenAI</h1>
+                <p class="lede" id="add-form-hint">A platform API key. A ChatGPT password will not work.</p>
+                <form id="form-add">
+                  <div class="field">
+                    <label for="add-name">Name</label>
+                    <input id="add-name" name="name" required autocomplete="off" placeholder="OpenAI" />
+                  </div>
+                  <div class="field">
+                    <label for="add-origin">Base URL</label>
+                    <input
+                      id="add-origin"
+                      name="origin"
+                      class="mono-input"
+                      type="url"
+                      required
+                      autocomplete="off"
+                      placeholder="https://api.openai.com/v1"
+                    />
+                  </div>
+                  <div class="field">
+                    <label for="add-slug">Model ID</label>
+                    <input
+                      id="add-slug"
+                      name="modelSlug"
+                      class="mono-input"
+                      required
+                      autocomplete="off"
+                      placeholder="gpt-4.1"
+                    />
+                  </div>
+                  <div class="field">
+                    <label for="add-secret">API Key</label>
+                    <div class="password-field">
+                      <input
+                        id="add-secret"
+                        name="secret"
+                        type="password"
+                        required
+                        autocomplete="new-password"
+                        placeholder="sk-…"
+                      />
+                      <button type="button" class="button-tertiary" data-act="toggle-secret" data-for="add-secret">
+                        Show
+                      </button>
+                    </div>
+                  </div>
+                  <div class="form-actions">
+                    <button type="submit" class="button-primary">Start chatting</button>
+                    <button type="button" class="button-tertiary" data-act="add-change">Change provider</button>
+                    <button type="button" class="button-tertiary" data-act="add-cancel">Cancel</button>
+                    <p class="fine error" id="add-error" hidden></p>
+                  </div>
+                </form>
+              </div>
+            </section>
+          </main>
+        </div>
+      </div>
+    </div>
+
+    <aside class="proto-bar" aria-label="Prototype review">
+      <span>Prototype</span>
+      <button type="button" data-act="reset-first-run">Reset to first-run</button>
+      <button type="button" id="proto-blocked" data-act="toggle-blocked">Show blocked host</button>
+      <span>Reload restores the sample catalog.</span>
+    </aside>
+
+    <script src="app.js"></script>
+  </body>
+</html>

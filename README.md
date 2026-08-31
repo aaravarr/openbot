@@ -54,7 +54,7 @@ The next turn uses the model you just connected. Context, max output, reasoning 
 
 ## Thinking intensity
 
-Each custom model has a thinking column on **Chat**, between the name and the On badge. Official Grok has no column.
+Each custom model has a thinking column on **Chat**, between the name and the On badge. Official Grok has no column. Pick the live value there. The model page only chooses which levels Chat may offer.
 
 - **Default** — omit thinking fields. The upstream model uses its own default.
 - **Off** — send an explicit disable (`thinking: { type: "disabled" }` on GLM and generic OpenAI; Grok has no standard off field).
@@ -67,10 +67,10 @@ Older catalogs stored `none` for “leave it to the model.” OpenBot migrates t
 The page has three levels. They are not stacked on one scroll.
 
 - **Chat** — which model Grok Bot uses on this Computer. Official Grok or one custom model. Thinking intensity is a column on each custom row. A quiet list switches `slug · provider`. No keys, no limits. Not per-conversation — one model at a time.
-- **Provider** — the account: name, base URL, API key, and child model rows. **Add model** opens a form for the model ID plus context, max output, reasoning levels, and input types. **Save API Key** lives here.
-- **Model** — a child of a provider. Breadcrumb like `OpenAI / gpt-4.1`. Context, max output, reasoning levels, and input types. **Save model** lives here.
+- **Provider** — the account. Name and base URL sit in the header. **Edit endpoint** opens those two fields. **Save API Key** is its own control. Child model rows live here. **Add model** takes a model ID; open the model to set the thinking list, context, max output, and input types.
+- **Model** — a child of a provider. Breadcrumb like `OpenAI / gpt-4.1`. Reasoning levels (the Chat allow-list) first, then context, max output, and input types. **Save model** lives here. This form does not pick the live thinking value.
 
-If a model still needs a key, Chat takes you to that provider instead of failing silently. You can still open **Configure** and set limits before a key exists.
+If a model still needs a key, Chat takes you to that provider instead of failing silently. You can still open a model and set limits before a key exists.
 
 Image, video, and audio are stored on the model for later. Chat still sends text.
 

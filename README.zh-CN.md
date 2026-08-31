@@ -54,7 +54,7 @@ openbot tunnel status
 
 ## 思考强度
 
-每个自定义模型在 **Chat** 列表里，名称和 On 标记之间有一列思考强度。官方 Grok 没有这一列。
+每个自定义模型在 **Chat** 列表里，名称和 On 标记之间有一列思考强度。官方 Grok 没有这一列。实时值在 Chat 上选。模型页只配置 Chat 可以选择的等级列表。
 
 - **Default** —— 不带 thinking 字段，用上游自己的默认。
 - **Off** —— 明确关闭（GLM 和通用 OpenAI 发送 `thinking: { type: "disabled" }`；Grok 没有标准关闭字段）。
@@ -67,10 +67,10 @@ openbot tunnel status
 控制页是三层，不会把所有东西平铺在同一页滚动。
 
 - **Chat** —— 这台 Computer 上 Grok Bot 用哪个模型。官方 Grok，或一个自定义模型。思考强度是每一行自定义模型上的一列。下面一行列表用来切换 `slug · 服务商`。不是按会话配置——同一时间只有一个模型。这里不填 Key，也不改限额。
-- **Provider** —— 账号：名称、Base URL、API Key，以及它下面的模型行。点 **Add model** 展开表单，填写模型 ID、上下文、最大输出、推理等级和输入类型。**Save API Key** 在这一层。
-- **Model** —— 某个服务商的子项。面包屑类似 `OpenAI / gpt-4.1`。上下文、最大输出、推理等级、输入类型。**Save model** 在这一层。
+- **Provider** —— 账号。名称和 Base URL 在页眉。**Edit endpoint** 才打开那两个字段。**Save API Key** 是单独的控件。下面是模型行。**Add model** 只填模型 ID；打开模型再设思考列表、上下文、最大输出和输入类型。
+- **Model** —— 某个服务商的子项。面包屑类似 `OpenAI / gpt-4.1`。先是推理等级允许列表，然后是上下文、最大输出、输入类型。**Save model** 在这一层。这里不选 Chat 正在用的思考强度。
 
-如果某个模型还没有 Key，Chat 会带你去对应的服务商页，而不是悄悄失败。没有 Key 也可以先点 **Configure** 改限额。
+如果某个模型还没有 Key，Chat 会带你去对应的服务商页，而不是悄悄失败。没有 Key 也可以先打开模型改限额。
 
 图片、视频、音频会记在模型配置里，供以后使用。当前聊天仍只发送文本。
 

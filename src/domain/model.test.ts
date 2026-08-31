@@ -29,7 +29,7 @@ test("makeModel fills default context, output, reasoning, and text-only modaliti
   assert.equal(model.contextTokens, DEFAULT_CONTEXT_TOKENS);
   assert.equal(model.maxOutputTokens, HIGH_AGENT_MAX_TOKENS);
   assert.deepEqual(model.reasoningLevels, DEFAULT_REASONING_LEVELS);
-  assert.equal(model.activeReasoning, "none");
+  assert.equal(model.activeReasoning, "default");
   assert.deepEqual(model.modalities, DEFAULT_MODALITIES);
 });
 
@@ -39,6 +39,10 @@ test("empty reasoning and modality lists fall back to defaults", () => {
   const model = sample({ reasoningLevels: [], modalities: [] });
   assert.deepEqual(model.reasoningLevels, DEFAULT_REASONING_LEVELS);
   assert.deepEqual(model.modalities, DEFAULT_MODALITIES);
+});
+
+test("parseReasoningLevels prepends default on old catalogs", () => {
+  assert.deepEqual(parseReasoningLevels(["none", "low", "high"]), ["default", "none", "low", "high"]);
 });
 
 test("parsePositiveTokens rejects zero, negative, and oversized values", () => {
@@ -52,6 +56,26 @@ test("pickActiveReasoning stays on the supported list", () => {
   assert.equal(pickActiveReasoning(["none", "low", "high"], "high"), "high");
   assert.equal(pickActiveReasoning(["none", "low", "high"], "xhigh"), "none");
   assert.equal(pickActiveReasoning(["low", "high"], "none"), "low");
+  assert.equal(pickActiveReasoning(["default", "none", "low", "high"], "xhigh"), "default");
+  assert.equal(pickActiveReasoning(["default", "none", "low", "high"], "none"), "none");
+});
+
+test("old catalog none migrates to default; new none stays Off", () => {
+  assert.equal(
+    pickActiveReasoning(["default", "none", "low", "high"], "none", ["none", "low", "high"]),
+    "default",
+  );
+  assert.equal(
+    pickActiveReasoning(["default", "none", "low", "high"], "none", ["default", "none", "low", "high"]),
+    "none",
+  );
+  const migrated = sample({ reasoningLevels: ["none", "low", "high"], activeReasoning: "none" });
+  assert.equal(migrated.activeReasoning, "default");
+  const explicit = sample({
+    reasoningLevels: ["default", "none", "low", "high"],
+    activeReasoning: "none",
+  });
+  assert.equal(explicit.activeReasoning, "none");
 });
 
 test("normalizeModel upgrades a catalog row that predates limits", () => {
@@ -64,11 +88,12 @@ test("normalizeModel upgrades a catalog row that predates limits", () => {
   assert.ok(model);
   assert.equal(model.contextTokens, DEFAULT_CONTEXT_TOKENS);
   assert.equal(model.maxOutputTokens, HIGH_AGENT_MAX_TOKENS);
-  assert.equal(model.activeReasoning, "none");
+  assert.equal(model.activeReasoning, "default");
   assert.deepEqual(model.modalities, ["text"]);
 });
 
-test("hasSelectableReasoning is false when only none is listed", () => {
-  assert.equal(hasSelectableReasoning({ reasoningLevels: ["none"] }), false);
-  assert.equal(hasSelectableReasoning({ reasoningLevels: ["none", "low"] }), true);
+test("hasSelectableReasoning is false when only default is listed", () => {
+  assert.equal(hasSelectableReasoning({ reasoningLevels: ["default"] }), false);
+  assert.equal(hasSelectableReasoning({ reasoningLevels: ["none"] }), true);
+  assert.equal(hasSelectableReasoning({ reasoningLevels: ["default", "none"] }), true);
 });

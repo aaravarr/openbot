@@ -233,7 +233,7 @@ test("hop caps max_tokens and maps active reasoning to reasoning_effort", async 
   }
 });
 
-test("hop leaves GLM thinking unset when reasoning is none", async () => {
+test("hop leaves GLM thinking unset when old catalog none means default", async () => {
   const upstream = await captureUpstream();
   const hop = await startHop({
     plan: {
@@ -269,6 +269,49 @@ test("hop leaves GLM thinking unset when reasoning is none", async () => {
     assert.equal(body?.thinking, undefined);
     assert.equal(body?.reasoning_effort, undefined);
     assert.equal(body?.max_tokens, 65536);
+  } finally {
+    hop.child.kill("SIGTERM");
+    upstream.server.close();
+  }
+});
+
+
+test("hop sends GLM thinking disabled when Off is chosen after default exists", async () => {
+  const upstream = await captureUpstream();
+  const hop = await startHop({
+    plan: {
+      kind: "custom",
+      catalog: {
+        providers: [
+          {
+            id: "zhipu",
+            name: "Zhipu",
+            origin: `http://127.0.0.1:${String(upstream.port)}/v1`,
+            maxTokensDefault: 65536,
+            mapFile: "provider-maps.cjs",
+          },
+        ],
+        models: [
+          {
+            id: "zhipu:glm",
+            providerId: "zhipu",
+            slug: "glm-5.3-flash",
+            reasoningLevels: ["default", "none", "low", "high"],
+            activeReasoning: "none",
+            parameters: [],
+          },
+        ],
+        bindings: [],
+      },
+    },
+    secrets: { providers: { zhipu: "sk-real" } },
+  });
+  try {
+    const out = await post(hop.port, { model: "glm-5.3-flash", messages: [] }, { Authorization: "Bearer openbot-runtime" });
+    assert.equal(out.status, 200);
+    const body = upstream.getBody();
+    assert.deepEqual(body?.thinking, { type: "disabled" });
+    assert.equal(body?.reasoning_effort, undefined);
   } finally {
     hop.child.kill("SIGTERM");
     upstream.server.close();

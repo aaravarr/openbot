@@ -105,7 +105,7 @@ export function App() {
     if (!model) {
       return "Model switched.";
     }
-    if (model.activeReasoning && model.activeReasoning !== "none") {
+    if (model.activeReasoning) {
       return `Grok Bot will use ${model.slug} (${labelReasoning(model.activeReasoning)}) on the next message.`;
     }
     return `Grok Bot will use ${model.slug} on the next message.`;
@@ -142,6 +142,19 @@ export function App() {
       return;
     }
     await run("use", useModelCommand(modelId, reasoning), usedMessage);
+  }
+
+  async function setExpose(expose: "cloudflare" | "off") {
+    await run("expose", { kind: "set-expose", expose }, (next) => {
+      const tunnel = next.snapshot?.tunnel;
+      if (tunnel?.kind === "cloudflare-quick") {
+        return "Cloudflare Tunnel is on. Scan the QR from your phone.";
+      }
+      if (tunnel?.kind === "error") {
+        return tunnel.message;
+      }
+      return "Cloudflare Tunnel is off. The page is only on this Computer.";
+    });
   }
 
   if (loadError && !state) {
@@ -182,7 +195,7 @@ export function App() {
   const liveProviderId = custom && active ? active.providerId : null;
   const status = custom
     ? active
-      ? active.activeReasoning && active.activeReasoning !== "none"
+      ? active.activeReasoning
         ? `${active.slug} · ${labelReasoning(active.activeReasoning)}`
         : active.slug
       : "Your model"
@@ -316,6 +329,9 @@ export function App() {
           void useChosen(modelId, reasoning);
         }}
         onNeedKey={needKey}
+        onExpose={(expose) => {
+          void setExpose(expose);
+        }}
       />
     );
   }

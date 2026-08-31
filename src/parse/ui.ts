@@ -1,4 +1,4 @@
-import { HIGH_AGENT_MAX_TOKENS, type Catalog, type DesiredState, type Model, type Provider } from "../domain/types.ts";
+import { HIGH_AGENT_MAX_TOKENS, loopbackExpose, type Catalog, type DesiredState, type Expose, type Model, type Provider } from "../domain/types.ts";
 import {
   DEFAULT_CONTEXT_TOKENS,
   DEFAULT_MODALITIES,
@@ -8,7 +8,7 @@ import {
 import { parseModelId, parseModelSlug } from "../supervisor/plan.ts";
 import { type BoxPaths } from "../supervisor/paths.ts";
 import { parseProviderId, parseSecretBytes } from "../supervisor/secrets.ts";
-import { customBoxFromCatalog, officialBox, parseUpstreamOrigin, slugify } from "./argv.ts";
+import { customBoxFromCatalog, officialBox, parseExposeToken, parseUpstreamOrigin, slugify } from "./argv.ts";
 
 export type ModelLimitsInput = {
   readonly contextTokens?: unknown;
@@ -43,7 +43,8 @@ export type UiCommand =
     }
   | { readonly kind: "use-model"; readonly modelId: string; readonly reasoning?: unknown }
   | { readonly kind: "remove-provider"; readonly providerId: string }
-  | { readonly kind: "set-secret"; readonly providerId: string; readonly secret: string };
+  | { readonly kind: "set-secret"; readonly providerId: string; readonly secret: string }
+  | { readonly kind: "set-expose"; readonly expose: Expose };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -130,6 +131,13 @@ export function parseUiCommand(input: unknown): UiCommand {
     }
     return { kind: "set-secret", providerId: input.providerId, secret: input.secret };
   }
+  if (input.kind === "set-expose") {
+    const expose = parseExposeToken(typeof input.expose === "string" ? input.expose : undefined);
+    if (!expose) {
+      throw new Error("OpenBot: set-expose needs expose cloudflare or off");
+    }
+    return { kind: "set-expose", expose };
+  }
   throw new Error("OpenBot: unknown UI command");
 }
 
@@ -175,7 +183,7 @@ function modelFromLimits(input: {
     maxOutputTokens: input.limits.maxOutputTokens ?? existing?.maxOutputTokens ?? HIGH_AGENT_MAX_TOKENS,
     reasoningLevels: input.limits.reasoningLevels ?? existing?.reasoningLevels ?? DEFAULT_REASONING_LEVELS,
     modalities: input.limits.modalities ?? existing?.modalities ?? DEFAULT_MODALITIES,
-    activeReasoning: input.limits.activeReasoning ?? existing?.activeReasoning ?? "none",
+    activeReasoning: input.limits.activeReasoning ?? existing?.activeReasoning ?? "default",
     parameters: existing?.parameters ?? [],
   });
 }
@@ -186,14 +194,28 @@ export type UiSave = {
   readonly catalogWrite?: Catalog;
 };
 
+export type UiSaveOpts = {
+  readonly expose?: Expose | undefined;
+  readonly mode?: "official" | "custom" | undefined;
+};
+
 export function applyUiCommand(input: {
   command: UiCommand;
   catalog: Catalog;
   paths: BoxPaths;
+  expose?: Expose | undefined;
+  mode?: "official" | "custom" | undefined;
 }): UiSave {
   const { command, catalog, paths } = input;
+  const expose = input.expose ?? loopbackExpose();
   if (command.kind === "official") {
-    return { desired: officialBox(paths) };
+    return { desired: officialBox(paths, expose) };
+  }
+  if (command.kind === "set-expose") {
+    if (input.mode === "custom" && catalog.models.length > 0) {
+      return { desired: customBoxFromCatalog({ paths, catalog, expose: command.expose }) };
+    }
+    return { desired: officialBox(paths, command.expose) };
   }
   if (command.kind === "set-secret") {
     const providerId = parseProviderId(command.providerId);
@@ -204,7 +226,7 @@ export function applyUiCommand(input: {
       throw new Error("OpenBot: add a model before using custom chat");
     }
     return {
-      desired: customBoxFromCatalog({ paths, catalog }),
+      desired: customBoxFromCatalog({ paths, catalog, expose }),
       secret: { providerId, bytes: parseSecretBytes(command.secret) },
     };
   }
@@ -231,7 +253,7 @@ export function applyUiCommand(input: {
       }),
     );
     return {
-      desired: customBoxFromCatalog({ paths, catalog: withWildcard(next, modelId) }),
+      desired: customBoxFromCatalog({ paths, catalog: withWildcard(next, modelId), expose }),
       secret: { providerId, bytes: parseSecretBytes(command.secret) },
     };
   }
@@ -253,7 +275,7 @@ export function applyUiCommand(input: {
         limits: command,
       }),
     );
-    return { desired: customBoxFromCatalog({ paths, catalog: next }) };
+    return { desired: customBoxFromCatalog({ paths, catalog: next, expose }) };
   }
   if (command.kind === "use-model") {
     const modelId = parseModelId(command.modelId);
@@ -273,32 +295,39 @@ export function applyUiCommand(input: {
       parameters: model.parameters,
     });
     const next = upsertModelRow(catalog, nextModel);
-    return { desired: customBoxFromCatalog({ paths, catalog: withWildcard(next, modelId) }) };
+    return { desired: customBoxFromCatalog({ paths, catalog: withWildcard(next, modelId), expose }) };
   }
   const providerId = parseProviderId(command.providerId);
   const providers = catalog.providers.filter((row) => row.id !== providerId);
   const models = catalog.models.filter((row) => row.providerId !== providerId);
   if (providers.length === 0 || models.length === 0) {
-    return { desired: officialBox(paths), catalogWrite: emptyCatalog() };
+    return { desired: officialBox(paths, expose), catalogWrite: emptyCatalog() };
   }
   const active = catalog.bindings.find((row) => row.conversation.kind === "wildcard");
   const stillBound = active && models.some((row) => row.id === active.modelId);
   const fallback = models[0];
   if (fallback === undefined) {
-    return { desired: officialBox(paths), catalogWrite: emptyCatalog() };
+    return { desired: officialBox(paths, expose), catalogWrite: emptyCatalog() };
   }
   const next: Catalog = {
     providers,
     models,
     bindings: [{ conversation: { kind: "wildcard" }, modelId: stillBound && active ? active.modelId : fallback.id }],
   };
-  return { desired: customBoxFromCatalog({ paths, catalog: next }) };
+  return { desired: customBoxFromCatalog({ paths, catalog: next, expose }) };
 }
 
 export function parseUiProviderSave(
   input: unknown,
   paths: BoxPaths,
   catalog: Catalog = emptyCatalog(),
+  opts: UiSaveOpts = {},
 ): UiSave {
-  return applyUiCommand({ command: parseUiCommand(input), catalog, paths });
+  return applyUiCommand({
+    command: parseUiCommand(input),
+    catalog,
+    paths,
+    expose: opts.expose,
+    mode: opts.mode,
+  });
 }

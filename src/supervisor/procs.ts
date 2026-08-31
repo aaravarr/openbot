@@ -24,6 +24,7 @@ export type ProcDeps = {
   readPidFile(path: AbsPath): number | undefined;
   pidAlive(pid: number): boolean;
   start(input: {
+    command?: string;
     argv: readonly string[];
     env: NodeJS.ProcessEnv;
     log: AbsPath;
@@ -208,7 +209,7 @@ export function nodeProcs(): ProcDeps {
     },
     start(input) {
       const logFd = fs.openSync(input.log, "a");
-      const child = spawn(process.execPath, [...input.argv], {
+      const child = spawn(input.command ?? process.execPath, [...input.argv], {
         detached: true,
         stdio: ["ignore", logFd, logFd],
         env: { ...process.env, ...input.env },

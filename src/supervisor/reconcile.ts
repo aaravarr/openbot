@@ -10,6 +10,7 @@ import { peelOpengrokToStock, proveWrap, stripWrap, wrapHostSource } from "../ho
 import { observe, wrapFromSource, type SupervisorDeps } from "./observe.ts";
 import { compileCustomPlan, planToJson } from "./plan.ts";
 import { parseOwnedPid, writeTemp } from "./procs.ts";
+import { reconcileExpose } from "./tunnel.ts";
 
 export type ReconcileError =
   | { readonly kind: "host-missing"; readonly path: string }
@@ -172,6 +173,21 @@ export function dryRunWrap(
   return { kind: "proof", proof: proveWrap({ source: forProof, runtimePath: deps.paths.runtime }) };
 }
 
+async function finishOk(
+  deps: SupervisorDeps,
+  desired: DesiredState,
+  wrapBytesChanged: boolean,
+): Promise<ReconcileResult> {
+  await bounceHostIfNeeded(deps, wrapBytesChanged);
+  const tunnel = await reconcileExpose(desired.expose, deps);
+  const snapshot = await observe(deps);
+  return {
+    kind: "ok",
+    snapshot: { ...snapshot, tunnel },
+    wrapBytesChanged,
+  };
+}
+
 export async function reconcile(desired: DesiredState, deps: SupervisorDeps): Promise<ReconcileResult> {
   const raw = deps.fs.read(deps.paths.hostMain);
   if (raw === undefined) {
@@ -207,8 +223,7 @@ export async function reconcile(desired: DesiredState, deps: SupervisorDeps): Pr
         return { kind: "refused", error: { kind: "listen-failed", port: SERVICE_PORT } };
       }
     }
-    await bounceHostIfNeeded(deps, wrapBytesChanged);
-    return { kind: "ok", snapshot: await observe(deps), wrapBytesChanged };
+    return finishOk(deps, desired, wrapBytesChanged);
   }
 
   const census = censusHost(source);
@@ -233,6 +248,5 @@ export async function reconcile(desired: DesiredState, deps: SupervisorDeps): Pr
       return { kind: "refused", error: { kind: "listen-failed", port: SERVICE_PORT } };
     }
   }
-  await bounceHostIfNeeded(deps, wrapBytesChanged);
-  return { kind: "ok", snapshot: await observe(deps), wrapBytesChanged };
+  return finishOk(deps, desired, wrapBytesChanged);
 }

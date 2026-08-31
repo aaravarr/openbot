@@ -37,6 +37,8 @@ test("install with origin reads OPENBOT_API_KEY from env", () => {
   if (parsed.command.kind === "install") {
     assert.equal(parsed.command.custom?.modelSlug, "glm-5.3-flash");
     assert.equal(parsed.command.custom?.secret, "sk-test");
+    assert.equal(parsed.command.exposeSpecified, false);
+    assert.equal(parsed.command.expose.kind, "loopback");
   }
 });
 
@@ -49,6 +51,45 @@ test("bare install is official plus UI, not a custom wrap", () => {
   assert.equal(parsed.command.kind, "install");
   if (parsed.command.kind === "install") {
     assert.equal(parsed.command.custom, undefined);
+    assert.equal(parsed.command.exposeSpecified, false);
+  }
+});
+
+test("--tunnel off marks expose as specified loopback", () => {
+  const parsed = parseInstallCommand({
+    argv: ["install", "--tunnel", "off"],
+    env: {},
+    repoRoot: "/tmp/openbot",
+  });
+  assert.equal(parsed.command.kind, "install");
+  if (parsed.command.kind === "install") {
+    assert.equal(parsed.command.exposeSpecified, true);
+    assert.equal(parsed.command.expose.kind, "loopback");
+  }
+});
+
+test("OPENBOT_TUNNEL=cloudflare marks expose as specified", () => {
+  const parsed = parseInstallCommand({
+    argv: ["install"],
+    env: { OPENBOT_TUNNEL: "cloudflare" },
+    repoRoot: "/tmp/openbot",
+  });
+  assert.equal(parsed.command.kind, "install");
+  if (parsed.command.kind === "install") {
+    assert.equal(parsed.command.exposeSpecified, true);
+    assert.equal(parsed.command.expose.kind, "cloudflare-quick");
+  }
+});
+
+test("tunnel on is a tunnel command", () => {
+  const parsed = parseInstallCommand({
+    argv: ["tunnel", "on"],
+    env: {},
+    repoRoot: "/tmp/openbot",
+  });
+  assert.equal(parsed.command.kind, "tunnel");
+  if (parsed.command.kind === "tunnel") {
+    assert.equal(parsed.command.action, "on");
   }
 });
 
@@ -62,4 +103,5 @@ test("cli file URL resolves to the directory that contains src/", () => {
   });
   assert.equal(parsed.paths.repoRoot, "/tmp/openbot-pkg");
   assert.equal(parsed.paths.uiServer, "/tmp/openbot-pkg/src/ui/server.ts");
+  assert.equal(parsed.paths.expose, "/home/box/sand-data/openbot-expose");
 });

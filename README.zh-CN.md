@@ -10,7 +10,7 @@ Grok Bot 0.30 已经有一台 Computer。OpenBot 让这台 Computer 去调用你
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
 ```
 
-然后用 **Computer 的浏览器** 打开 [http://127.0.0.1:9280](http://127.0.0.1:9280)。
+然后用 **Computer 的浏览器** 打开 [http://127.0.0.1:9280](http://127.0.0.1:9280)。安装脚本会用普通句子打印这个地址。脚本需要快照时再加 `--json`。
 
 ## 你能得到什么
 
@@ -18,6 +18,7 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 - **随时回到官方 Grok。** 切回去就是原厂聊天。已保存的服务商还在，再切回来不用重新粘贴 Key。
 - **Key 留在 Computer 上。** 不会进聊天，不会出现在命令行，也不会离开这台盒子。
 - **本机一页控制，不是再装一个 App。** 装一次，打开 `127.0.0.1` 上的页面，选服务商、选模型，回到 Grok Bot 继续聊。
+- **可选的手机入口。** Cloudflare Tunnel 会打印公网 URL 和二维码。拿到这个 URL 的人都能打开控制页。Key 仍留在 Computer 上。Hop 和控制页共用同一端口。
 
 ## 安装
 
@@ -29,9 +30,17 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
 ```
 
-看到 `OpenBot UI: http://127.0.0.1:9280` 后，用 Computer 浏览器打开这个地址。
+看到 `OpenBot is ready` 和 `This Computer` 后，用 Computer 浏览器打开 `http://127.0.0.1:9280`。
+
+安装时会问要不要开临时 Cloudflare Tunnel，默认否。可用 `--tunnel off`、`--tunnel cloudflare` 或 `OPENBOT_TUNNEL=off` 跳过提问。
 
 在你接入服务商之前，聊天仍是官方 Grok。这是故意的。
+
+```bash
+openbot tunnel on      # 公网 URL + 二维码
+openbot tunnel off     # 只在这台 Computer
+openbot tunnel status
+```
 
 ## 接入一个模型
 
@@ -43,11 +52,21 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 下一回合就会走你刚接上的模型。上下文、最大输出、推理等级和输入类型先用默认值；之后打开该模型再改。
 
+## 思考强度
+
+每个自定义模型在 **Chat** 列表里，名称和 On 标记之间有一列思考强度。官方 Grok 没有这一列。
+
+- **Default** —— 不带 thinking 字段，用上游自己的默认。
+- **Off** —— 明确关闭（GLM 和通用 OpenAI 发送 `thinking: { type: "disabled" }`；Grok 没有标准关闭字段）。
+- **Low / Medium / High / …** —— 发送对应强度。
+
+旧目录里的 `none` 表示「交给模型」。OpenBot 会把它迁成 **Default**。模型上已经有 Default 之后，**Off** 才是真正的关闭。
+
 ## 控制页怎么分层
 
 控制页是三层，不会把所有东西平铺在同一页滚动。
 
-- **Chat** —— 这台 Computer 上 Grok Bot 用哪个模型。官方 Grok，或一个自定义模型。推理等级只出现在正在使用的模型上。下面一行列表用来切换 `slug · 服务商`。不是按会话配置——同一时间只有一个模型。这里不填 Key，也不改限额。
+- **Chat** —— 这台 Computer 上 Grok Bot 用哪个模型。官方 Grok，或一个自定义模型。思考强度是每一行自定义模型上的一列。下面一行列表用来切换 `slug · 服务商`。不是按会话配置——同一时间只有一个模型。这里不填 Key，也不改限额。
 - **Provider** —— 账号：名称、Base URL、API Key，以及它下面的模型行。点 **Add model** 展开表单，填写模型 ID、上下文、最大输出、推理等级和输入类型。**Save API Key** 在这一层。
 - **Model** —— 某个服务商的子项。面包屑类似 `OpenAI / gpt-4.1`。上下文、最大输出、推理等级、输入类型。**Save model** 在这一层。
 
@@ -57,7 +76,7 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 ## 回到官方 Grok
 
-在 **Chat** 里点列表中的 **Official Grok**。聊天回到原厂。服务商和 Key 仍留在 Computer 上，之后还能切回自定义模型，不用重配。
+在 **Chat** 里点列表中的 **Official Grok**。聊天回到原厂。服务商和 Key 仍留在 Computer 上，之后还能切回自定义模型，不用重配。正在跑的 Tunnel 会一直保留，直到你关掉它。
 
 ## 使用前请知道
 
@@ -65,6 +84,7 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 - 同一时间只有一个模型在生效。按会话覆盖模型不在当前版本。
 - 如果 `9280` 端口已经被别的程序占用，OpenBot 不会抢过去。
 - OpenBot 面向 **Computer 上的 Grok Bot 0.30**，不会改 Mac 上的应用。
+- 这一版不含 Tailscale。
 
 ## 许可
 

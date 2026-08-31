@@ -3,14 +3,16 @@ import http from "node:http";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { LOOPBACK, SERVICE_PORT } from "../domain/types.ts";
+import { LOOPBACK, SERVICE_PORT, type Snapshot, type TunnelObserved } from "../domain/types.ts";
 import { parseUiProviderSave } from "../parse/ui.ts";
+import { renderQrAscii } from "../qrcode.ts";
 import { boxPathsFrom } from "../supervisor/paths.ts";
 import { catalogFromPlanJson } from "../supervisor/plan.ts";
 import { observe, type SupervisorDeps } from "../supervisor/observe.ts";
 import { nodeFs, nodeProcs } from "../supervisor/procs.ts";
 import { reconcile } from "../supervisor/reconcile.ts";
 import { loadSecrets, saveSecrets, upsertSecret } from "../supervisor/secrets.ts";
+import { readExposeFile } from "../supervisor/tunnel.ts";
 
 const require = createRequire(import.meta.url);
 const hop = require("../../payload/hop-handler.cjs") as {
@@ -61,6 +63,25 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
+function wrapMode(raw: string | undefined): "official" | "custom" {
+  return raw?.trim() === "custom" ? "custom" : "official";
+}
+
+function tunnelForUi(tunnel: TunnelObserved): TunnelObserved & { qr?: string } {
+  if (tunnel.kind !== "cloudflare-quick") {
+    return tunnel;
+  }
+  try {
+    return { ...tunnel, qr: renderQrAscii(tunnel.url) };
+  } catch {
+    return tunnel;
+  }
+}
+
+function snapshotForUi(snapshot: Snapshot): Snapshot & { tunnel: TunnelObserved & { qr?: string } } {
+  return { ...snapshot, tunnel: tunnelForUi(snapshot.tunnel) };
+}
+
 function publicState(current: SupervisorDeps) {
   const saved = catalogFromPlanJson(current.fs.read(current.paths.plan));
   const store = loadSecrets(current.fs, current.paths.secrets);
@@ -81,7 +102,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     send(
       res,
       200,
-      JSON.stringify({ snapshot, ...publicState(current) }),
+      JSON.stringify({ snapshot: snapshotForUi(snapshot), ...publicState(current) }),
       "application/json; charset=utf-8",
     );
     return;
@@ -89,7 +110,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   if (req.method === "POST" && url.pathname === "/api/save") {
     const parsedBody: unknown = JSON.parse(await readBody(req));
     const saved = catalogFromPlanJson(current.fs.read(current.paths.plan));
-    const parsed = parseUiProviderSave(parsedBody, current.paths, saved);
+    const parsed = parseUiProviderSave(parsedBody, current.paths, saved, {
+      expose: readExposeFile(current.fs, current.paths.expose),
+      mode: wrapMode(current.fs.read(current.paths.mode)),
+    });
     const result = await reconcile(parsed.desired, current);
     if (result.kind === "refused") {
       send(res, 409, JSON.stringify(result), "application/json; charset=utf-8");
@@ -108,7 +132,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       JSON.stringify({
         ok: true,
         wrapBytesChanged: result.wrapBytesChanged,
-        snapshot: result.snapshot,
+        snapshot: snapshotForUi(result.snapshot),
         ...publicState(current),
       }),
       "application/json; charset=utf-8",

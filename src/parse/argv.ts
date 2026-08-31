@@ -6,8 +6,10 @@ import {
   LOOPBACK_HOP,
   OPENBOT_MARKER,
   SERVICE_PORT,
+  loopbackExpose,
   type Catalog,
   type CustomBox,
+  type Expose,
   type OfficialBox,
   type UpstreamOrigin,
 } from "../domain/types.ts";
@@ -20,6 +22,7 @@ export type CliCommand =
   | { readonly kind: "census-only" }
   | { readonly kind: "dry-run" }
   | { readonly kind: "official" }
+  | { readonly kind: "tunnel"; readonly action: "on" | "off" | "status" }
   | {
       readonly kind: "install";
       readonly custom?: {
@@ -28,11 +31,15 @@ export type CliCommand =
         readonly modelSlug: string;
         readonly secret: ReturnType<typeof parseSecretBytes>;
       };
+      readonly expose: Expose;
+      readonly exposeSpecified: boolean;
+      readonly json: boolean;
     };
 
 export type ParsedCli = {
   readonly command: CliCommand;
   readonly paths: BoxPaths;
+  readonly json: boolean;
 };
 
 /** `import.meta.url` already names the file, so one `..` is the package root. */
@@ -56,6 +63,23 @@ function hasFlag(argv: string[], name: string): boolean {
   return argv.includes(name);
 }
 
+export function parseExposeToken(raw: string | undefined): Expose | undefined {
+  if (raw === undefined || raw === "") {
+    return undefined;
+  }
+  const token = raw.trim().toLowerCase();
+  if (token === "off" || token === "loopback" || token === "no" || token === "false") {
+    return { kind: "loopback" };
+  }
+  if (token === "cloudflare" || token === "cloudflare-quick" || token === "cf" || token === "on") {
+    return { kind: "cloudflare-quick" };
+  }
+  if (token === "tailscale") {
+    throw new Error("OpenBot: Tailscale is not in this release. Use --tunnel cloudflare or --tunnel off.");
+  }
+  throw new Error("OpenBot: --tunnel is cloudflare or off");
+}
+
 export function parseInstallCommand(input: {
   argv: readonly string[];
   env: NodeJS.ProcessEnv;
@@ -73,26 +97,39 @@ export function parseInstallCommand(input: {
     hostMain: takeFlag(argv, "--host-main"),
     sandData: takeFlag(argv, "--sand-data"),
   });
+  const json = hasFlag(argv, "--json");
 
   if (hasFlag(argv, "--census-only") && hasFlag(argv, "--dry-run")) {
     throw new Error("OpenBot: --census-only is observe; --dry-run is proveWrap; pick one");
   }
   if (hasFlag(argv, "--census-only")) {
-    return { command: { kind: "census-only" }, paths };
+    return { command: { kind: "census-only" }, paths, json };
   }
   if (hasFlag(argv, "--dry-run")) {
-    return { command: { kind: "dry-run" }, paths };
+    return { command: { kind: "dry-run" }, paths, json };
   }
   if (argv.includes("official") || argv.includes("disable")) {
-    return { command: { kind: "official" }, paths };
+    return { command: { kind: "official" }, paths, json };
   }
   if (argv.includes("status")) {
-    return { command: { kind: "status" }, paths };
+    return { command: { kind: "status" }, paths, json };
+  }
+  const tunnelAt = argv.indexOf("tunnel");
+  if (tunnelAt >= 0) {
+    const action = argv[tunnelAt + 1];
+    if (action === "on" || action === "off" || action === "status") {
+      return { command: { kind: "tunnel", action }, paths, json };
+    }
+    throw new Error("OpenBot: tunnel is on, off, or status");
   }
 
   const origin = takeFlag(argv, "--origin");
   const model = takeFlag(argv, "--model");
   const name = takeFlag(argv, "--name") ?? "default";
+  const tunnelFlag = takeFlag(argv, "--tunnel");
+  const exposeSpecified = Boolean(tunnelFlag || input.env.OPENBOT_TUNNEL);
+  const expose =
+    parseExposeToken(tunnelFlag) ?? parseExposeToken(input.env.OPENBOT_TUNNEL) ?? loopbackExpose();
   if (origin || model) {
     if (!origin || !model) {
       throw new Error("OpenBot: --origin and --model are required together");
@@ -110,12 +147,16 @@ export function parseInstallCommand(input: {
           modelSlug: model,
           secret: parseSecretBytes(key),
         },
+        expose,
+        exposeSpecified,
+        json,
       },
       paths,
+      json,
     };
   }
 
-  return { command: { kind: "install" }, paths };
+  return { command: { kind: "install", expose, exposeSpecified, json }, paths, json };
 }
 
 export function parseUpstreamOrigin(raw: string): UpstreamOrigin {
@@ -131,13 +172,14 @@ export function parseUpstreamOrigin(raw: string): UpstreamOrigin {
   return raw.replace(/\/+$/u, "") as UpstreamOrigin;
 }
 
-export function officialBox(paths: BoxPaths): OfficialBox {
+export function officialBox(paths: BoxPaths, expose: Expose = loopbackExpose()): OfficialBox {
   return {
     kind: "official",
     wrap: { kind: "stock" },
     hopListen: { kind: "stop-owned" },
     uiListen: { kind: "loopback", host: LOOPBACK, port: SERVICE_PORT },
     secretsPath: paths.secrets,
+    expose,
   };
 }
 
@@ -146,7 +188,11 @@ export function slugify(name: string): string {
   return slug || "provider";
 }
 
-export function customBoxFromCatalog(input: { paths: BoxPaths; catalog: Catalog }): CustomBox {
+export function customBoxFromCatalog(input: {
+  paths: BoxPaths;
+  catalog: Catalog;
+  expose?: Expose | undefined;
+}): CustomBox {
   return {
     kind: "custom",
     wrap: { kind: "marked", marker: OPENBOT_MARKER },
@@ -155,6 +201,7 @@ export function customBoxFromCatalog(input: { paths: BoxPaths; catalog: Catalog 
     secretsPath: input.paths.secrets,
     hop: LOOPBACK_HOP,
     catalog: input.catalog,
+    expose: input.expose ?? loopbackExpose(),
   };
 }
 
@@ -163,12 +210,14 @@ export function customBoxFromProvider(input: {
   origin: UpstreamOrigin;
   name: string;
   modelSlug: string;
+  expose?: Expose | undefined;
 }): CustomBox {
   const providerId = parseProviderId(slugify(input.name));
   const modelId = parseModelId(`${providerId}:${input.modelSlug}`);
   const slug = parseModelSlug(input.modelSlug);
   return customBoxFromCatalog({
     paths: input.paths,
+    expose: input.expose ?? loopbackExpose(),
     catalog: {
       providers: [
         {

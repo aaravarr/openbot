@@ -44,6 +44,9 @@ export function SecretField({
           required={required}
           placeholder={placeholder}
           autoComplete="new-password"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
           onChange={(event) => onChange(event.target.value)}
         />
         <button
@@ -89,6 +92,9 @@ export function TextField({
         required={required}
         placeholder={placeholder}
         autoComplete="off"
+        autoCapitalize="none"
+        autoCorrect="off"
+        spellCheck={false}
         className={mono ? "mono-input" : undefined}
         onChange={(event) => onChange(event.target.value)}
       />

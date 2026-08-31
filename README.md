@@ -10,7 +10,7 @@ Grok Bot 0.30 already has a Computer. OpenBot lets that Computer talk to the mod
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
 ```
 
-Then open [http://127.0.0.1:9280](http://127.0.0.1:9280) in the **Computer** browser.
+Then open [http://127.0.0.1:9280](http://127.0.0.1:9280) in the **Computer** browser. The installer prints that address in plain language. Pass `--json` if a script needs the snapshot.
 
 ## What you get
 
@@ -18,6 +18,7 @@ Then open [http://127.0.0.1:9280](http://127.0.0.1:9280) in the **Computer** bro
 - **Official Grok whenever you want it.** Switching back restores stock chat. Saved providers stay, so you can switch forward again without re-pasting a key.
 - **Keys stay on the Computer.** They never go in chat, never go on the command line, and never leave this box.
 - **A local control page, not another app.** One install. One page on `127.0.0.1`. Pick a provider, pick a model, go back to Grok Bot.
+- **Optional phone access.** Cloudflare Tunnel can print a public URL and a QR. Anyone with that URL can open the control page. Keys stay on this Computer. Hop is on the same port.
 
 ## Install
 
@@ -29,9 +30,17 @@ Needs Node 22 or newer. If the box only has Node 20, the installer puts Node 22 
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
 ```
 
-When it prints `OpenBot UI: http://127.0.0.1:9280`, open that address on the Computer.
+When it prints `OpenBot is ready` and `This Computer`, open `http://127.0.0.1:9280` on the Computer.
+
+The installer asks whether to start a temporary Cloudflare Tunnel. Default is no. Skip the prompt with `--tunnel off` or `--tunnel cloudflare`, or `OPENBOT_TUNNEL=off`.
 
 Chat stays on official Grok until you connect a provider. That is on purpose.
+
+```bash
+openbot tunnel on      # public URL + QR
+openbot tunnel off     # this Computer only
+openbot tunnel status
+```
 
 ## Connect a model
 
@@ -43,11 +52,21 @@ Chat stays on official Grok until you connect a provider. That is on purpose.
 
 The next turn uses the model you just connected. Context, max output, reasoning levels, and input types use defaults until you open that model and change them.
 
+## Thinking intensity
+
+Each custom model has a thinking column on **Chat**, between the name and the On badge. Official Grok has no column.
+
+- **Default** — omit thinking fields. The upstream model uses its own default.
+- **Off** — send an explicit disable (`thinking: { type: "disabled" }` on GLM and generic OpenAI; Grok has no standard off field).
+- **Low / Medium / High / …** — send that effort.
+
+Older catalogs stored `none` for “leave it to the model.” OpenBot migrates that to **Default**. After Default exists on a model, **Off** is a real disable.
+
 ## The control page
 
 The page has three levels. They are not stacked on one scroll.
 
-- **Chat** — which model Grok Bot uses on this Computer. Official Grok or one custom model. Reasoning chips belong to the active model only. A quiet list switches `slug · provider`. No keys, no limits. Not per-conversation — one model at a time.
+- **Chat** — which model Grok Bot uses on this Computer. Official Grok or one custom model. Thinking intensity is a column on each custom row. A quiet list switches `slug · provider`. No keys, no limits. Not per-conversation — one model at a time.
 - **Provider** — the account: name, base URL, API key, and child model rows. **Add model** opens a form for the model ID plus context, max output, reasoning levels, and input types. **Save API Key** lives here.
 - **Model** — a child of a provider. Breadcrumb like `OpenAI / gpt-4.1`. Context, max output, reasoning levels, and input types. **Save model** lives here.
 
@@ -57,7 +76,7 @@ Image, video, and audio are stored on the model for later. Chat still sends text
 
 ## Back to official Grok
 
-On **Chat**, click **Official Grok** in the list. Stock chat comes back. Providers and keys remain on the Computer, so you can return to a custom model without setting it up again.
+On **Chat**, click **Official Grok** in the list. Stock chat comes back. Providers and keys remain on the Computer, so you can return to a custom model without setting it up again. A running tunnel stays until you stop it.
 
 ## Good to know
 
@@ -65,6 +84,7 @@ On **Chat**, click **Official Grok** in the list. Stock chat comes back. Provide
 - One model is active at a time. Per-conversation overrides are not in this release.
 - If something else is already bound to port `9280`, OpenBot refuses to take it over.
 - OpenBot is for Grok Bot **0.30 on the Computer**. It does not patch the Mac app.
+- Tailscale is not in this release.
 
 ## License
 

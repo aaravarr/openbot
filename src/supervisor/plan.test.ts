@@ -28,7 +28,7 @@ test("catalogFromPlanJson fills model limits on old plan JSON", () => {
   assert.equal(model.contextTokens, DEFAULT_CONTEXT_TOKENS);
   assert.equal(model.maxOutputTokens, HIGH_AGENT_MAX_TOKENS);
   assert.deepEqual(model.reasoningLevels, DEFAULT_REASONING_LEVELS);
-  assert.equal(model.activeReasoning, "none");
+  assert.equal(model.activeReasoning, "default");
   assert.deepEqual(model.modalities, ["text"]);
 });
 
@@ -67,7 +67,41 @@ test("catalogFromPlanJson keeps configured context, output, reasoning, and modal
   assert.ok(model);
   assert.equal(model.contextTokens, 200000);
   assert.equal(model.maxOutputTokens, 8192);
-  assert.deepEqual(model.reasoningLevels, ["none", "low", "high"]);
+  assert.deepEqual(model.reasoningLevels, ["default", "none", "low", "high"]);
   assert.equal(model.activeReasoning, "high");
   assert.deepEqual(model.modalities, ["text", "image"]);
+});
+
+test("catalogFromPlanJson migrates old active none to default", () => {
+  const catalog = catalogFromPlanJson(
+    JSON.stringify({
+      kind: "custom",
+      catalog: {
+        providers: [
+          {
+            id: "openai",
+            name: "OpenAI",
+            origin: "https://api.openai.com/v1",
+            maxTokensDefault: 65536,
+            mapFile: "provider-maps.cjs",
+          },
+        ],
+        models: [
+          {
+            id: "openai:gpt-4.1",
+            providerId: "openai",
+            slug: "gpt-4.1",
+            reasoningLevels: ["none", "low", "high"],
+            activeReasoning: "none",
+            parameters: [],
+          },
+        ],
+        bindings: [],
+      },
+    }),
+  );
+  const model = catalog.models[0];
+  assert.ok(model);
+  assert.deepEqual(model.reasoningLevels, ["default", "none", "low", "high"]);
+  assert.equal(model.activeReasoning, "default");
 });

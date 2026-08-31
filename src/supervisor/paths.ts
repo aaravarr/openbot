@@ -22,6 +22,11 @@ export type BoxPaths = {
   readonly uiLog: AbsPath;
   readonly uiServer: AbsPath;
   readonly repoRoot: AbsPath;
+  readonly expose: AbsPath;
+  readonly tunnelPid: AbsPath;
+  readonly tunnelLog: AbsPath;
+  readonly tunnelCache: AbsPath;
+  readonly tunnelBin: AbsPath;
 };
 
 export function parseAbsPath(raw: string): AbsPath {
@@ -62,6 +67,11 @@ export function boxPathsFrom(input: {
     uiLog: joinAbs(sandData, "openbot-ui.log"),
     uiServer: joinAbs(repoRoot, "src/ui/server.ts"),
     repoRoot,
+    expose: joinAbs(sandData, "openbot-expose"),
+    tunnelPid: joinAbs(sandData, "openbot-tunnel.pid"),
+    tunnelLog: joinAbs(sandData, "openbot-tunnel.log"),
+    tunnelCache: joinAbs(sandData, "openbot-tunnel.json"),
+    tunnelBin: joinAbs(sandData, "bin/cloudflared"),
   };
 }
 

@@ -5,6 +5,9 @@
  *
  * Hop and the control UI share one loopback service. Chat is POST /v1/chat/completions.
  * The UI is GET / and /api/*. Leftover python hop-server.py processes are still SIGTERM'd.
+ *
+ * Expose is how the loopback page is reached. loopback stays on this Computer.
+ * cloudflare-quick is a temporary public URL. Tailscale is a later kind, not this release.
  */
 
 export const OPENBOT_MARKER = "/* openbot-stock-wrap */" as const;
@@ -54,9 +57,24 @@ type SecretKeys = "apiKey" | "Authorization" | "API_SERVER_KEY" | "secret" | "ke
 
 export type ProviderParameter = { readonly id: string; readonly value: string };
 
-export type ReasoningLevel = "none" | "low" | "medium" | "high" | "max" | "xhigh";
+/** default = omit thinking fields. none = send an explicit off. */
+export type ReasoningLevel = "default" | "none" | "low" | "medium" | "high" | "max" | "xhigh";
 
 export type Modality = "text" | "image" | "video" | "audio";
+
+export type Expose =
+  | { readonly kind: "loopback" }
+  | { readonly kind: "cloudflare-quick" };
+
+export type TunnelObserved =
+  | { readonly kind: "off" }
+  | {
+      readonly kind: "cloudflare-quick";
+      readonly url: string;
+      readonly internal: string;
+      readonly pid: OwnedPid;
+    }
+  | { readonly kind: "error"; readonly message: string };
 
 export type Provider = {
   readonly id: ProviderId;
@@ -100,6 +118,7 @@ export type OfficialBox = {
     readonly port: typeof SERVICE_PORT;
   };
   readonly secretsPath: AbsPath;
+  readonly expose: Expose;
   readonly hop?: never;
   readonly catalog?: never;
   readonly upstream?: never;
@@ -121,6 +140,7 @@ export type CustomBox = {
   readonly secretsPath: AbsPath;
   readonly catalog: Catalog;
   readonly hop: LoopbackHop;
+  readonly expose: Expose;
 };
 
 export type DesiredState = OfficialBox | CustomBox;
@@ -160,6 +180,7 @@ export type Snapshot = {
   readonly uiListen: PortObserved;
   readonly host: HostObserved;
   readonly alignment: Alignment;
+  readonly tunnel: TunnelObserved;
 };
 
 export type GenericHop = {
@@ -204,6 +225,10 @@ export function align(desired: DesiredState, wrap: WrapObserved): Alignment {
     return { kind: "needs-reinstall", desired: "custom", wrap: "stock-unmarked" };
   }
   return { kind: "ok", desired: desired.kind, wrap: wrap.kind };
+}
+
+export function loopbackExpose(): Expose {
+  return { kind: "loopback" };
 }
 
 type _OfficialCannotHop = OfficialBox extends { hop: LoopbackHop } ? never : true;

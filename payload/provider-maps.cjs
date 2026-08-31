@@ -21,11 +21,20 @@ function isGrokRoute(modelId, baseUrl) {
   return GROK_MODEL_RE.test(String(modelId || "")) || /api\.x\.ai/.test(String(baseUrl || ""));
 }
 
+function thinkingOff(body) {
+  body.thinking = { type: "disabled" };
+}
+
 function applyGlm(body, parameters) {
   var fast = param(parameters, "fast");
   if (fast === true || String(fast).toLowerCase() === "true") {
-    body.thinking = { type: "disabled" };
+    thinkingOff(body);
     return "glm-fast-off";
+  }
+  var thinking = param(parameters, "thinking");
+  if (thinking === false || String(thinking).toLowerCase() === "false") {
+    thinkingOff(body);
+    return "glm-thinking-off";
   }
   var effort = param(parameters, "effort");
   var glmEffort = { low: "low", medium: "medium", high: "high", max: "max", xhigh: "max" };
@@ -34,11 +43,6 @@ function applyGlm(body, parameters) {
     if (!body.thinking) body.thinking = { type: "enabled" };
     if (body.reasoning_effort == null) body.reasoning_effort = token;
     return "glm-effort";
-  }
-  var thinking = param(parameters, "thinking");
-  if (thinking === false || String(thinking).toLowerCase() === "false") {
-    body.thinking = { type: "disabled" };
-    return "glm-thinking-off";
   }
   return null;
 }
@@ -54,6 +58,10 @@ function applyGrok(body, maxMode, parameters) {
     body.reasoning_effort = "low";
     return "grok-fast";
   }
+  var thinking = param(parameters, "thinking");
+  if (thinking === false || String(thinking).toLowerCase() === "false") {
+    return "grok-thinking-off";
+  }
   var effort = param(parameters, "effort");
   if (effort != null && Object.prototype.hasOwnProperty.call(effortToXai, String(effort))) {
     body.reasoning_effort = effortToXai[String(effort)];
@@ -63,6 +71,11 @@ function applyGrok(body, maxMode, parameters) {
 }
 
 function applyGeneric(body, parameters) {
+  var thinking = param(parameters, "thinking");
+  if (thinking === false || String(thinking).toLowerCase() === "false") {
+    thinkingOff(body);
+    return "openai-thinking-off";
+  }
   var effort = param(parameters, "effort");
   var openaiEffort = { low: "low", medium: "medium", high: "high", max: "high", xhigh: "high" };
   var token = effort != null ? openaiEffort[String(effort)] : undefined;

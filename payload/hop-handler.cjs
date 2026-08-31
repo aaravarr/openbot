@@ -5,6 +5,7 @@ var http = require("http");
 var https = require("https");
 var { URL } = require("url");
 var path = require("path");
+var { toOpenAIMessages } = require("./openai-messages.cjs");
 
 var TIMEOUT_MS = Number(process.env.OPENBOT_HOP_TIMEOUT || "1800000");
 var HIGH_AGENT_MAX_TOKENS = 65536;
@@ -256,6 +257,9 @@ async function handleCompletions(req, res) {
     return;
   }
   body.model = route.model.slug;
+  if (Array.isArray(body.messages)) {
+    body.messages = toOpenAIMessages(body.messages);
+  }
   applyMaxTokens(body, route.model);
   applyMaps(body, {
     modelId: route.model.slug,

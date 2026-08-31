@@ -332,3 +332,67 @@ test("hop does not serve /v1/responses or /v1/messages", async () => {
     hop.child.kill("SIGTERM");
   }
 });
+
+test("hop fills tool_call_id on tool messages before the upstream", async () => {
+  const upstream = await captureUpstream();
+  const hop = await startHop({
+    plan: {
+      kind: "custom",
+      catalog: {
+        providers: [
+          {
+            id: "deepseek",
+            name: "DeepSeek",
+            origin: `http://127.0.0.1:${String(upstream.port)}/v1`,
+            maxTokensDefault: 65536,
+            mapFile: "provider-maps.cjs",
+          },
+        ],
+        models: [{ id: "deepseek:v4", providerId: "deepseek", slug: "deepseek-v4-flash", parameters: [] }],
+        bindings: [],
+      },
+    },
+    secrets: { providers: { deepseek: "sk-deepseek" } },
+  });
+  try {
+    const out = await post(
+      hop.port,
+      {
+        model: "deepseek-v4-flash",
+        messages: [
+          { role: "user", content: "hi" },
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [{ id: "call_abc", type: "function", function: { name: "Read", arguments: "{}" } }],
+          },
+          { role: "tool", content: '{"file":"huge"}' },
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "next" },
+              { type: "tool-call", toolCallId: "call_def", toolName: "Grep", args: { q: "x" } },
+            ],
+          },
+          {
+            role: "tool",
+            content: [{ type: "tool-result", toolCallId: "call_def", result: { hits: 1 } }],
+          },
+        ],
+      },
+      { Authorization: "Bearer openbot-runtime" },
+    );
+    assert.equal(out.status, 200);
+    const body = upstream.getBody();
+    const messages = body?.messages as { role: string; tool_call_id?: string; tool_calls?: { id: string }[] }[];
+    assert.equal(messages[2]?.role, "tool");
+    assert.equal(messages[2]?.tool_call_id, "call_abc");
+    assert.equal(messages[4]?.role, "tool");
+    assert.equal(messages[4]?.tool_call_id, "call_def");
+    assert.equal(messages[3]?.tool_calls?.[0]?.id, "call_def");
+  } finally {
+    hop.child.kill("SIGTERM");
+    upstream.server.close();
+  }
+});
+

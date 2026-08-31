@@ -4,6 +4,7 @@ var fs = require("fs");
 var http = require("http");
 var https = require("https");
 var { URL } = require("url");
+var { toOpenAIMessages } = require("./openai-messages.cjs");
 
 var PLAN = process.env.OPENBOT_PLAN || "/home/box/sand-data/openbot-plan.json";
 var LOG = process.env.OPENBOT_LOG || "/tmp/openbot-session.log";
@@ -164,38 +165,6 @@ function resolveAgent(args) {
     providerId: found.providerId,
     maxOutputTokens: lookupMaxOutput(plan, found),
   };
-}
-
-function contentToText(content) {
-  if (content == null) return "";
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return JSON.stringify(content);
-  var bits = [];
-  for (var i = 0; i < content.length; i++) {
-    var p = content[i];
-    if (p == null) continue;
-    if (typeof p === "string") bits.push(p);
-    else if (p.type === "text") bits.push(p.text || "");
-    else if (p.type === "image") bits.push("[image]");
-    else if (p.type === "tool-result") bits.push(typeof p.result === "string" ? p.result : JSON.stringify(p.result || p));
-    else bits.push(JSON.stringify(p));
-  }
-  return bits.join("\n");
-}
-
-function toOpenAIMessages(msgs) {
-  if (!Array.isArray(msgs)) return [{ role: "user", content: String(msgs || "") }];
-  var out = [];
-  for (var i = 0; i < msgs.length; i++) {
-    var m = msgs[i] || {};
-    var role = m.role;
-    if (role !== "system" && role !== "user" && role !== "assistant" && role !== "tool") role = "user";
-    var row = { role: role, content: contentToText(m.content) };
-    if (role === "tool" && m.toolCallId) row.tool_call_id = m.toolCallId;
-    if (role === "assistant" && Array.isArray(m.tool_calls)) row.tool_calls = m.tool_calls;
-    out.push(row);
-  }
-  return out.length ? out : [{ role: "user", content: "" }];
 }
 
 function postJson(urlStr, body) {
@@ -406,5 +375,6 @@ module.exports = {
   defaultMaxTokens: defaultMaxTokens,
   resolveAgent: resolveAgent,
   lookupMaxOutput: lookupMaxOutput,
+  toOpenAIMessages: toOpenAIMessages,
   HIGH_AGENT_MAX_TOKENS: HIGH_AGENT_MAX_TOKENS,
 };

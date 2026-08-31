@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   isCustom,
   keyedSet,
@@ -7,6 +8,7 @@ import {
   type TunnelState,
 } from "./api";
 import { hasSelectableReasoning, isReasoningLevel, labelReasoning, limitsFromModel } from "./model";
+import { MenuSelect } from "./MenuSelect";
 import { PhoneAccess } from "./PhoneAccess";
 
 export function Chat({
@@ -30,6 +32,7 @@ export function Chat({
   const activeProvider = active ? providerById(state, active.providerId) : undefined;
   const activeNeedsKey = Boolean(active && !keyed.has(active.providerId));
   const tunnel: TunnelState = state.snapshot?.tunnel ?? { kind: "off" };
+  const [openId, setOpenId] = useState<string | null>(null);
 
   return (
     <section aria-labelledby="now-title">
@@ -79,12 +82,11 @@ export function Chat({
           const need = !keyed.has(model.providerId);
           const levels = limitsFromModel(model).reasoningLevels;
           const showIntensity = hasSelectableReasoning(levels);
-          const rowClass = [
-            "line",
-            "line-row",
-            showIntensity ? "" : "line-row-plain",
-            on ? "is-on" : "",
-          ]
+          const current =
+            isReasoningLevel(model.activeReasoning) && levels.includes(model.activeReasoning)
+              ? model.activeReasoning
+              : "default";
+          const rowClass = ["line", "line-row", showIntensity ? "" : "line-row-plain", on ? "is-on" : ""]
             .filter(Boolean)
             .join(" ");
           return (
@@ -109,26 +111,27 @@ export function Chat({
                 </span>
               </button>
               {showIntensity ? (
-                <label className="line-intensity">
-                  <span className="visually-hidden">Thinking for {model.slug}</span>
-                  <select
-                    value={isReasoningLevel(model.activeReasoning) && levels.includes(model.activeReasoning) ? model.activeReasoning : "default"}
-                    disabled={busy || need}
-                    onChange={(event) => {
-                      if (need) {
-                        onNeedKey(model.providerId);
-                        return;
-                      }
-                      onUse(model.id, event.target.value);
-                    }}
-                  >
-                    {levels.map((level) => (
-                      <option key={level} value={level}>
-                        {labelReasoning(level)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <MenuSelect
+                  label={`Thinking for ${model.slug}`}
+                  value={current}
+                  options={levels.map((level) => ({ value: level, label: labelReasoning(level) }))}
+                  disabled={busy}
+                  open={openId === model.id}
+                  onOpenChange={(next) => {
+                    if (next && need) {
+                      onNeedKey(model.providerId);
+                      return;
+                    }
+                    setOpenId(next ? model.id : null);
+                  }}
+                  onChange={(level) => {
+                    if (need) {
+                      onNeedKey(model.providerId);
+                      return;
+                    }
+                    onUse(model.id, level);
+                  }}
+                />
               ) : null}
               <span className="line-aside">
                 {need ? (

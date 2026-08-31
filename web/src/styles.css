@@ -536,21 +536,100 @@ body {
 }
 
 .line-intensity {
+  position: relative;
   margin: 0;
   gap: 0;
 }
 
-.line-intensity select {
+.menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   width: auto;
-  max-width: 9.5rem;
+  min-width: 6.75rem;
   height: 32px;
-  padding: 0 8px;
-  font-size: 16px;
-  font-family: var(--sans);
+  min-height: 32px;
+  padding: 0 10px 0 12px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 9999px;
   background: var(--surface-card);
   color: var(--ink);
-  border: 1px solid var(--hairline-strong);
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.menu-trigger:hover:not(:disabled) {
+  border-color: var(--ink);
+  background: var(--canvas-soft);
+}
+
+.menu-trigger.is-open {
+  border-color: var(--ink);
+  background: var(--canvas-soft);
+}
+
+.menu-trigger-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-chevron {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.menu-trigger.is-open .menu-chevron {
+  transform: rotate(180deg);
+}
+
+.menu-panel {
+  position: fixed;
+  z-index: 24;
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  background: var(--surface-card);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+
+.menu-option {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 0;
   border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.3;
+  text-align: left;
+}
+
+.menu-option:hover:not(:disabled),
+.menu-option.is-active:not(.is-on) {
+  background: var(--canvas-soft);
+}
+
+.menu-option.is-on {
+  background: var(--ink);
+  color: var(--canvas);
+}
+
+.menu-option.is-on:hover:not(:disabled) {
+  background: var(--ink);
+  color: var(--canvas);
 }
 
 .phone-access {
@@ -837,7 +916,6 @@ input.mono,
   font-size: 16px;
 }
 
-select,
 textarea {
   width: 100%;
   font-family: var(--sans);
@@ -929,11 +1007,12 @@ button:disabled {
 
 button:focus-visible,
 input:focus-visible,
-select:focus-visible,
 textarea:focus-visible,
 .preset:focus-visible,
 .line:focus-visible,
 .line-hit:focus-visible,
+.menu-trigger:focus-visible,
+.menu-option:focus-visible,
 .chip:focus-visible,
 .rail-item:focus-visible,
 .row-link:focus-visible,

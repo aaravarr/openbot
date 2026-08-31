@@ -32,6 +32,7 @@ test("align names needs-reinstall when custom is desired and wrap is stock", () 
     secretsPath,
     hop: LOOPBACK_HOP,
     catalog: { providers: [], models: [], bindings: [] },
+    expose: { kind: "loopback" },
   };
   const a = align(desired, { kind: "stock-unmarked" });
   assert.equal(a.kind, "needs-reinstall");
@@ -44,6 +45,7 @@ test("align is ok when official is desired and wrap is stock", () => {
     hopListen: { kind: "stop-owned" },
     uiListen: { kind: "loopback", host: LOOPBACK, port: SERVICE_PORT },
     secretsPath,
+    expose: { kind: "loopback" },
   };
   const a = align(desired, { kind: "stock-unmarked" });
   assert.equal(a.kind, "ok");
@@ -56,6 +58,7 @@ test("official box has no catalog and no hop", () => {
     hopListen: { kind: "stop-owned" },
     uiListen: { kind: "loopback", host: LOOPBACK, port: SERVICE_PORT },
     secretsPath,
+    expose: { kind: "loopback" },
   };
   assert.equal(official.kind, "official");
   assert.equal("catalog" in official ? official.catalog : undefined, undefined);

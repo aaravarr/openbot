@@ -101,19 +101,44 @@ function loadKey(providerId) {
   return providers[providerId];
 }
 
+function levelsHaveDefault(model) {
+  var levels = model && model.reasoningLevels;
+  if (!Array.isArray(levels)) return false;
+  for (var i = 0; i < levels.length; i++) {
+    if (levels[i] === "default") return true;
+  }
+  return false;
+}
+
+function hopReasoning(model) {
+  var level = model && typeof model.activeReasoning === "string" ? model.activeReasoning : "";
+  if (!levelsHaveDefault(model) && (level === "" || level === "none")) {
+    return "default";
+  }
+  if (!level) return "default";
+  return level;
+}
+
 function hopParameters(model) {
   var params = [];
   var rows = model && model.parameters;
   if (Array.isArray(rows)) {
     for (var i = 0; i < rows.length; i++) {
       var p = rows[i];
-      if (p && p.id && p.id !== "effort") params.push(p);
+      if (!p || !p.id) continue;
+      if (p.id === "effort" || p.id === "thinking") continue;
+      params.push(p);
     }
   }
-  var level = model && typeof model.activeReasoning === "string" ? model.activeReasoning : "none";
-  if (level && level !== "none") {
-    params.push({ id: "effort", value: String(level) });
+  var level = hopReasoning(model);
+  if (level === "default") {
+    return params;
   }
+  if (level === "none") {
+    params.push({ id: "thinking", value: "false" });
+    return params;
+  }
+  params.push({ id: "effort", value: String(level) });
   return params;
 }
 
@@ -273,4 +298,5 @@ exports.sendJson = sendJson;
 exports.lookupRoute = lookupRoute;
 exports.completionsUrl = completionsUrl;
 exports.hopParameters = hopParameters;
+exports.hopReasoning = hopReasoning;
 exports.applyMaxTokens = applyMaxTokens;

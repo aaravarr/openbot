@@ -4,8 +4,10 @@ import {
   modelById,
   providerById,
   type BoxState,
+  type TunnelState,
 } from "./api";
-import { hasSelectableReasoning, labelReasoning, limitsFromModel } from "./model";
+import { hasSelectableReasoning, isReasoningLevel, labelReasoning, limitsFromModel } from "./model";
+import { PhoneAccess } from "./PhoneAccess";
 
 export function Chat({
   state,
@@ -13,20 +15,21 @@ export function Chat({
   onOfficial,
   onUse,
   onNeedKey,
+  onExpose,
 }: {
   state: BoxState;
   busy: boolean;
   onOfficial: () => void;
   onUse: (modelId: string, reasoning?: string) => void;
   onNeedKey: (providerId: string) => void;
+  onExpose: (expose: "cloudflare" | "off") => void;
 }) {
   const custom = isCustom(state);
   const keyed = keyedSet(state);
   const active = modelById(state, state.activeModelId);
   const activeProvider = active ? providerById(state, active.providerId) : undefined;
-  const limits = active ? limitsFromModel(active) : null;
-  const showReason = custom && active && hasSelectableReasoning(limits?.reasoningLevels);
   const activeNeedsKey = Boolean(active && !keyed.has(active.providerId));
+  const tunnel: TunnelState = state.snapshot?.tunnel ?? { kind: "off" };
 
   return (
     <section aria-labelledby="now-title">
@@ -40,7 +43,7 @@ export function Chat({
             <p className="identity-sub">
               {activeNeedsKey
                 ? `${activeProvider?.name ?? "Provider"} · needs an API key`
-                : (activeProvider?.name ?? "")}
+                : `${activeProvider?.name ?? ""}${active.activeReasoning ? ` · ${labelReasoning(active.activeReasoning)}` : ""}`}
             </p>
           </>
         ) : (
@@ -51,29 +54,6 @@ export function Chat({
             <p className="identity-sub">Stock xAI model in the Grok Bot app</p>
           </>
         )}
-
-        {showReason && active && !activeNeedsKey ? (
-          <div className="reason-block">
-            <p className="section-label">Reasoning</p>
-            <div className="chip-row" role="group" aria-label={`Reasoning for ${active.slug}`}>
-              {limits?.reasoningLevels.map((level) => {
-                const on = active.activeReasoning === level;
-                return (
-                  <button
-                    key={level}
-                    type="button"
-                    className={on ? "chip chip-on" : "chip"}
-                    aria-pressed={on}
-                    disabled={busy}
-                    onClick={() => onUse(active.id, level)}
-                  >
-                    {labelReasoning(level)}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
       </div>
 
       <p className="section-label" id="models-heading">
@@ -97,27 +77,59 @@ export function Chat({
           const provider = providerById(state, model.providerId);
           const on = custom && state.activeModelId === model.id;
           const need = !keyed.has(model.providerId);
+          const levels = limitsFromModel(model).reasoningLevels;
+          const showIntensity = hasSelectableReasoning(levels);
+          const rowClass = [
+            "line",
+            "line-row",
+            showIntensity ? "" : "line-row-plain",
+            on ? "is-on" : "",
+          ]
+            .filter(Boolean)
+            .join(" ");
           return (
-            <button
-              key={model.id}
-              type="button"
-              className={on ? "line is-on" : "line"}
-              aria-pressed={on}
-              disabled={busy}
-              role="listitem"
-              onClick={() => {
-                if (need) {
-                  onNeedKey(model.providerId);
-                  return;
-                }
-                onUse(model.id);
-              }}
-            >
-              <span className="line-main">
-                <span className="line-slug">{model.slug}</span>
-                <span className="line-sep">·</span>
-                <span className="line-provider">{provider?.name ?? ""}</span>
-              </span>
+            <div key={model.id} className={rowClass} role="listitem">
+              <button
+                type="button"
+                className="line-hit"
+                aria-pressed={on}
+                disabled={busy}
+                onClick={() => {
+                  if (need) {
+                    onNeedKey(model.providerId);
+                    return;
+                  }
+                  onUse(model.id);
+                }}
+              >
+                <span className="line-main">
+                  <span className="line-slug">{model.slug}</span>
+                  <span className="line-sep">·</span>
+                  <span className="line-provider">{provider?.name ?? ""}</span>
+                </span>
+              </button>
+              {showIntensity ? (
+                <label className="line-intensity">
+                  <span className="visually-hidden">Thinking for {model.slug}</span>
+                  <select
+                    value={isReasoningLevel(model.activeReasoning) && levels.includes(model.activeReasoning) ? model.activeReasoning : "default"}
+                    disabled={busy || need}
+                    onChange={(event) => {
+                      if (need) {
+                        onNeedKey(model.providerId);
+                        return;
+                      }
+                      onUse(model.id, event.target.value);
+                    }}
+                  >
+                    {levels.map((level) => (
+                      <option key={level} value={level}>
+                        {labelReasoning(level)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
               <span className="line-aside">
                 {need ? (
                   <span className="line-need">Needs key</span>
@@ -125,10 +137,11 @@ export function Chat({
                   <span className="badge badge-live">On</span>
                 ) : null}
               </span>
-            </button>
+            </div>
           );
         })}
       </div>
+      <PhoneAccess tunnel={tunnel} busy={busy} onExpose={onExpose} />
       <p className="page-foot">
         Grok Bot uses one model at a time. Keys stay on this Computer. Send a new message after you switch.
       </p>

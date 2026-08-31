@@ -1,5 +1,5 @@
-export const REASONING_LEVELS = ["none", "low", "medium", "high", "max", "xhigh"] as const;
-export const DEFAULT_REASONING_LEVELS = ["none", "low", "medium", "high"] as const;
+export const REASONING_LEVELS = ["default", "none", "low", "medium", "high", "max", "xhigh"] as const;
+export const DEFAULT_REASONING_LEVELS = ["default", "none", "low", "medium", "high"] as const;
 export const MODALITIES = ["text", "image", "video", "audio"] as const;
 export const DEFAULT_MODALITIES = ["text"] as const;
 export const DEFAULT_CONTEXT_TOKENS = 128000;
@@ -39,8 +39,11 @@ export function labelReasoning(level: string): string {
   if (level === "xhigh") {
     return "Extra high";
   }
+  if (level === "default") {
+    return "Default";
+  }
   if (level === "none") {
-    return "None";
+    return "Off";
   }
   return level.slice(0, 1).toUpperCase() + level.slice(1);
 }
@@ -50,7 +53,7 @@ export function labelModality(item: string): string {
 }
 
 export function hasSelectableReasoning(levels: readonly string[] | undefined): boolean {
-  return Array.isArray(levels) && levels.some((level) => level !== "none");
+  return Array.isArray(levels) && levels.some((level) => level !== "default");
 }
 
 function keepOrder<T extends string>(universe: readonly T[], selected: ReadonlySet<string>): T[] {
@@ -58,15 +61,19 @@ function keepOrder<T extends string>(universe: readonly T[], selected: ReadonlyS
 }
 
 export function toggleReasoning(list: readonly ReasoningLevel[], level: ReasoningLevel): ReasoningLevel[] {
+  if (level === "default") {
+    return keepOrder(REASONING_LEVELS, new Set([...list, "default"]));
+  }
   const set = new Set(list);
   if (set.has(level)) {
     if (set.size === 1) {
-      return [...list];
+      return keepOrder(REASONING_LEVELS, new Set([...list, "default"]));
     }
     set.delete(level);
   } else {
     set.add(level);
   }
+  set.add("default");
   return keepOrder(REASONING_LEVELS, set);
 }
 
@@ -108,12 +115,13 @@ export function limitsFromModel(model: {
   reasoningLevels?: readonly string[];
   modalities?: readonly string[];
 }): ModelLimits {
-  const reasoningLevels = (model.reasoningLevels ?? DEFAULT_REASONING_LEVELS).filter(isReasoningLevel);
+  const filtered = (model.reasoningLevels ?? DEFAULT_REASONING_LEVELS).filter(isReasoningLevel);
+  const withDefault = filtered.includes("default") ? filtered : (["default", ...filtered] as ReasoningLevel[]);
   const modalities = (model.modalities ?? DEFAULT_MODALITIES).filter(isModality);
   return {
     contextTokens: model.contextTokens && model.contextTokens > 0 ? model.contextTokens : DEFAULT_CONTEXT_TOKENS,
     maxOutputTokens: model.maxOutputTokens && model.maxOutputTokens > 0 ? model.maxOutputTokens : DEFAULT_MAX_OUTPUT,
-    reasoningLevels: reasoningLevels.length ? reasoningLevels : [...DEFAULT_REASONING_LEVELS],
+    reasoningLevels: withDefault.length ? withDefault : [...DEFAULT_REASONING_LEVELS],
     modalities: modalities.length ? modalities : [...DEFAULT_MODALITIES],
   };
 }

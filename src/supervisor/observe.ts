@@ -3,6 +3,7 @@ import {
   OPENBOT_MARKER,
   SERVICE_PORT,
   align,
+  loopbackExpose,
   type CustomBox,
   type HostObserved,
   type OfficialBox,
@@ -12,6 +13,7 @@ import {
 import { censusHost } from "../host/census.ts";
 import { type BoxPaths } from "./paths.ts";
 import { classifyPort, type FsDeps, type ProcDeps } from "./procs.ts";
+import { readTunnelCache } from "./tunnel.ts";
 
 export type SupervisorDeps = {
   readonly paths: BoxPaths;
@@ -55,6 +57,7 @@ function officialStub(paths: BoxPaths): OfficialBox {
     hopListen: { kind: "stop-owned" },
     uiListen: { kind: "loopback", host: LOOPBACK, port: SERVICE_PORT },
     secretsPath: paths.secrets,
+    expose: loopbackExpose(),
   };
 }
 
@@ -67,6 +70,7 @@ function customStub(paths: BoxPaths): CustomBox {
     secretsPath: paths.secrets,
     catalog: { providers: [], models: [], bindings: [] },
     hop: { host: LOOPBACK, port: SERVICE_PORT },
+    expose: loopbackExpose(),
   };
 }
 
@@ -96,5 +100,12 @@ export async function observe(deps: SupervisorDeps): Promise<Snapshot> {
   const hostPids = deps.procs.hostPids(deps.paths.hostMain);
   const host: HostObserved =
     hostPids[0] !== undefined ? { kind: "running-owned", pid: hostPids[0] } : { kind: "absent" };
-  return { wrap, hopListen: service, uiListen: service, host, alignment: align(desired, wrap) };
+  return {
+    wrap,
+    hopListen: service,
+    uiListen: service,
+    host,
+    alignment: align(desired, wrap),
+    tunnel: readTunnelCache(deps),
+  };
 }

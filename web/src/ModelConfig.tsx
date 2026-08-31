@@ -63,6 +63,7 @@ export function ModelConfig({
             );
           })}
         </div>
+        <p className="hint-soft">Default omits thinking fields. Off sends an explicit disable.</p>
       </div>
       <div>
         <p className="model-config-title" id="modalities-label">

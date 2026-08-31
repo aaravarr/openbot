@@ -71,8 +71,9 @@ test("UI custom save keeps the secret off DesiredState", () => {
     const model = parsed.desired.catalog.models[0];
     assert.equal(model?.contextTokens, 128000);
     assert.equal(model?.maxOutputTokens, HIGH_AGENT_MAX_TOKENS);
-    assert.equal(model?.activeReasoning, "none");
+    assert.equal(model?.activeReasoning, "default");
     assert.deepEqual(model?.modalities, ["text"]);
+    assert.equal(parsed.desired.expose.kind, "loopback");
   }
   assert.equal(parsed.secret?.bytes, "sk-live");
 });
@@ -121,7 +122,8 @@ test("upsert-provider stores context, output, reasoning levels, and modalities",
   const model = parsed.desired.catalog.models[0];
   assert.equal(model?.contextTokens, 200000);
   assert.equal(model?.maxOutputTokens, 8192);
-  assert.deepEqual(model?.reasoningLevels, ["none", "low", "high"]);
+  assert.deepEqual(model?.reasoningLevels, ["default", "none", "low", "high"]);
+  assert.equal(model?.activeReasoning, "default");
   assert.deepEqual(model?.modalities, ["text", "image"]);
 });
 
@@ -146,8 +148,8 @@ test("upsert-model updates limits without dropping the wildcard", () => {
   const model = parsed.desired.catalog.models[0];
   assert.equal(model?.contextTokens, 96000);
   assert.equal(model?.maxOutputTokens, 4096);
-  assert.deepEqual(model?.reasoningLevels, ["low", "high"]);
-  assert.equal(model?.activeReasoning, "low");
+  assert.deepEqual(model?.reasoningLevels, ["default", "low", "high"]);
+  assert.equal(model?.activeReasoning, "default");
   assert.deepEqual(model?.modalities, ["text", "video"]);
   assert.equal(parsed.desired.catalog.bindings[0]?.modelId, "zhipu:glm-5.3-flash");
 });
@@ -174,7 +176,7 @@ test("upsert-model adds a new slug without switching the wildcard", () => {
   const added = parsed.desired.catalog.models.find((row) => row.slug === "glm-5.3");
   assert.equal(added?.contextTokens, 200000);
   assert.equal(added?.maxOutputTokens, 65536);
-  assert.deepEqual(added?.reasoningLevels, ["none", "low", "medium", "high"]);
+  assert.deepEqual(added?.reasoningLevels, ["default", "none", "low", "medium", "high"]);
   assert.deepEqual(added?.modalities, ["text", "image"]);
   assert.equal(parsed.desired.catalog.bindings[0]?.modelId, "zhipu:glm-5.3-flash");
 });
@@ -204,9 +206,9 @@ test("use-model records the selected reasoning level", () => {
   assert.equal(parsed.desired.catalog.bindings[0]?.modelId, "openai:gpt-4.1");
 });
 
-test("use-model ignores a reasoning level the model does not list", () => {
+test("use-model records Off as none when default is already listed", () => {
   const parsed = parseUiProviderSave(
-    { kind: "use-model", modelId: "zhipu:glm-5.3-flash", reasoning: "xhigh" },
+    { kind: "use-model", modelId: "zhipu:glm-5.3-flash", reasoning: "none" },
     paths(),
     zhipuCatalog(),
   );
@@ -217,10 +219,62 @@ test("use-model ignores a reasoning level the model does not list", () => {
   assert.equal(parsed.desired.catalog.models[0]?.activeReasoning, "none");
 });
 
+test("use-model ignores a reasoning level the model does not list", () => {
+  const parsed = parseUiProviderSave(
+    { kind: "use-model", modelId: "zhipu:glm-5.3-flash", reasoning: "xhigh" },
+    paths(),
+    zhipuCatalog(),
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") {
+    return;
+  }
+  assert.equal(parsed.desired.catalog.models[0]?.activeReasoning, "default");
+});
+
 test("official does not request a catalog wipe", () => {
   const parsed = parseUiProviderSave({ kind: "official" }, paths(), zhipuCatalog());
   assert.equal(parsed.desired.kind, "official");
   assert.equal(parsed.catalogWrite, undefined);
+});
+
+test("official keeps a saved Cloudflare expose", () => {
+  const parsed = parseUiProviderSave({ kind: "official" }, paths(), zhipuCatalog(), {
+    expose: { kind: "cloudflare-quick" },
+  });
+  assert.equal(parsed.desired.kind, "official");
+  if (parsed.desired.kind !== "official") {
+    return;
+  }
+  assert.equal(parsed.desired.expose.kind, "cloudflare-quick");
+});
+
+test("set-expose on custom stays custom", () => {
+  const parsed = parseUiProviderSave(
+    { kind: "set-expose", expose: "cloudflare" },
+    paths(),
+    zhipuCatalog(),
+    { mode: "custom" },
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") {
+    return;
+  }
+  assert.equal(parsed.desired.expose.kind, "cloudflare-quick");
+});
+
+test("set-expose on official stays official", () => {
+  const parsed = parseUiProviderSave(
+    { kind: "set-expose", expose: "off" },
+    paths(),
+    zhipuCatalog(),
+    { mode: "official", expose: { kind: "cloudflare-quick" } },
+  );
+  assert.equal(parsed.desired.kind, "official");
+  if (parsed.desired.kind !== "official") {
+    return;
+  }
+  assert.equal(parsed.desired.expose.kind, "loopback");
 });
 
 test("remove last provider becomes official", () => {

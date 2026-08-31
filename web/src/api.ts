@@ -17,9 +17,21 @@ export type Model = {
   modalities: string[];
 };
 
+export type TunnelState =
+  | { kind: "off" }
+  | {
+      kind: "cloudflare-quick";
+      url: string;
+      internal: string;
+      pid: number;
+      qr?: string;
+    }
+  | { kind: "error"; message: string };
+
 export type Snapshot = {
   wrap: { kind: string };
   alignment?: { kind: string };
+  tunnel?: TunnelState;
 };
 
 export type BoxState = {
@@ -54,7 +66,8 @@ export type Command =
     } & ModelLimitsPayload)
   | { kind: "use-model"; modelId: string; reasoning?: string }
   | { kind: "remove-provider"; providerId: string }
-  | { kind: "set-secret"; providerId: string; secret: string };
+  | { kind: "set-secret"; providerId: string; secret: string }
+  | { kind: "set-expose"; expose: "cloudflare" | "off" };
 
 function asError(data: unknown, fallback: string): Error {
   if (typeof data === "object" && data !== null) {
@@ -82,11 +95,12 @@ function asError(data: unknown, fallback: string): Error {
 function hydrateModel(row: Model): Model {
   const limits = limitsFromModel(row);
   const active = typeof row.activeReasoning === "string" ? row.activeReasoning : "";
-  const activeReasoning = isReasoningLevel(active) && limits.reasoningLevels.includes(active)
-    ? active
-    : limits.reasoningLevels.includes("none")
-      ? "none"
-      : limits.reasoningLevels[0] ?? "none";
+  const activeReasoning =
+    isReasoningLevel(active) && limits.reasoningLevels.includes(active)
+      ? active
+      : limits.reasoningLevels.includes("default")
+        ? "default"
+        : (limits.reasoningLevels[0] ?? "default");
   return {
     id: row.id,
     providerId: row.providerId,

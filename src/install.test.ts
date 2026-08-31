@@ -83,12 +83,16 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
       OPENBOT_SAND_DATA: sandData,
       OPENBOT_SRC: src,
       OPENBOT_DEST: path.join(sandData, "openbot"),
+      OPENBOT_TUNNEL: "off",
     },
   });
 
   try {
     assert.equal(result.status, 0, result.stderr || result.stdout);
-    assert.match(result.stdout, /OpenBot UI: http:\/\/127\.0\.0\.1:9280/);
+    assert.match(result.stdout, /OpenBot is ready/);
+    assert.match(result.stdout, /This Computer/);
+    assert.match(result.stdout, /http:\/\/127\.0\.0\.1:9280/);
+    assert.equal(result.stdout.includes("wrapBytesChanged"), false);
     assert.equal(readFileSync(hostMain, "utf8").includes(OPENBOT_MARKER), false);
     assert.equal(readFileSync(hostMain, "utf8").includes("function createProtoSessionProvider(client)"), true);
     const html = await get(`${UI}/`);
@@ -122,6 +126,10 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     assert.match(app.body, /Max output/);
     assert.match(app.body, /Reasoning levels/);
     assert.match(app.body, /Input types/);
+    assert.match(app.body, /Default omits thinking fields/);
+    assert.match(app.body, /Open from phone with Cloudflare Tunnel/);
+    assert.match(app.body, /Thinking for /);
+    assert.match(app.body, /\bOff\b/);
     assert.equal(app.body.includes("Catalog"), false);
     assert.equal(app.body.includes("Model slug"), false);
     assert.equal(app.body.includes("This chat"), false);

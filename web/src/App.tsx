@@ -11,12 +11,11 @@ import {
   type Command,
 } from "./api";
 import { Chat } from "./Chat";
-import { ModelPage } from "./ModelPage";
 import { ProviderPage } from "./ProviderPage";
 import { Rail } from "./Rail";
 import { Setup, type ProviderDraft } from "./Setup";
 import { go, paneKind, parseHash, type Route } from "./route";
-import { defaultLimits, labelReasoning, type ModelLimits } from "./model";
+import { labelReasoning, type ModelLimits } from "./model";
 
 type Toast = { text: string; error: boolean };
 
@@ -281,13 +280,11 @@ export function App() {
 
   const pane = paneKind(route);
   const provider =
-    route.kind === "provider" || route.kind === "model"
-      ? providerById(state, route.providerId)
-      : undefined;
+    route.kind === "provider" || route.kind === "model" ? providerById(state, route.providerId) : undefined;
   const model = route.kind === "model" ? modelById(state, route.modelId) : undefined;
   const missing = (route.kind === "provider" && !provider) || (route.kind === "model" && (!provider || !model));
   const shown: Route = missing ? { kind: "chat" } : route;
-  const shownPane = missing ? "chat" : pane;
+  const shownPane = missing ? "chat" : pane === "model" ? "provider" : pane;
 
   function back() {
     if (shown.kind === "model" && provider) {
@@ -295,6 +292,19 @@ export function App() {
       return;
     }
     go({ kind: "chat" });
+  }
+
+  async function saveModel(providerId: string, slug: string, limits: ModelLimits) {
+    await run(
+      "model",
+      {
+        kind: "upsert-model",
+        providerId,
+        slug,
+        ...limitsPayload(limits),
+      },
+      () => `Saved ${slug}.`,
+    );
   }
 
   let body;
@@ -308,7 +318,7 @@ export function App() {
         onCancel={() => go({ kind: "chat" })}
       />
     );
-  } else if (shown.kind === "provider" && provider) {
+  } else if ((shown.kind === "provider" || shown.kind === "model") && provider) {
     body = (
       <ProviderPage
         key={provider.id}
@@ -316,18 +326,20 @@ export function App() {
         provider={provider}
         busy={busy}
         focusKey={focusProviderId === provider.id}
-        onAddModel={async (providerId, slug) => {
+        {...(shown.kind === "model" && model ? { editModel: model } : {})}
+        onAddModel={async (providerId, slug, limits) => {
           await run(
             "model",
             {
               kind: "upsert-model",
               providerId,
               slug,
-              ...limitsPayload(defaultLimits()),
+              ...limitsPayload(limits),
             },
             () => `Added ${slug}.`,
           );
         }}
+        onSaveModel={saveModel}
         onUpdate={async (input) => {
           setFocusProviderId(null);
           await run(
@@ -345,31 +357,7 @@ export function App() {
         onUse={(modelId) => {
           void useChosen(modelId);
         }}
-      />
-    );
-  } else if (shown.kind === "model" && provider && model) {
-    body = (
-      <ModelPage
-        key={model.id}
-        provider={provider}
-        model={model}
-        busy={busy}
-        isOn={custom && state.activeModelId === model.id}
-        onSave={async (providerId, slug, limits: ModelLimits) => {
-          await run(
-            "model",
-            {
-              kind: "upsert-model",
-              providerId,
-              slug,
-              ...limitsPayload(limits),
-            },
-            () => `Saved ${slug}.`,
-          );
-        }}
-        onUse={(modelId) => {
-          void useChosen(modelId);
-        }}
+        onCloseModel={() => go({ kind: "provider", providerId: provider.id })}
       />
     );
   } else {
@@ -398,7 +386,7 @@ export function App() {
         <Rail providers={state.providers} route={shown} status={status} liveProviderId={liveProviderId} />
         <div className="pane-wrap">
           <main className="pane" id="main">
-            {shownPane !== "chat" ? (
+            {shown.kind !== "chat" ? (
               <button type="button" className="pane-back" onClick={back}>
                 Back
               </button>

@@ -1,76 +1,96 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { go } from "./route";
-import { keyedSet, modelsFor, type BoxState, type Provider } from "./api";
+import { keyedSet, modelsFor, type BoxState, type Model, type Provider } from "./api";
 import { BusyButton, InlineNote, SecretField, TextField, prevent } from "./fields";
-import { formatTokens, limitsFromModel } from "./model";
+import { Dialog } from "./Dialog";
+import { ModelConfig } from "./ModelConfig";
+import { defaultLimits, formatTokens, limitsFromModel, type ModelLimits } from "./model";
+
+type Sheet = "endpoint" | "key" | "add" | "remove" | null;
 
 export function ProviderPage({
   state,
   provider,
   busy,
   focusKey,
+  editModel,
   onAddModel,
+  onSaveModel,
   onUpdate,
   onRemove,
   onUse,
+  onCloseModel,
 }: {
   state: BoxState;
   provider: Provider;
   busy: boolean;
   focusKey: boolean;
-  onAddModel: (providerId: string, slug: string) => Promise<void>;
+  editModel?: Model;
+  onAddModel: (providerId: string, slug: string, limits: ModelLimits) => Promise<void>;
+  onSaveModel: (providerId: string, slug: string, limits: ModelLimits) => Promise<void>;
   onUpdate: (input: { providerId: string; name: string; origin: string; secret?: string }) => Promise<void>;
   onRemove: (providerId: string) => Promise<void>;
   onUse: (modelId: string) => void;
+  onCloseModel: () => void;
 }) {
   const models = modelsFor(state, provider.id);
   const hasKey = keyedSet(state).has(provider.id);
   const liveId = state.snapshot?.wrap.kind === "openbot-marked" ? state.activeModelId : null;
-  const [adding, setAdding] = useState(false);
+  const [sheet, setSheet] = useState<Sheet>(null);
   const [slug, setSlug] = useState("");
-  const [editingEndpoint, setEditingEndpoint] = useState(false);
+  const [addLimits, setAddLimits] = useState<ModelLimits>(defaultLimits);
+  const [editLimits, setEditLimits] = useState<ModelLimits>(() =>
+    editModel ? limitsFromModel(editModel) : defaultLimits(),
+  );
   const [name, setName] = useState(provider.name);
   const [origin, setOrigin] = useState(provider.origin);
   const [secret, setSecret] = useState("");
-  const [replaceKey, setReplaceKey] = useState(false);
-  const [confirmRemove, setConfirmRemove] = useState(false);
   const [note, setNote] = useState("");
   const [noteError, setNoteError] = useState(false);
-  const keyField = useRef<HTMLFormElement>(null);
-  const slugField = useRef<HTMLInputElement>(null);
-  const showKey = !hasKey || replaceKey || focusKey;
 
-  useEffect(() => {
-    setAdding(false);
+  const editOpen = Boolean(editModel);
+
+  const closeSheets = useCallback(() => {
+    setSheet(null);
     setSlug("");
-    setEditingEndpoint(false);
+    setAddLimits(defaultLimits());
     setName(provider.name);
     setOrigin(provider.origin);
     setSecret("");
-    setReplaceKey(false);
-    setConfirmRemove(false);
+  }, [provider.name, provider.origin]);
+
+  function openSheet(next: Exclude<Sheet, null>) {
+    if (editOpen) {
+      onCloseModel();
+    }
+    setNote("");
+    setNoteError(false);
+    setSheet(next);
+  }
+
+  useEffect(() => {
+    setSheet(null);
+    setSlug("");
+    setAddLimits(defaultLimits());
+    setName(provider.name);
+    setOrigin(provider.origin);
+    setSecret("");
     setNote("");
     setNoteError(false);
   }, [provider.id, provider.name, provider.origin]);
 
   useEffect(() => {
     if (focusKey) {
-      setReplaceKey(true);
+      setSheet("key");
     }
   }, [focusKey, provider.id]);
 
   useEffect(() => {
-    if (!showKey) {
-      return;
+    if (editModel) {
+      setEditLimits(limitsFromModel(editModel));
+      setSheet(null);
     }
-    keyField.current?.querySelector("input")?.focus();
-  }, [showKey, provider.id, focusKey]);
-
-  useEffect(() => {
-    if (adding) {
-      slugField.current?.focus();
-    }
-  }, [adding]);
+  }, [editModel?.id, editModel?.contextTokens, editModel?.maxOutputTokens, editModel?.activeReasoning]);
 
   async function run(label: string, work: () => Promise<void>) {
     setNote("");
@@ -85,17 +105,6 @@ export function ProviderPage({
     }
   }
 
-  function closeAdd() {
-    setAdding(false);
-    setSlug("");
-  }
-
-  function closeEndpoint() {
-    setEditingEndpoint(false);
-    setName(provider.name);
-    setOrigin(provider.origin);
-  }
-
   return (
     <div className="detail">
       <header className="detail-head">
@@ -103,11 +112,43 @@ export function ProviderPage({
           <h1 id="provider-title">{provider.name}</h1>
           <p className="caption-mono">{provider.origin}</p>
         </div>
-        <span className={hasKey ? "badge" : "badge badge-warn"}>{hasKey ? "Key saved" : "No API key"}</span>
+        <div className="detail-head-actions">
+          <button
+            type="button"
+            className="button-secondary nowrap"
+            disabled={busy}
+            aria-label="Edit endpoint"
+            onClick={() => {
+              setName(provider.name);
+              setOrigin(provider.origin);
+              openSheet("endpoint");
+            }}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            className="button-secondary nowrap"
+            disabled={busy}
+            aria-label={hasKey ? "Replace API key" : "Add API key"}
+            onClick={() => {
+              setSecret("");
+              openSheet("key");
+            }}
+          >
+            Key
+          </button>
+          <span className={hasKey ? "badge nowrap" : "badge badge-warn nowrap"}>{hasKey ? "Key saved" : "No API key"}</span>
+        </div>
       </header>
 
       <div>
-        <p className="section-label">Models</p>
+        <div className="section-head">
+          <p className="section-label">Models</p>
+          <button type="button" className="button-secondary nowrap" disabled={busy} onClick={() => openSheet("add")}>
+            Add model
+          </button>
+        </div>
         <div className="model-rows">
           {models.length === 0 ? (
             <p className="fine empty">No models yet.</p>
@@ -120,7 +161,7 @@ export function ProviderPage({
                   <button
                     type="button"
                     className="model-row-hit"
-                    aria-label={`Configure ${model.slug}`}
+                    aria-label={`Edit ${model.slug}`}
                     onClick={() =>
                       go({
                         kind: "model",
@@ -134,9 +175,9 @@ export function ProviderPage({
                   </button>
                   <div className="model-row-actions">
                     {on ? (
-                      <span className="badge badge-live">On</span>
+                      <span className="badge badge-live nowrap">On</span>
                     ) : (
-                      <button type="button" className="row-link" disabled={busy} onClick={() => onUse(model.id)}>
+                      <button type="button" className="row-link nowrap" disabled={busy} onClick={() => onUse(model.id)}>
                         Use
                       </button>
                     )}
@@ -146,59 +187,43 @@ export function ProviderPage({
             })
           )}
         </div>
-        <p className="hint-soft">Open a model to set the thinking list and limits. Use puts it on Chat.</p>
+        <p className="hint-soft">Open a model to edit limits. Use puts it on Chat. Thinking is chosen on Chat.</p>
       </div>
 
-      {adding ? (
-        <div>
-          <p className="section-label">New model</p>
-          <form
-            className="add-model"
-            onSubmit={prevent(async () => {
-              const next = slug.trim();
-              if (!next) {
-                setNote("Enter a model ID.");
-                setNoteError(true);
-                return;
-              }
-              if (models.some((row) => row.slug === next)) {
-                setNote("That model is already on this provider.");
-                setNoteError(true);
-                return;
-              }
-              await run(`Added ${next}.`, async () => {
-                await onAddModel(provider.id, next);
-                closeAdd();
-              });
-            })}
-          >
-            <label>
-              Model ID
-              <input
-                ref={slugField}
-                value={slug}
-                onChange={(event) => setSlug(event.target.value)}
-                placeholder="glm-5.3"
-                autoComplete="off"
-                className="mono-input"
-                disabled={busy}
-              />
-            </label>
-            <BusyButton type="submit" className="button-secondary" busy={busy} busyLabel="Adding…">
-              Add
+      {sheet === "remove" ? (
+        <div className="confirm-row">
+          <p className="fine">Remove {provider.name}? Models on it go away. Official Grok stays available.</p>
+          <div className="confirm-actions">
+            <button type="button" className="button-secondary nowrap" onClick={() => setSheet(null)}>
+              Cancel
+            </button>
+            <BusyButton
+              type="button"
+              className="button-danger nowrap"
+              busy={busy}
+              busyLabel="Removing…"
+              onClick={() => run("Provider removed.", () => onRemove(provider.id))}
+            >
+              Remove
             </BusyButton>
-          </form>
-          <button type="button" className="button-tertiary" disabled={busy} onClick={closeAdd}>
-            Cancel
-          </button>
+          </div>
         </div>
       ) : (
-        <button type="button" className="button-tertiary" disabled={busy} onClick={() => setAdding(true)}>
-          Add model
-        </button>
+        <div className="danger-zone">
+          <button
+            type="button"
+            className="button-tertiary danger-text"
+            disabled={busy}
+            onClick={() => openSheet("remove")}
+          >
+            Remove provider
+          </button>
+        </div>
       )}
 
-      {editingEndpoint ? (
+      {sheet === null && !editOpen ? <InlineNote text={note} error={noteError} /> : null}
+
+      <Dialog title="Endpoint" open={sheet === "endpoint"} onClose={closeSheets}>
         <form
           className="stack-form"
           onSubmit={prevent(async () => {
@@ -220,11 +245,10 @@ export function ProviderPage({
                 name: nextName,
                 origin: nextOrigin,
               });
-              setEditingEndpoint(false);
+              closeSheets();
             });
           })}
         >
-          <p className="section-label">Endpoint</p>
           <TextField name={`name-${provider.id}`} label="Name" value={name} required onChange={setName} />
           <TextField
             name={`origin-${provider.id}`}
@@ -236,24 +260,17 @@ export function ProviderPage({
             placeholder="https://api.openai.com/v1"
             onChange={setOrigin}
           />
+          <InlineNote text={note} error={noteError} />
           <div className="form-actions">
-            <BusyButton type="submit" className="button-secondary" busy={busy} busyLabel="Saving…">
+            <BusyButton type="submit" className="button-primary nowrap" busy={busy} busyLabel="Saving…">
               Save endpoint
             </BusyButton>
-            <button type="button" className="button-tertiary" disabled={busy} onClick={closeEndpoint}>
-              Cancel
-            </button>
           </div>
         </form>
-      ) : (
-        <button type="button" className="button-tertiary" disabled={busy} onClick={() => setEditingEndpoint(true)}>
-          Edit endpoint
-        </button>
-      )}
+      </Dialog>
 
-      {showKey ? (
+      <Dialog title={hasKey ? "Replace API key" : "API Key"} open={sheet === "key"} onClose={closeSheets}>
         <form
-          ref={keyField}
           className="stack-form"
           onSubmit={prevent(async () => {
             if (!secret.trim()) {
@@ -268,76 +285,104 @@ export function ProviderPage({
                 origin: provider.origin,
                 secret: secret.trim(),
               });
-              setSecret("");
-              setReplaceKey(false);
+              closeSheets();
             });
           })}
         >
           <SecretField
             name={`secret-${provider.id}`}
-            label={hasKey ? "Replace API key" : "API Key"}
+            label="API Key"
             value={secret}
             required
             placeholder="sk-…"
             onChange={setSecret}
           />
+          <InlineNote text={note} error={noteError} />
           <div className="form-actions">
-            <BusyButton type="submit" className="button-primary" busy={busy} busyLabel="Saving…">
+            <BusyButton type="submit" className="button-primary nowrap" busy={busy} busyLabel="Saving…">
               Save API Key
             </BusyButton>
-            {hasKey ? (
-              <button
-                type="button"
-                className="button-tertiary"
-                disabled={busy}
-                onClick={() => {
-                  setReplaceKey(false);
-                  setSecret("");
-                }}
-              >
-                Cancel
-              </button>
-            ) : null}
           </div>
         </form>
-      ) : (
-        <button type="button" className="button-tertiary" disabled={busy} onClick={() => setReplaceKey(true)}>
-          Replace API key
-        </button>
-      )}
+      </Dialog>
 
-      {confirmRemove ? (
-        <div className="confirm-row">
-          <p className="fine">Remove {provider.name}? Models on it go away. Official Grok stays available.</p>
-          <div className="confirm-actions">
-            <button type="button" className="button-secondary" onClick={() => setConfirmRemove(false)}>
-              Cancel
-            </button>
-            <BusyButton
-              type="button"
-              className="button-danger"
-              busy={busy}
-              busyLabel="Removing…"
-              onClick={() => run("Provider removed.", () => onRemove(provider.id))}
-            >
-              Remove
+      <Dialog title="New model" open={sheet === "add"} onClose={closeSheets}>
+        <form
+          className="stack-form"
+          onSubmit={prevent(async () => {
+            const next = slug.trim();
+            if (!next) {
+              setNote("Enter a model ID.");
+              setNoteError(true);
+              return;
+            }
+            if (models.some((row) => row.slug === next)) {
+              setNote("That model is already on this provider.");
+              setNoteError(true);
+              return;
+            }
+            await run(`Added ${next}.`, async () => {
+              await onAddModel(provider.id, next, addLimits);
+              closeSheets();
+            });
+          })}
+        >
+          <TextField
+            name={`model-id-${provider.id}`}
+            label="Model ID"
+            mono
+            value={slug}
+            required
+            placeholder="glm-5.3"
+            onChange={setSlug}
+          />
+          <ModelConfig value={addLimits} onChange={setAddLimits} />
+          <InlineNote text={note} error={noteError} />
+          <div className="form-actions">
+            <BusyButton type="submit" className="button-primary nowrap" busy={busy} busyLabel="Adding…">
+              Add model
             </BusyButton>
           </div>
-        </div>
-      ) : (
-        <div className="danger-zone">
-          <button
-            type="button"
-            className="button-tertiary danger-text"
-            disabled={busy}
-            onClick={() => setConfirmRemove(true)}
-          >
-            Remove provider
-          </button>
-        </div>
-      )}
+        </form>
+      </Dialog>
 
-      <InlineNote text={note} error={noteError} />
+      <Dialog
+        title={editModel?.slug ?? "Model"}
+        titleClassName="mono"
+        open={editOpen}
+        onClose={onCloseModel}
+        aside={
+          editModel ? (
+            liveId === editModel.id ? (
+              <span className="badge badge-live nowrap">On</span>
+            ) : (
+              <button type="button" className="button-secondary nowrap" disabled={busy} onClick={() => onUse(editModel.id)}>
+                Use
+              </button>
+            )
+          ) : null
+        }
+      >
+        {editModel ? (
+          <form
+            className="stack-form"
+            onSubmit={prevent(async () => {
+              await run("Saved.", async () => {
+                await onSaveModel(editModel.providerId, editModel.slug, editLimits);
+                onCloseModel();
+              });
+            })}
+          >
+            <ModelConfig value={editLimits} onChange={setEditLimits} />
+            <InlineNote text={note} error={noteError} />
+            <div className="form-actions">
+              <BusyButton type="submit" className="button-primary nowrap" busy={busy} busyLabel="Saving…">
+                Save model
+              </BusyButton>
+            </div>
+          </form>
+        ) : null}
+      </Dialog>
     </div>
   );
 }

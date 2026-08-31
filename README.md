@@ -50,11 +50,13 @@ openbot tunnel status
 4. Click **Start chatting**.
 5. Go back to Grok Bot and send a **new** message.
 
-The next turn uses the model you just connected. Context, max output, reasoning levels, and input types use defaults until you open that model and change them.
+The next turn uses the model you just connected. Context, max output, reasoning levels, and input types use defaults until you open that model on its provider and change them.
 
 ## Thinking intensity
 
-Each custom model has a thinking column on **Chat**, between the name and the On badge. Official Grok has no column. Pick the live value there. The model page only chooses which levels Chat may offer.
+On **Chat**, a **Thinking** module sits between Now and the model list. It shows chips for the **active** custom model’s allow-list. Official Grok has no module. A model that still needs a key has no module. Grok Bot sends the selected value on the next message.
+
+The model dialog only chooses which levels Chat may offer — it does not pick the live value.
 
 - **Default** — omit thinking fields. The upstream model uses its own default.
 - **Off** — send an explicit disable (`thinking: { type: "disabled" }` on GLM and generic OpenAI; Grok has no standard off field).
@@ -64,13 +66,12 @@ Older catalogs stored `none` for “leave it to the model.” OpenBot migrates t
 
 ## The control page
 
-The page has three levels. They are not stacked on one scroll.
+Two screens. Limits open as dialogs, not a third page of stacked forms.
 
-- **Chat** — which model Grok Bot uses on this Computer. Official Grok or one custom model. Thinking intensity is a column on each custom row. A quiet list switches `slug · provider`. No keys, no limits. Not per-conversation — one model at a time.
-- **Provider** — the account. Name and base URL sit in the header. **Edit endpoint** opens those two fields. **Save API Key** is its own control. Child model rows live here. **Add model** takes a model ID; open the model to set the thinking list, context, max output, and input types.
-- **Model** — a child of a provider. Breadcrumb like `OpenAI / gpt-4.1`. Reasoning levels (the Chat allow-list) first, then context, max output, and input types. **Save model** lives here. This form does not pick the live thinking value.
+- **Chat** — which model Grok Bot uses on this Computer. Official Grok or one custom model. **Thinking** is its own module for the model that is On. A quiet list switches `slug · provider`. No keys, no limits. Not per-conversation — one model at a time.
+- **Provider** — the account. The header always shows **Edit** (accessible name **Edit endpoint**), **Key**, and a Key saved badge. **Edit** opens name and base URL in a dialog. **Key** opens the API key dialog. **Add model** opens a **New model** dialog (model ID plus limits). Click a model row to edit limits in a dialog. **Use** puts that model on Chat. Thinking is chosen on Chat, not here.
 
-If a model still needs a key, Chat takes you to that provider instead of failing silently. You can still open a model and set limits before a key exists.
+If a model still needs a key, Chat takes you to that provider instead of failing silently. You can still open a model dialog and set limits before a key exists.
 
 Image, video, and audio are stored on the model for later. Chat still sends text.
 

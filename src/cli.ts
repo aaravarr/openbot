@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import fs from "node:fs";
-import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 import { parseInstallCommand, officialBox, customBoxFromProvider, slugify } from "./parse/argv.ts";
 import { observe } from "./supervisor/observe.ts";
@@ -19,36 +18,71 @@ function depsFrom(paths: SupervisorDeps["paths"]): SupervisorDeps {
   return { paths, fs: nodeFs(), procs: nodeProcs() };
 }
 
-async function askTunnel(): Promise<Expose> {
-  if (!process.stderr.isTTY) {
+/** y/yes enable a quick tunnel. Empty, EOF, and anything else stay loopback. */
+export function exposeFromTunnelAnswer(raw: string | undefined): Expose {
+  if (raw === undefined) {
     return loopbackExpose();
   }
-  let fd: number;
-  try {
-    fd = fs.openSync("/dev/tty", "r");
-  } catch {
-    return loopbackExpose();
-  }
-  const rl = readline.createInterface({
-    input: fs.createReadStream("", { fd }),
-    output: process.stderr,
-    terminal: true,
-  });
-  const answer = await new Promise<string>((resolve) => {
-    process.stderr.write(
-      "Open the control page from a phone over the internet?\n" +
-        "Cloudflare Tunnel prints a public URL and a QR code.\n" +
-        "Anyone with that URL can open the page. Keys stay on this Computer.\n" +
-        "Use Cloudflare Tunnel? [y/N] ",
-    );
-    rl.question("", resolve);
-  });
-  rl.close();
-  const token = answer.trim().toLowerCase();
+  const token = raw.trim().toLowerCase();
   if (token === "y" || token === "yes") {
     return { kind: "cloudflare-quick" };
   }
   return loopbackExpose();
+}
+
+function readTtyLine(): string | undefined {
+  let fd: number;
+  try {
+    fd = fs.openSync("/dev/tty", "r");
+  } catch {
+    return undefined;
+  }
+  try {
+    const chunks: Buffer[] = [];
+    const buf = Buffer.alloc(256);
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, null);
+      if (n === 0) {
+        break;
+      }
+      const slice = buf.subarray(0, n);
+      const nl = slice.indexOf(0x0a);
+      if (nl >= 0) {
+        chunks.push(Buffer.from(slice.subarray(0, nl)));
+        return Buffer.concat(chunks).toString("utf8").replace(/\r$/u, "");
+      }
+      chunks.push(Buffer.from(slice));
+    }
+    if (chunks.length === 0) {
+      return undefined;
+    }
+    return Buffer.concat(chunks).toString("utf8").replace(/\r$/u, "");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+export const TUNNEL_PROMPT =
+  "Open this control page from a phone?\n" +
+  "Cloudflare Tunnel prints a public URL and a QR code.\n" +
+  "Anyone with that URL can open the page. Keys stay on this Computer.\n" +
+  "\n" +
+  "  Type y then press Enter    phone URL + QR\n" +
+  "  Press Enter                this Computer only\n" +
+  "\n" +
+  "Use Cloudflare Tunnel? [y/N] ";
+
+function askTunnel(): Expose {
+  if (!process.stderr.isTTY) {
+    return loopbackExpose();
+  }
+  process.stderr.write(TUNNEL_PROMPT);
+  const answer = readTtyLine();
+  if (answer === undefined) {
+    process.stderr.write("\nNo answer from this terminal. Staying on this Computer. Later: openbot tunnel on\n");
+    return loopbackExpose();
+  }
+  return exposeFromTunnelAnswer(answer);
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -107,7 +141,7 @@ async function main(argv: string[]): Promise<number> {
   const custom = parsed.command.kind === "install" ? parsed.command.custom : undefined;
   const flagged = parsed.command.kind === "install" ? parsed.command.expose : loopbackExpose();
   const specified = parsed.command.kind === "install" && parsed.command.exposeSpecified;
-  const expose = specified ? flagged : await askTunnel();
+  const expose = specified ? flagged : askTunnel();
 
   if (custom) {
     const box = customBoxFromProvider({

@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 When it prints `OpenBot is ready` and `This Computer`, open `http://127.0.0.1:9280` on the Computer.
 
-The installer asks whether to start a temporary Cloudflare Tunnel. Default is no. Skip the prompt with `--tunnel off` or `--tunnel cloudflare`, or `OPENBOT_TUNNEL=off`.
+The installer waits on the Computer keyboard for `Use Cloudflare Tunnel? [y/N]` (including `curl | bash`). Type `y` then Enter for a phone URL and QR. Enter alone stays on this Computer. Skip the prompt with `--tunnel off` or `--tunnel cloudflare`, or `OPENBOT_TUNNEL=off`.
 
 Chat stays on official Grok until you connect a provider. That is on purpose.
 

@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 看到 `OpenBot is ready` 和 `This Computer` 后，用 Computer 浏览器打开 `http://127.0.0.1:9280`。
 
-安装时会问要不要开临时 Cloudflare Tunnel，默认否。可用 `--tunnel off`、`--tunnel cloudflare` 或 `OPENBOT_TUNNEL=off` 跳过提问。
+安装时会在 Computer 键盘上等待 `Use Cloudflare Tunnel? [y/N]`（`curl | bash` 也会等）。输入 `y` 再回车会打印手机 URL 和二维码；只按回车则只在本机。可用 `--tunnel off`、`--tunnel cloudflare` 或 `OPENBOT_TUNNEL=off` 跳过提问。
 
 在你接入服务商之前，聊天仍是官方 Grok。这是故意的。
 

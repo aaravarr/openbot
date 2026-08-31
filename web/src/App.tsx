@@ -16,7 +16,7 @@ import { ProviderPage } from "./ProviderPage";
 import { Rail } from "./Rail";
 import { Setup, type ProviderDraft } from "./Setup";
 import { go, paneKind, parseHash, type Route } from "./route";
-import { labelReasoning, type ModelLimits } from "./model";
+import { defaultLimits, labelReasoning, type ModelLimits } from "./model";
 
 type Toast = { text: string; error: boolean };
 
@@ -316,21 +316,25 @@ export function App() {
         provider={provider}
         busy={busy}
         focusKey={focusProviderId === provider.id}
-        onAddModel={async (providerId, slug, limits) => {
+        onAddModel={async (providerId, slug) => {
           await run(
             "model",
             {
               kind: "upsert-model",
               providerId,
               slug,
-              ...limitsPayload(limits),
+              ...limitsPayload(defaultLimits()),
             },
             () => `Added ${slug}.`,
           );
         }}
         onUpdate={async (input) => {
           setFocusProviderId(null);
-          await run("provider", { kind: "update-provider", ...input }, () => "Provider saved.");
+          await run(
+            "provider",
+            { kind: "update-provider", ...input },
+            () => (input.secret ? "API key saved." : "Endpoint saved."),
+          );
         }}
         onRemove={async (providerId) => {
           await run("remove", { kind: "remove-provider", providerId }, (next) =>

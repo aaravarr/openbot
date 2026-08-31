@@ -121,10 +121,10 @@ body {
 
 .rail-status {
   margin: 4px 0 0;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.88px;
-  text-transform: uppercase;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -673,6 +673,7 @@ body {
 
 .danger-zone {
   padding-top: 4px;
+  justify-self: start;
 }
 
 /* ——— Forms ——— */
@@ -852,6 +853,9 @@ input:focus-visible,
   height: auto;
   min-height: 40px;
   padding: 8px 0;
+  width: max-content;
+  justify-self: start;
+  text-align: left;
 }
 
 .button-tertiary:hover:not(:disabled) {

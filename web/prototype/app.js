@@ -468,9 +468,7 @@
         const on = liveId === row.id;
         const use = on
           ? `<span class="badge badge-live">On</span>`
-          : `<button type="button" class="button-secondary" data-act="use-line" data-id="${esc(row.id)}" ${
-              provider.hasKey ? "" : "disabled"
-            }>Use</button>`;
+          : `<button type="button" class="button-secondary" data-act="use-line" data-id="${esc(row.id)}">Use</button>`;
         return `<div class="model-row">
           <button type="button" class="model-row-hit" data-act="open-model" data-id="${esc(row.id)}">
             <span class="model-id">${esc(row.slug)}</span>
@@ -601,7 +599,7 @@
                 provider.name,
               )}</button>
               <span aria-hidden="true">/</span>
-              <span class="crumb-current">Model</span>
+              <span class="crumb-current mono">${esc(model.slug)}</span>
             </nav>
             <h2 class="model-heading" id="model-title">${esc(model.slug)}</h2>
           </div>

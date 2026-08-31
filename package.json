@@ -1,7 +1,7 @@
 {
   "name": "openbot",
   "version": "0.1.0",
-  "description": "Bring your own models to Grok Bot. One-line install on the Computer, a local control UI, and an official-mode switch that restores stock chat.",
+  "description": "Use any model in Grok Bot. Install on the Computer, pick a provider, keep chatting in the app.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -12,9 +12,11 @@
   },
   "scripts": {
     "test": "node --experimental-strip-types --test $(find src -name '*.test.ts')",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web",
     "start": "node --experimental-strip-types src/cli.ts",
-    "start:ui": "node --experimental-strip-types src/ui/server.ts"
+    "start:ui": "node --experimental-strip-types src/ui/server.ts",
+    "build": "vite build",
+    "dev": "vite"
   },
   "repository": {
     "type": "git",
@@ -26,6 +28,12 @@
   "homepage": "https://github.com/aaravarr/openbot#readme",
   "devDependencies": {
     "@types/node": "^24.3.0",
-    "typescript": "^5.9.2"
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.3"
   }
 }

@@ -72,7 +72,7 @@ async function main(argv: string[]): Promise<number> {
   printResult(result);
   if (result.kind === "ok") {
     console.log(`OpenBot UI: http://${LOOPBACK}:${String(SERVICE_PORT)}`);
-    console.log("Paste a provider key in the UI to switch chat off the stock model.");
+    console.log("Open that page on this Computer and pick a model.");
   }
   return result.kind === "ok" ? 0 : 1;
 }

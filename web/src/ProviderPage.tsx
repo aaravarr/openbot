@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { go } from "./route";
 import { keyedSet, modelsFor, type BoxState, type Provider } from "./api";
-import { BusyButton, InlineNote, SecretField, prevent } from "./fields";
+import { BusyButton, InlineNote, SecretField, TextField, prevent } from "./fields";
 import { ModelConfig } from "./ModelConfig";
 import { defaultLimits, formatTokens, limitsFromModel, type ModelLimits } from "./model";
 
@@ -11,7 +11,7 @@ export function ProviderPage({
   busy,
   focusKey,
   onAddModel,
-  onSetSecret,
+  onUpdate,
   onRemove,
   onUse,
 }: {
@@ -20,7 +20,7 @@ export function ProviderPage({
   busy: boolean;
   focusKey: boolean;
   onAddModel: (providerId: string, slug: string, limits: ModelLimits) => Promise<void>;
-  onSetSecret: (providerId: string, secret: string) => Promise<void>;
+  onUpdate: (input: { providerId: string; name: string; origin: string; secret?: string }) => Promise<void>;
   onRemove: (providerId: string) => Promise<void>;
   onUse: (modelId: string) => void;
 }) {
@@ -30,38 +30,33 @@ export function ProviderPage({
   const [adding, setAdding] = useState(false);
   const [slug, setSlug] = useState("");
   const [limits, setLimits] = useState<ModelLimits>(defaultLimits);
+  const [name, setName] = useState(provider.name);
+  const [origin, setOrigin] = useState(provider.origin);
   const [secret, setSecret] = useState("");
-  const [replaceKey, setReplaceKey] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [note, setNote] = useState("");
   const [noteError, setNoteError] = useState(false);
-  const keyForm = useRef<HTMLFormElement>(null);
+  const keyField = useRef<HTMLFormElement>(null);
   const slugField = useRef<HTMLInputElement>(null);
-  const showKey = !hasKey || replaceKey || focusKey;
 
   useEffect(() => {
     setAdding(false);
     setSlug("");
     setLimits(defaultLimits());
+    setName(provider.name);
+    setOrigin(provider.origin);
     setSecret("");
-    setReplaceKey(false);
     setConfirmRemove(false);
     setNote("");
     setNoteError(false);
-  }, [provider.id]);
+  }, [provider.id, provider.name, provider.origin]);
 
   useEffect(() => {
-    if (focusKey) {
-      setReplaceKey(true);
-    }
-  }, [focusKey, provider.id]);
-
-  useEffect(() => {
-    if (!showKey) {
+    if (!focusKey) {
       return;
     }
-    keyForm.current?.querySelector("input")?.focus();
-  }, [showKey, provider.id, focusKey]);
+    keyField.current?.querySelector("input")?.focus();
+  }, [focusKey, provider.id]);
 
   useEffect(() => {
     if (adding) {
@@ -97,6 +92,65 @@ export function ProviderPage({
         </div>
         <span className={hasKey ? "badge" : "badge badge-warn"}>{hasKey ? "Key saved" : "No API key"}</span>
       </header>
+
+      <form
+        ref={keyField}
+        className="stack-form"
+        onSubmit={prevent(async () => {
+          const nextName = name.trim();
+          const nextOrigin = origin.trim();
+          if (!nextName) {
+            setNote("Enter a name.");
+            setNoteError(true);
+            return;
+          }
+          if (!nextOrigin) {
+            setNote("Enter a base URL.");
+            setNoteError(true);
+            return;
+          }
+          if (!hasKey && !secret.trim()) {
+            setNote("Paste an API key.");
+            setNoteError(true);
+            return;
+          }
+          await run("Provider saved.", async () => {
+            await onUpdate({
+              providerId: provider.id,
+              name: nextName,
+              origin: nextOrigin,
+              ...(secret.trim() ? { secret: secret.trim() } : {}),
+            });
+            setSecret("");
+          });
+        })}
+      >
+        <p className="section-label">Endpoint</p>
+        <TextField name={`name-${provider.id}`} label="Name" value={name} required onChange={setName} />
+        <TextField
+          name={`origin-${provider.id}`}
+          label="Base URL"
+          type="url"
+          mono
+          value={origin}
+          required
+          placeholder="https://api.openai.com/v1"
+          onChange={setOrigin}
+        />
+        <SecretField
+          name={`secret-${provider.id}`}
+          label="API Key"
+          value={secret}
+          required={!hasKey}
+          placeholder={hasKey ? "Leave blank to keep the saved key" : "sk-…"}
+          onChange={setSecret}
+        />
+        <div className="form-actions">
+          <BusyButton type="submit" className="button-primary" busy={busy} busyLabel="Saving…">
+            Save provider
+          </BusyButton>
+        </div>
+      </form>
 
       <div>
         <p className="section-label">Models</p>
@@ -188,50 +242,6 @@ export function ProviderPage({
       ) : (
         <button type="button" className="button-tertiary" disabled={busy} onClick={() => setAdding(true)}>
           Add model
-        </button>
-      )}
-
-      {showKey ? (
-        <form
-          ref={keyForm}
-          className="stack-form"
-          onSubmit={prevent(async () => {
-            await run("API key saved.", async () => {
-              await onSetSecret(provider.id, secret);
-              setSecret("");
-              setReplaceKey(false);
-            });
-          })}
-        >
-          <SecretField
-            name={`secret-${provider.id}`}
-            label={hasKey ? "Replace API key" : "API Key"}
-            value={secret}
-            required
-            placeholder="sk-…"
-            onChange={setSecret}
-          />
-          <div className="form-actions">
-            <BusyButton type="submit" className="button-primary" busy={busy} busyLabel="Saving…">
-              Save API Key
-            </BusyButton>
-            {hasKey ? (
-              <button
-                type="button"
-                className="button-tertiary"
-                onClick={() => {
-                  setReplaceKey(false);
-                  setSecret("");
-                }}
-              >
-                Cancel
-              </button>
-            ) : null}
-          </div>
-        </form>
-      ) : (
-        <button type="button" className="button-tertiary" onClick={() => setReplaceKey(true)}>
-          Replace API key
         </button>
       )}
 

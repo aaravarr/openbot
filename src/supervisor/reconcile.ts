@@ -25,6 +25,11 @@ export type ReconcileResult =
   | { readonly kind: "ok"; readonly snapshot: Snapshot; readonly wrapBytesChanged: boolean }
   | { readonly kind: "refused"; readonly error: ReconcileError };
 
+export type ReconcileOpts = {
+  /** CLI install copies a new tree. Restart the owned loopback process so it loads that tree. */
+  readonly reloadService?: boolean;
+};
+
 export type SharedEnv = {
   readonly OPENBOT_HOST_MAIN: string;
   readonly OPENBOT_SAND_DATA: string;
@@ -82,6 +87,17 @@ async function waitPort(deps: SupervisorDeps, port: number, budgetMs: number): P
   return deps.procs.port(LOOPBACK, port);
 }
 
+async function waitPortDown(deps: SupervisorDeps, port: number, budgetMs: number): Promise<boolean> {
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    if (!(await deps.procs.port(LOOPBACK, port))) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  return !(await deps.procs.port(LOOPBACK, port));
+}
+
 function startService(deps: SupervisorDeps): void {
   deps.fs.mkdirp(deps.paths.sandData);
   deps.procs.start({
@@ -90,6 +106,35 @@ function startService(deps: SupervisorDeps): void {
     log: deps.paths.uiLog,
     pidFile: deps.paths.uiPid,
   });
+}
+
+async function ensureService(
+  deps: SupervisorDeps,
+  beforeKind: "ours" | "absent" | "foreign",
+  opts: ReconcileOpts,
+): Promise<ReconcileResult | undefined> {
+  if (beforeKind === "ours" && opts.reloadService) {
+    const uiPid = deps.procs.readPidFile(deps.paths.uiPid);
+    if (uiPid !== undefined && deps.procs.pidAlive(uiPid)) {
+      deps.procs.stop(parseOwnedPid(uiPid));
+      deps.fs.remove(deps.paths.uiPid);
+    }
+    if (!(await waitPortDown(deps, SERVICE_PORT, 4000))) {
+      return { kind: "refused", error: { kind: "listen-failed", port: SERVICE_PORT } };
+    }
+    startService(deps);
+    if (!(await waitPort(deps, SERVICE_PORT, 4000))) {
+      return { kind: "refused", error: { kind: "listen-failed", port: SERVICE_PORT } };
+    }
+    return undefined;
+  }
+  if (beforeKind === "absent") {
+    startService(deps);
+    if (!(await waitPort(deps, SERVICE_PORT, 4000))) {
+      return { kind: "refused", error: { kind: "listen-failed", port: SERVICE_PORT } };
+    }
+  }
+  return undefined;
 }
 
 function stopLeftoverHopOnly(deps: SupervisorDeps): void {
@@ -188,7 +233,11 @@ async function finishOk(
   };
 }
 
-export async function reconcile(desired: DesiredState, deps: SupervisorDeps): Promise<ReconcileResult> {
+export async function reconcile(
+  desired: DesiredState,
+  deps: SupervisorDeps,
+  opts: ReconcileOpts = {},
+): Promise<ReconcileResult> {
   const raw = deps.fs.read(deps.paths.hostMain);
   if (raw === undefined) {
     return { kind: "refused", error: { kind: "host-missing", path: deps.paths.hostMain } };
@@ -217,11 +266,9 @@ export async function reconcile(desired: DesiredState, deps: SupervisorDeps): Pr
   if (desired.kind === "official") {
     writeMode(deps, "official");
     wrapBytesChanged = restoreOfficialHost(deps, raw);
-    if (before.uiListen.kind === "absent") {
-      startService(deps);
-      if (!(await waitPort(deps, SERVICE_PORT, 4000))) {
-        return { kind: "refused", error: { kind: "listen-failed", port: SERVICE_PORT } };
-      }
+    const service = await ensureService(deps, before.uiListen.kind, opts);
+    if (service) {
+      return service;
     }
     return finishOk(deps, desired, wrapBytesChanged);
   }
@@ -242,11 +289,9 @@ export async function reconcile(desired: DesiredState, deps: SupervisorDeps): Pr
   writeMode(deps, "custom");
   deps.fs.write(deps.paths.plan, planToJson(compileCustomPlan(desired)), 0o644);
 
-  if (before.uiListen.kind === "absent") {
-    startService(deps);
-    if (!(await waitPort(deps, SERVICE_PORT, 4000))) {
-      return { kind: "refused", error: { kind: "listen-failed", port: SERVICE_PORT } };
-    }
+  const service = await ensureService(deps, before.uiListen.kind, opts);
+  if (service) {
+    return service;
   }
   return finishOk(deps, desired, wrapBytesChanged);
 }

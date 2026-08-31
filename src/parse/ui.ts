@@ -45,6 +45,13 @@ export type UiCommand =
   | { readonly kind: "use-model"; readonly modelId: string; readonly reasoning?: unknown }
   | { readonly kind: "remove-provider"; readonly providerId: string }
   | { readonly kind: "set-secret"; readonly providerId: string; readonly secret: string }
+  | {
+      readonly kind: "update-provider";
+      readonly providerId: string;
+      readonly name: string;
+      readonly origin: string;
+      readonly secret?: string;
+    }
   | { readonly kind: "set-expose"; readonly expose: Expose };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -131,6 +138,29 @@ export function parseUiCommand(input: unknown): UiCommand {
       throw new Error("OpenBot: set-secret needs providerId and secret");
     }
     return { kind: "set-secret", providerId: input.providerId, secret: input.secret };
+  }
+  if (input.kind === "update-provider") {
+    if (typeof input.providerId !== "string" || typeof input.name !== "string" || typeof input.origin !== "string") {
+      throw new Error("OpenBot: update-provider needs providerId, name, and origin");
+    }
+    if (input.secret !== undefined && typeof input.secret !== "string") {
+      throw new Error("OpenBot: update-provider secret must be a string");
+    }
+    if (typeof input.secret === "string" && input.secret.trim()) {
+      return {
+        kind: "update-provider",
+        providerId: input.providerId,
+        name: input.name,
+        origin: input.origin,
+        secret: input.secret,
+      };
+    }
+    return {
+      kind: "update-provider",
+      providerId: input.providerId,
+      name: input.name,
+      origin: input.origin,
+    };
   }
   if (input.kind === "set-expose") {
     const expose = parseExposeToken(typeof input.expose === "string" ? input.expose : undefined);
@@ -230,6 +260,33 @@ export function applyUiCommand(input: {
       desired: customBoxFromCatalog({ paths, catalog, expose }),
       secret: { providerId, bytes: parseSecretBytes(command.secret) },
     };
+  }
+  if (command.kind === "update-provider") {
+    const providerId = parseProviderId(command.providerId);
+    const existing = catalog.providers.find((row) => row.id === providerId);
+    if (!existing) {
+      throw new Error("OpenBot: unknown provider");
+    }
+    if (catalog.models.length === 0) {
+      throw new Error("OpenBot: add a model before using custom chat");
+    }
+    const name = command.name.trim();
+    if (!name) {
+      throw new Error("OpenBot: provider name is empty");
+    }
+    const origin = parseUpstreamOrigin(command.origin);
+    const next = upsertProviderRow(catalog, {
+      ...existing,
+      name,
+      origin,
+    });
+    if (command.secret !== undefined) {
+      return {
+        desired: customBoxFromCatalog({ paths, catalog: next, expose }),
+        secret: { providerId, bytes: parseSecretBytes(command.secret) },
+      };
+    }
+    return { desired: customBoxFromCatalog({ paths, catalog: next, expose }) };
   }
   if (command.kind === "upsert-provider") {
     const providerId = parseProviderId(slugify(command.name));

@@ -127,13 +127,13 @@ async function main(argv: string[]): Promise<number> {
       mode === "custom" && catalog.models.length > 0
         ? customBoxFromCatalog({ paths: parsed.paths, catalog, expose })
         : officialBox(parsed.paths, expose);
-    const result = await reconcile(desired, deps);
+    const result = await reconcile(desired, deps, { reloadService: true });
     printResult(result, parsed.json);
     return result.kind === "ok" ? 0 : 1;
   }
 
   if (parsed.command.kind === "official") {
-    const result = await reconcile(officialBox(parsed.paths, savedExpose), deps);
+    const result = await reconcile(officialBox(parsed.paths, savedExpose), deps, { reloadService: true });
     printResult(result, parsed.json);
     return result.kind === "ok" ? 0 : 1;
   }
@@ -151,7 +151,7 @@ async function main(argv: string[]): Promise<number> {
       modelSlug: custom.modelSlug,
       expose,
     });
-    const result = await reconcile(box, deps);
+    const result = await reconcile(box, deps, { reloadService: true });
     if (result.kind === "ok") {
       const store = loadSecrets(deps.fs, parsed.paths.secrets);
       saveSecrets(
@@ -164,7 +164,7 @@ async function main(argv: string[]): Promise<number> {
     return result.kind === "ok" ? 0 : 1;
   }
 
-  const result = await reconcile(officialBox(parsed.paths, expose), deps);
+  const result = await reconcile(officialBox(parsed.paths, expose), deps, { reloadService: true });
   printResult(result, parsed.json);
   return result.kind === "ok" ? 0 : 1;
 }

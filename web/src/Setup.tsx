@@ -1,6 +1,5 @@
 import { draftFromPreset, PRESETS, type Preset, type ProviderDraft } from "./presets";
 import { BusyButton, InlineNote, SecretField, TextField, prevent } from "./fields";
-import { ModelConfig } from "./ModelConfig";
 import { defaultLimits } from "./model";
 import { useState } from "react";
 
@@ -36,9 +35,9 @@ export function Setup({
     return (
       <section className={compact ? "setup setup-compact" : "setup"} aria-labelledby="setup-heading">
         <p className="kicker">{compact ? "Another provider" : "Get started"}</p>
-        <h2 id="setup-heading" className="display">
+        <h1 id="setup-heading" className="display">
           {compact ? "Add a provider" : "Use any model in Grok Bot"}
-        </h2>
+        </h1>
         <p className="lede">
           {compact
             ? "Same Grok Bot app. A different endpoint and key."
@@ -51,7 +50,7 @@ export function Setup({
             <li>Send a message in Grok Bot</li>
           </ol>
         )}
-        <p className="section-copy">Choose a provider to continue.</p>
+        <p className="section-label">Choose a provider to continue.</p>
         <div className="preset-grid">
           {PRESETS.map((row) => (
             <button
@@ -82,9 +81,9 @@ export function Setup({
   return (
     <section className={compact ? "setup setup-compact" : "setup"} aria-labelledby="setup-heading">
       <p className="kicker">Connect</p>
-      <h2 id="setup-heading" className="display">
+      <h1 id="setup-heading" className="display">
         {custom ? "Your endpoint" : preset.name}
-      </h2>
+      </h1>
       <p className="lede">{preset.hint}</p>
       <form className="setup-form setup-form-open" key={preset.id} onSubmit={prevent(() => onSubmit(draft))}>
         <TextField
@@ -121,15 +120,6 @@ export function Setup({
           required
           placeholder="sk-…"
           onChange={(secret) => setDraft((current) => ({ ...current, secret }))}
-        />
-        <ModelConfig
-          value={{
-            contextTokens: draft.contextTokens,
-            maxOutputTokens: draft.maxOutputTokens,
-            reasoningLevels: draft.reasoningLevels,
-            modalities: draft.modalities,
-          }}
-          onChange={(limits) => setDraft((current) => ({ ...current, ...limits }))}
         />
         <div className="form-actions">
           <BusyButton type="submit" className="button-primary" busy={busy} busyLabel="Connecting…">

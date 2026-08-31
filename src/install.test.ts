@@ -114,11 +114,16 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     assert.match(app.body, /API Key/);
     assert.match(app.body, /Add provider/);
     assert.match(app.body, /Official Grok/);
+    assert.match(app.body, /This chat/);
+    assert.match(app.body, /Save model/);
+    assert.match(app.body, /Configure/);
     assert.match(app.body, /Max output/);
     assert.match(app.body, /Reasoning levels/);
     assert.match(app.body, /Input types/);
     assert.equal(app.body.includes("Catalog"), false);
     assert.equal(app.body.includes("Model slug"), false);
+    assert.equal(app.body.includes("Keys and model limits live here"), false);
+    assert.equal(app.body.includes("Pick a model and a reasoning level"), false);
     const css = await get(`${UI}/styles.css`);
     assert.equal(css.status, 200);
     assert.match(css.body, /#f7f7f4/);

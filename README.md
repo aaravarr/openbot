@@ -38,25 +38,26 @@ Chat stays on official Grok until you connect a provider. That is on purpose.
 1. Open the control page.
 2. Choose a provider, or pick **Custom** and paste any OpenAI-compatible base URL.
 3. Paste an API key and a model id.
-4. Set the model's **context**, **max output**, the **reasoning levels** it supports, and which **input types** it accepts (text, image, video, audio).
-5. Click **Start chatting**.
-6. Go back to Grok Bot and send a **new** message.
+4. Click **Start chatting**.
+5. Go back to Grok Bot and send a **new** message.
 
-The next turn uses the model you just connected.
+The next turn uses the model you just connected. Context, max output, reasoning levels, and input types use defaults until you open that model and change them.
+
+## The control page
+
+The page has three levels. They are not stacked on one scroll.
+
+- **Chat** — what this conversation uses. Official Grok or one custom model. Reasoning chips belong to the active model only. A quiet list switches `slug · provider`. No keys, no limits.
+- **Provider** — the account: name, base URL, API key, and child model rows. Add a model by id. Open a row to configure it. **Save API Key** lives here.
+- **Model** — a child of a provider. Breadcrumb like `OpenAI / gpt-4.1`. Context, max output, reasoning levels, and input types. **Save model** lives here.
+
+If a model still needs a key, Chat takes you to that provider instead of failing silently. You can still open **Configure** and set limits before a key exists.
 
 Image, video, and audio are stored on the model for later. Chat still sends text.
 
-## Switch later
-
-Every connected model sits in a list next to **Official Grok**. Click a row, then pick a **reasoning level** if the model has more than none. The next message in Grok Bot follows that choice.
-
-If a model still needs a key, OpenBot takes you to the key field instead of failing silently.
-
-You can edit context, max output, reasoning levels, and input types later on the provider card.
-
 ## Back to official Grok
 
-Click **Official Grok** (or **Use official Grok** at the top). Stock chat comes back. Providers and keys remain on the Computer, so you can return to a custom model without setting it up again.
+On **Chat**, click **Official Grok** (or **Use official Grok**). Stock chat comes back. Providers and keys remain on the Computer, so you can return to a custom model without setting it up again.
 
 ## Good to know
 

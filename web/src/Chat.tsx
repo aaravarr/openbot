@@ -27,6 +27,7 @@ export function Chat({
   const last = modelById(state, state.activeModelId);
   const limits = active ? limitsFromModel(active) : null;
   const showReason = custom && active && hasSelectableReasoning(limits?.reasoningLevels);
+  const activeNeedsKey = Boolean(active && !keyed.has(active.providerId));
 
   return (
     <section aria-labelledby="now-title">
@@ -37,7 +38,11 @@ export function Chat({
             <h1 className="identity-title mono" id="now-title">
               {active.slug}
             </h1>
-            <p className="identity-sub">{activeProvider?.name ?? ""}</p>
+            <p className="identity-sub">
+              {activeNeedsKey
+                ? `${activeProvider?.name ?? "Provider"} · needs an API key`
+                : (activeProvider?.name ?? "")}
+            </p>
           </>
         ) : (
           <>
@@ -48,7 +53,7 @@ export function Chat({
           </>
         )}
 
-        {showReason && active ? (
+        {showReason && active && !activeNeedsKey ? (
           <div className="reason-block">
             <p className="section-label">Reasoning</p>
             <div className="chip-row" role="group" aria-label={`Reasoning for ${active.slug}`}>
@@ -140,10 +145,10 @@ export function Chat({
                 <span className="line-provider">{provider?.name ?? ""}</span>
               </span>
               <span className="line-aside">
-                {on ? (
-                  <span className="badge badge-live">On</span>
-                ) : need ? (
+                {need ? (
                   <span className="line-need">Needs key</span>
+                ) : on ? (
+                  <span className="badge badge-live">On</span>
                 ) : null}
               </span>
             </button>

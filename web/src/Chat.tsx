@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   isCustom,
   keyedSet,
@@ -7,8 +6,8 @@ import {
   type BoxState,
   type TunnelState,
 } from "./api";
+import { ChipRadio } from "./ChipRadio";
 import { hasSelectableReasoning, isReasoningLevel, labelReasoning, limitsFromModel } from "./model";
-import { MenuSelect } from "./MenuSelect";
 import { PhoneAccess } from "./PhoneAccess";
 
 export function Chat({
@@ -32,7 +31,12 @@ export function Chat({
   const activeProvider = active ? providerById(state, active.providerId) : undefined;
   const activeNeedsKey = Boolean(active && !keyed.has(active.providerId));
   const tunnel: TunnelState = state.snapshot?.tunnel ?? { kind: "off" };
-  const [openId, setOpenId] = useState<string | null>(null);
+  const levels = active ? limitsFromModel(active).reasoningLevels : [];
+  const showThinking = Boolean(custom && active && !activeNeedsKey && hasSelectableReasoning(levels));
+  const thinking =
+    active && isReasoningLevel(active.activeReasoning) && levels.includes(active.activeReasoning)
+      ? active.activeReasoning
+      : "default";
 
   return (
     <section aria-labelledby="now-title">
@@ -46,7 +50,7 @@ export function Chat({
             <p className="identity-sub">
               {activeNeedsKey
                 ? `${activeProvider?.name ?? "Provider"} · needs an API key`
-                : `${activeProvider?.name ?? ""}${active.activeReasoning ? ` · ${labelReasoning(active.activeReasoning)}` : ""}`}
+                : (activeProvider?.name ?? "")}
             </p>
           </>
         ) : (
@@ -57,6 +61,21 @@ export function Chat({
             <p className="identity-sub">Stock xAI model in the Grok Bot app</p>
           </>
         )}
+        {showThinking && active ? (
+          <div className="reason-block">
+            <p className="section-label" id="thinking-now-label">
+              Thinking
+            </p>
+            <ChipRadio
+              labelledBy="thinking-now-label"
+              value={thinking}
+              disabled={busy}
+              options={levels.map((level) => ({ value: level, label: labelReasoning(level) }))}
+              onChange={(level) => onUse(active.id, level)}
+            />
+            <p className="hint-soft">Grok Bot sends this on the next message.</p>
+          </div>
+        ) : null}
       </div>
 
       <p className="section-label" id="models-heading">
@@ -69,7 +88,12 @@ export function Chat({
           aria-pressed={!custom}
           disabled={busy}
           role="listitem"
-          onClick={onOfficial}
+          onClick={() => {
+            if (!custom) {
+              return;
+            }
+            onOfficial();
+          }}
         >
           <span className="line-main">
             <span className="line-plain">Official Grok</span>
@@ -80,59 +104,30 @@ export function Chat({
           const provider = providerById(state, model.providerId);
           const on = custom && state.activeModelId === model.id;
           const need = !keyed.has(model.providerId);
-          const levels = limitsFromModel(model).reasoningLevels;
-          const showIntensity = hasSelectableReasoning(levels);
-          const current =
-            isReasoningLevel(model.activeReasoning) && levels.includes(model.activeReasoning)
-              ? model.activeReasoning
-              : "default";
-          const rowClass = ["line", "line-row", showIntensity ? "" : "line-row-plain", on ? "is-on" : ""]
-            .filter(Boolean)
-            .join(" ");
           return (
-            <div key={model.id} className={rowClass} role="listitem">
-              <button
-                type="button"
-                className="line-hit"
-                aria-pressed={on}
-                disabled={busy}
-                onClick={() => {
-                  if (need) {
-                    onNeedKey(model.providerId);
-                    return;
-                  }
-                  onUse(model.id);
-                }}
-              >
-                <span className="line-main">
-                  <span className="line-slug">{model.slug}</span>
-                  <span className="line-sep">·</span>
-                  <span className="line-provider">{provider?.name ?? ""}</span>
-                </span>
-              </button>
-              {showIntensity ? (
-                <MenuSelect
-                  label={`Thinking for ${model.slug}`}
-                  value={current}
-                  options={levels.map((level) => ({ value: level, label: labelReasoning(level) }))}
-                  disabled={busy}
-                  open={openId === model.id}
-                  onOpenChange={(next) => {
-                    if (next && need) {
-                      onNeedKey(model.providerId);
-                      return;
-                    }
-                    setOpenId(next ? model.id : null);
-                  }}
-                  onChange={(level) => {
-                    if (need) {
-                      onNeedKey(model.providerId);
-                      return;
-                    }
-                    onUse(model.id, level);
-                  }}
-                />
-              ) : null}
+            <button
+              key={model.id}
+              type="button"
+              className={on ? "line is-on" : "line"}
+              aria-pressed={on}
+              disabled={busy}
+              role="listitem"
+              onClick={() => {
+                if (need) {
+                  onNeedKey(model.providerId);
+                  return;
+                }
+                if (on) {
+                  return;
+                }
+                onUse(model.id);
+              }}
+            >
+              <span className="line-main">
+                <span className="line-slug">{model.slug}</span>
+                <span className="line-sep">·</span>
+                <span className="line-provider">{provider?.name ?? ""}</span>
+              </span>
               <span className="line-aside">
                 {need ? (
                   <span className="line-need">Needs key</span>
@@ -140,7 +135,7 @@ export function Chat({
                   <span className="badge badge-live">On</span>
                 ) : null}
               </span>
-            </div>
+            </button>
           );
         })}
       </div>

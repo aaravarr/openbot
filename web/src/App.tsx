@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   hostBlocked,
   isCustom,
@@ -20,6 +20,32 @@ import { labelReasoning, type ModelLimits } from "./model";
 
 type Toast = { text: string; error: boolean };
 
+function limitsPayload(limits: ModelLimits) {
+  return {
+    contextTokens: limits.contextTokens,
+    maxOutputTokens: limits.maxOutputTokens,
+    reasoningLevels: limits.reasoningLevels,
+    modalities: limits.modalities,
+    activeReasoning: limits.activeReasoning,
+  };
+}
+
+function SkipLink() {
+  return (
+    <a className="skip-link" href="#main">
+      Skip to content
+    </a>
+  );
+}
+
+function ToastLive({ toast }: { toast: Toast | null }) {
+  return (
+    <div className="toast-slot" role="status" aria-live="polite" aria-atomic="true">
+      {toast ? <div className={toast.error ? "toast toast-error" : "toast"}>{toast.text}</div> : null}
+    </div>
+  );
+}
+
 export function App() {
   const [state, setState] = useState<BoxState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -28,6 +54,7 @@ export function App() {
   const [focusProviderId, setFocusProviderId] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash));
+  const saveTail = useRef(Promise.resolve());
 
   const refresh = useCallback(async () => {
     try {
@@ -76,21 +103,29 @@ export function App() {
   }, [state]);
 
   async function run(id: string, command: Command, ok: (next: BoxState) => string): Promise<BoxState> {
-    setBusyId(id);
-    setFormError("");
-    try {
-      const next = await save(command);
-      setState(next);
-      setToast({ text: ok(next), error: false });
-      return next;
-    } catch (err) {
-      const text = err instanceof Error ? err.message : "Something went wrong";
-      setFormError(text);
-      setToast({ text, error: true });
-      throw err;
-    } finally {
-      setBusyId(null);
-    }
+    const work = async () => {
+      setBusyId(id);
+      setFormError("");
+      try {
+        const next = await save(command);
+        setState(next);
+        setToast({ text: ok(next), error: false });
+        return next;
+      } catch (err) {
+        const text = err instanceof Error ? err.message : "Something went wrong";
+        setFormError(text);
+        setToast({ text, error: true });
+        throw err;
+      } finally {
+        setBusyId(null);
+      }
+    };
+    const queued = saveTail.current.then(work, work);
+    saveTail.current = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
   }
 
   function useModelCommand(modelId: string, reasoning?: string): Command {
@@ -141,6 +176,18 @@ export function App() {
       needKey(model.providerId);
       return;
     }
+    if (reasoning !== undefined) {
+      setState((prev) => {
+        if (!prev) {
+          return prev;
+        }
+        return {
+          ...prev,
+          activeModelId: modelId,
+          models: prev.models.map((row) => (row.id === modelId ? { ...row, activeReasoning: reasoning } : row)),
+        };
+      });
+    }
     await run("use", useModelCommand(modelId, reasoning), usedMessage);
   }
 
@@ -159,31 +206,37 @@ export function App() {
 
   if (loadError && !state) {
     return (
-      <div className="first-run">
-        <p className="wordmark first-run-brand">OpenBot</p>
-        <section className="setup">
-          <h1 className="display">Cannot reach OpenBot</h1>
-          <p className="lede error">{loadError}</p>
-          <div className="form-actions">
-            <button type="button" className="button-primary" onClick={() => void refresh()}>
-              Try again
-            </button>
-          </div>
-        </section>
-      </div>
+      <>
+        <SkipLink />
+        <div className="first-run" id="main">
+          <p className="wordmark first-run-brand">OpenBot</p>
+          <section className="setup">
+            <h1 className="display">Cannot reach OpenBot</h1>
+            <p className="lede error">{loadError}</p>
+            <div className="form-actions">
+              <button type="button" className="button-primary" onClick={() => void refresh()}>
+                Try again
+              </button>
+            </div>
+          </section>
+        </div>
+      </>
     );
   }
 
   if (!state) {
     return (
-      <div className="first-run" aria-busy="true">
-        <p className="wordmark first-run-brand">OpenBot</p>
-        <section className="setup">
-          <p className="kicker">OpenBot</p>
-          <h1 className="display">Loading…</h1>
-          <p className="lede">Checking this Computer.</p>
-        </section>
-      </div>
+      <>
+        <SkipLink />
+        <div className="first-run" id="main" aria-busy="true">
+          <p className="wordmark first-run-brand">OpenBot</p>
+          <section className="setup">
+            <p className="kicker">OpenBot</p>
+            <h1 className="display">Loading…</h1>
+            <p className="lede">Checking this Computer.</p>
+          </section>
+        </div>
+      </>
     );
   }
 
@@ -204,7 +257,8 @@ export function App() {
   if (empty) {
     return (
       <>
-        <div className="first-run">
+        <SkipLink />
+        <div className="first-run" id="main">
           <p className="wordmark first-run-brand">OpenBot</p>
           {blocked ? (
             <p className="banner" role="alert">
@@ -213,11 +267,7 @@ export function App() {
           ) : null}
           <Setup busy={busyId === "connect"} error={formError} onSubmit={connect} />
         </div>
-        {toast ? (
-          <div className={toast.error ? "toast toast-error" : "toast"} role="status">
-            {toast.text}
-          </div>
-        ) : null}
+        <ToastLive toast={toast} />
       </>
     );
   }
@@ -266,10 +316,7 @@ export function App() {
               kind: "upsert-model",
               providerId,
               slug,
-              contextTokens: limits.contextTokens,
-              maxOutputTokens: limits.maxOutputTokens,
-              reasoningLevels: limits.reasoningLevels,
-              modalities: limits.modalities,
+              ...limitsPayload(limits),
             },
             () => `Added ${slug}.`,
           );
@@ -304,10 +351,7 @@ export function App() {
               kind: "upsert-model",
               providerId,
               slug,
-              contextTokens: limits.contextTokens,
-              maxOutputTokens: limits.maxOutputTokens,
-              reasoningLevels: limits.reasoningLevels,
-              modalities: limits.modalities,
+              ...limitsPayload(limits),
             },
             () => `Saved ${slug}.`,
           );
@@ -338,6 +382,7 @@ export function App() {
 
   return (
     <>
+      <SkipLink />
       <div className="shell" data-pane={shownPane}>
         <Rail providers={state.providers} route={shown} status={status} liveProviderId={liveProviderId} />
         <div className="pane-wrap">
@@ -356,11 +401,7 @@ export function App() {
           </main>
         </div>
       </div>
-      {toast ? (
-        <div className={toast.error ? "toast toast-error" : "toast"} role="status">
-          {toast.text}
-        </div>
-      ) : null}
+      <ToastLive toast={toast} />
     </>
   );
 }

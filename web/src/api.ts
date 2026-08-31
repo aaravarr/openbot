@@ -48,6 +48,7 @@ export type ModelLimitsPayload = {
   maxOutputTokens?: number;
   reasoningLevels?: readonly string[];
   modalities?: readonly string[];
+  activeReasoning?: string;
 };
 
 export type Command =

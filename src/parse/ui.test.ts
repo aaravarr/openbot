@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseUiProviderSave } from "./ui.ts";
+import { catalogAfterSave, parseUiProviderSave } from "./ui.ts";
 import { boxPathsFrom } from "../supervisor/paths.ts";
 import { parseUpstreamOrigin } from "./argv.ts";
 import { HIGH_AGENT_MAX_TOKENS, type Catalog } from "../domain/types.ts";
@@ -303,4 +303,48 @@ test("set-secret stays custom and never puts the key on DesiredState", () => {
   assert.equal(parsed.desired.kind, "custom");
   assert.equal(parsed.secret?.bytes, "sk-rotated");
   assert.equal("secret" in parsed.desired, false);
+});
+
+test("upsert-model records On Chat now as activeReasoning", () => {
+  const parsed = parseUiProviderSave(
+    {
+      kind: "upsert-model",
+      providerId: "zhipu",
+      slug: "glm-5.3-flash",
+      contextTokens: 96000,
+      maxOutputTokens: 4096,
+      reasoningLevels: ["default", "none", "low", "high"],
+      activeReasoning: "high",
+      modalities: ["text"],
+    },
+    paths(),
+    zhipuCatalog(),
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") {
+    return;
+  }
+  const model = parsed.desired.catalog.models[0];
+  assert.equal(model?.activeReasoning, "high");
+  assert.deepEqual(model?.reasoningLevels, ["default", "none", "low", "high"]);
+});
+
+test("catalogAfterSave returns the desired custom catalog after use-model", () => {
+  const parsed = parseUiProviderSave(
+    { kind: "use-model", modelId: "openai:gpt-4.1", reasoning: "high" },
+    paths(),
+    twoProviderCatalog(),
+  );
+  const next = catalogAfterSave(parsed, twoProviderCatalog());
+  const model = next.models.find((row) => row.id === "openai:gpt-4.1");
+  assert.equal(model?.activeReasoning, "high");
+  assert.equal(next.bindings[0]?.modelId, "openai:gpt-4.1");
+});
+
+test("catalogAfterSave keeps the plan catalog on official", () => {
+  const parsed = parseUiProviderSave({ kind: "official" }, paths(), zhipuCatalog());
+  const disk = zhipuCatalog();
+  const next = catalogAfterSave(parsed, disk);
+  assert.equal(next.models[0]?.id, disk.models[0]?.id);
+  assert.equal(next.bindings[0]?.modelId, disk.bindings[0]?.modelId);
 });

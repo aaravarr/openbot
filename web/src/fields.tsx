@@ -9,7 +9,12 @@ export function BusyButton({
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean; busyLabel?: string }) {
   return (
-    <button {...props} className={className} disabled={Boolean(props.disabled) || Boolean(busy)}>
+    <button
+      {...props}
+      className={className}
+      disabled={Boolean(props.disabled) || Boolean(busy)}
+      aria-busy={busy ? true : undefined}
+    >
       {busy ? busyLabel || "Working…" : children}
     </button>
   );
@@ -49,11 +54,7 @@ export function SecretField({
           spellCheck={false}
           onChange={(event) => onChange(event.target.value)}
         />
-        <button
-          type="button"
-          className="button-tertiary"
-          onClick={() => setShow((current) => !current)}
-        >
+        <button type="button" className="button-tertiary" onClick={() => setShow((current) => !current)}>
           {show ? "Hide" : "Show"}
         </button>
       </span>

@@ -44,4 +44,5 @@ app.asar
 Thumbs.db
 .idea/
 .vscode/
+.cursor/
 *.swp

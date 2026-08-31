@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { go } from "./route";
 import { ModelConfig } from "./ModelConfig";
 import { BusyButton, prevent } from "./fields";
-import { limitsFromModel, type ModelLimits } from "./model";
+import { limitsFromModel, limitsSignature, type ModelLimits } from "./model";
 import type { Model, Provider } from "./api";
 
 export function ModelPage({
@@ -23,12 +23,16 @@ export function ModelPage({
   const [limits, setLimits] = useState<ModelLimits>(() => limitsFromModel(model));
   const [note, setNote] = useState("");
   const [noteError, setNoteError] = useState(false);
+  const signature = limitsSignature(model);
 
   useEffect(() => {
     setLimits(limitsFromModel(model));
+  }, [signature]);
+
+  useEffect(() => {
     setNote("");
     setNoteError(false);
-  }, [model.id, model.contextTokens, model.maxOutputTokens, model.reasoningLevels, model.modalities]);
+  }, [model.id]);
 
   return (
     <div className="detail">
@@ -52,7 +56,7 @@ export function ModelPage({
         {isOn ? (
           <span className="badge badge-live">On</span>
         ) : (
-          <button type="button" className="row-link" disabled={busy} onClick={() => onUse(model.id)}>
+          <button type="button" className="button-secondary" disabled={busy} onClick={() => onUse(model.id)}>
             Use this model
           </button>
         )}

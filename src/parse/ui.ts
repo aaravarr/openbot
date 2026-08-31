@@ -30,6 +30,7 @@ export type UiCommand =
       readonly maxOutputTokens?: unknown;
       readonly reasoningLevels?: unknown;
       readonly modalities?: unknown;
+      readonly activeReasoning?: unknown;
     }
   | {
       readonly kind: "upsert-model";
@@ -315,6 +316,16 @@ export function applyUiCommand(input: {
     bindings: [{ conversation: { kind: "wildcard" }, modelId: stillBound && active ? active.modelId : fallback.id }],
   };
   return { desired: customBoxFromCatalog({ paths, catalog: next, expose }) };
+}
+
+export function catalogAfterSave(parsed: UiSave, fromDisk: Catalog): Catalog {
+  if (parsed.catalogWrite && parsed.catalogWrite.providers.length === 0) {
+    return parsed.catalogWrite;
+  }
+  if (parsed.desired.kind === "custom") {
+    return parsed.desired.catalog;
+  }
+  return fromDisk;
 }
 
 export function parseUiProviderSave(

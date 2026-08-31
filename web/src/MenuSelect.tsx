@@ -208,8 +208,15 @@ export function MenuSelect({
                     activeRef.current = row.value;
                     setActive(row.value);
                   }}
-                  onPointerDown={(event) => event.preventDefault()}
-                  onClick={() => pick(row.value)}
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    pick(row.value);
+                  }}
                 >
                   {row.label}
                 </button>

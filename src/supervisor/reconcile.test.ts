@@ -205,6 +205,16 @@ test("official restores the backup and does not wrap identity", async () => {
   assert.equal(ctx.fs.read(ctx.paths.mode)?.trim(), "official");
 });
 
+test("official peels a leftover openbot marker without a backup", async () => {
+  const leftover = `${OPENBOT_MARKER}\n${STOCK}`;
+  const ctx = setup(leftover);
+  const result = await reconcile(officialBox(ctx.paths), ctx.deps);
+  assert.equal(result.kind, "ok");
+  assert.equal(ctx.fs.read(ctx.paths.hostMain), STOCK);
+  assert.equal(ctx.fs.read(ctx.paths.hostMain)?.includes(OPENBOT_MARKER), false);
+  assert.equal(ctx.fs.read(ctx.paths.mode)?.trim(), "official");
+});
+
 test("official keeps the catalog plan file", async () => {
   const wrapped = wrapHostSource({ source: STOCK, runtimePath: "/tmp/runtime.cjs" });
   assert.equal(wrapped.kind, "wrapped");

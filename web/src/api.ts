@@ -34,6 +34,50 @@ export type Snapshot = {
   tunnel?: TunnelState;
 };
 
+export type LogSettings = {
+  loggingEnabled: boolean;
+  logBodies: boolean;
+  logBodiesOnError: boolean;
+  logRetentionDays: number;
+  maxBodyCaptureBytes: number;
+  maxRecords: number;
+};
+
+export type LogRecord = {
+  id: string;
+  startedAt: string;
+  completedAt?: string;
+  latencyMs?: number;
+  ok: boolean;
+  status: number;
+  model?: string;
+  providerId?: string;
+  providerName?: string;
+  inboundEndpoint?: string;
+  upstreamEndpoint?: string;
+  stream?: boolean;
+  error?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  hasRequest: boolean;
+  hasResponse: boolean;
+  requestTruncated?: boolean;
+  responseTruncated?: boolean;
+};
+
+export type LogDetail = LogRecord & {
+  request?: unknown;
+  response?: unknown;
+};
+
+export type LogList = {
+  items: LogRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
 export type BoxState = {
   providers: Provider[];
   models: Model[];
@@ -41,6 +85,7 @@ export type BoxState = {
   activeModelId: string | null;
   snapshot?: Snapshot;
   wrapBytesChanged?: boolean;
+  logSettings?: LogSettings;
 };
 
 export type ModelLimitsPayload = {
@@ -125,7 +170,7 @@ function hydrateState(data: BoxState): BoxState {
   };
 }
 
-async function getJson(url: string, options?: RequestInit): Promise<BoxState> {
+async function readJson(url: string, options?: RequestInit): Promise<unknown> {
   const res = await fetch(url, options);
   const text = await res.text();
   let data: unknown;
@@ -137,7 +182,11 @@ async function getJson(url: string, options?: RequestInit): Promise<BoxState> {
   if (!res.ok) {
     throw asError(data, text || res.statusText || "Request failed");
   }
-  return hydrateState(data as BoxState);
+  return data;
+}
+
+async function getJson(url: string, options?: RequestInit): Promise<BoxState> {
+  return hydrateState((await readJson(url, options)) as BoxState);
 }
 
 export async function loadState(): Promise<BoxState> {
@@ -150,6 +199,62 @@ export async function save(command: Command): Promise<BoxState> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(command),
   });
+}
+
+export async function loadLogSettings(): Promise<LogSettings> {
+  return (await readJson("/api/logs/settings")) as LogSettings;
+}
+
+export async function saveLogSettings(settings: LogSettings): Promise<LogSettings> {
+  return (await readJson("/api/logs/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  })) as LogSettings;
+}
+
+export async function listLogs(query: {
+  q?: string;
+  ok?: boolean;
+  model?: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<LogList> {
+  const params = new URLSearchParams();
+  if (query.q) {
+    params.set("q", query.q);
+  }
+  if (query.ok === true) {
+    params.set("ok", "true");
+  }
+  if (query.ok === false) {
+    params.set("ok", "false");
+  }
+  if (query.model) {
+    params.set("model", query.model);
+  }
+  if (query.page !== undefined) {
+    params.set("page", String(query.page));
+  }
+  if (query.pageSize !== undefined) {
+    params.set("pageSize", String(query.pageSize));
+  }
+  const suffix = params.toString();
+  const data = (await readJson(suffix ? `/api/logs?${suffix}` : "/api/logs")) as LogList;
+  return {
+    items: Array.isArray(data.items) ? data.items : [],
+    total: typeof data.total === "number" ? data.total : 0,
+    page: typeof data.page === "number" ? data.page : 1,
+    pageSize: typeof data.pageSize === "number" ? data.pageSize : 50,
+  };
+}
+
+export async function getLog(id: string): Promise<LogDetail> {
+  return (await readJson(`/api/logs/${encodeURIComponent(id)}`)) as LogDetail;
+}
+
+export async function clearLogs(): Promise<void> {
+  await readJson("/api/logs/clear", { method: "POST" });
 }
 
 export function isCustom(state: BoxState): boolean {

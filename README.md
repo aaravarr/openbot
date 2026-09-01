@@ -66,14 +66,21 @@ Older catalogs stored `none` for “leave it to the model.” OpenBot migrates t
 
 ## The control page
 
-Two screens. Limits open as dialogs, not a third page of stacked forms.
+Three panes. Limits open as dialogs, not a third page of stacked forms.
 
 - **Chat** — which model Grok Bot uses on this Computer. Official Grok or one custom model. **Thinking** is its own module for the model that is On. A quiet list switches `slug · provider`. No keys, no limits. Not per-conversation — one model at a time.
 - **Provider** — the account. The header always shows **Edit** (accessible name **Edit endpoint**), **Key**, and a Key saved badge. **Edit** opens name and base URL in a dialog. **Key** opens the API key dialog. **Add model** opens a **New model** dialog (model ID plus limits). Click a model row to edit limits in a dialog. **Use** puts that model on Chat. Thinking is chosen on Chat, not here.
+- **Logs** — hop request records for this Computer. Recording is **off by default**.
 
 If a model still needs a key, Chat takes you to that provider instead of failing silently. You can still open a model dialog and set limits before a key exists.
 
 Image, video, and audio are stored on the model for later. Chat still sends text.
+
+## Logs
+
+The **Logs** pane is for stalled Grok Bot turns that have no inspectable hop record (for example DeepSeek `missing field tool_call_id`). Enable **Record requests** to capture hop metadata and errors. Keys are never stored. Bodies stay off unless you keep them on errors or keep all bodies.
+
+Reinstall or reload OpenBot on the Computer so hop-handler picks up the change.
 
 ## Back to official Grok
 

@@ -37,6 +37,7 @@ export type SharedEnv = {
   readonly OPENBOT_PLAN: string;
   readonly OPENBOT_SECRETS: string;
   readonly OPENBOT_MAPS: string;
+  readonly OPENBOT_LOGS: string;
   readonly OPENBOT_HOP_HOST: string;
   readonly OPENBOT_HOP_PORT: string;
   readonly OPENBOT_HOP_PID: string;
@@ -53,6 +54,7 @@ function sharedEnv(deps: SupervisorDeps): SharedEnv {
     OPENBOT_PLAN: deps.paths.plan,
     OPENBOT_SECRETS: deps.paths.secrets,
     OPENBOT_MAPS: deps.paths.maps,
+    OPENBOT_LOGS: deps.paths.logsSettings,
     OPENBOT_HOP_HOST: LOOPBACK,
     OPENBOT_HOP_PORT: String(SERVICE_PORT),
     OPENBOT_HOP_PID: deps.paths.hopPid,

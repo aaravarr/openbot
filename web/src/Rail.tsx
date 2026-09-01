@@ -15,6 +15,21 @@ function IconChat() {
   );
 }
 
+function IconLogs() {
+  return (
+    <svg className="rail-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M3.5 3.5h9v9h-9z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinejoin="round"
+      />
+      <path d="M5.5 6.5h5M5.5 9h3.5" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function IconProvider() {
   return (
     <svg className="rail-icon" viewBox="0 0 16 16" aria-hidden="true">
@@ -44,6 +59,7 @@ export function Rail({
   liveProviderId: string | null;
 }) {
   const chatOn = route.kind === "chat";
+  const logsOn = route.kind === "logs";
   const addOn = route.kind === "add";
   const activeProvider =
     route.kind === "provider" || route.kind === "model" ? route.providerId : "";
@@ -64,6 +80,17 @@ export function Rail({
           <span className="rail-item-main">
             <IconChat />
             <span className="rail-item-name">Chat</span>
+          </span>
+        </button>
+        <button
+          type="button"
+          className={logsOn ? "rail-item is-current" : "rail-item"}
+          aria-current={logsOn ? "page" : undefined}
+          onClick={() => go({ kind: "logs" })}
+        >
+          <span className="rail-item-main">
+            <IconLogs />
+            <span className="rail-item-name">Logs</span>
           </span>
         </button>
         <p className="rail-label">Providers</p>

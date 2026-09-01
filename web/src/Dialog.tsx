@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 export function Dialog({
   title,
   titleClassName,
+  className,
   aside,
   open,
   onClose,
@@ -11,6 +12,7 @@ export function Dialog({
 }: {
   title: string;
   titleClassName?: string;
+  className?: string;
   aside?: ReactNode;
   open: boolean;
   onClose: () => void;
@@ -92,7 +94,13 @@ export function Dialog({
         }
       }}
     >
-      <div ref={panelRef} className="dialog-card" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div
+        ref={panelRef}
+        className={className ? `dialog-card ${className}` : "dialog-card"}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+      >
         <div className="dialog-head">
           <h2 id={titleId} className={titleClassName ? `dialog-title ${titleClassName}` : "dialog-title"}>
             {title}

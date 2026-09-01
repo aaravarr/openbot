@@ -23,6 +23,9 @@ export type BoxPaths = {
   readonly uiServer: AbsPath;
   readonly repoRoot: AbsPath;
   readonly expose: AbsPath;
+  readonly logsSettings: AbsPath;
+  readonly requestLog: AbsPath;
+  readonly requestBodiesDir: AbsPath;
   readonly tunnelPid: AbsPath;
   readonly tunnelLog: AbsPath;
   readonly tunnelCache: AbsPath;
@@ -68,6 +71,9 @@ export function boxPathsFrom(input: {
     uiServer: joinAbs(repoRoot, "src/ui/server.ts"),
     repoRoot,
     expose: joinAbs(sandData, "openbot-expose"),
+    logsSettings: joinAbs(sandData, "openbot-logs.json"),
+    requestLog: joinAbs(sandData, "openbot-requests.jsonl"),
+    requestBodiesDir: joinAbs(sandData, "openbot-request-bodies"),
     tunnelPid: joinAbs(sandData, "openbot-tunnel.pid"),
     tunnelLog: joinAbs(sandData, "openbot-tunnel.log"),
     tunnelCache: joinAbs(sandData, "openbot-tunnel.json"),

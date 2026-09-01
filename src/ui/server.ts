@@ -14,9 +14,32 @@ import { reconcile } from "../supervisor/reconcile.ts";
 import { loadSecrets, saveSecrets, upsertSecret } from "../supervisor/secrets.ts";
 import { readExposeFile } from "../supervisor/tunnel.ts";
 
+type LogSettings = {
+  loggingEnabled: boolean;
+  logBodies: boolean;
+  logBodiesOnError: boolean;
+  logRetentionDays: number;
+  maxBodyCaptureBytes: number;
+  maxRecords: number;
+};
+
+type LogList = {
+  items: unknown[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
 const require = createRequire(import.meta.url);
 const hop = require("../../payload/hop-handler.cjs") as {
   handleHopRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<boolean>;
+};
+const requestLog = require("../../payload/request-log.cjs") as {
+  loadSettings: () => LogSettings;
+  saveSettings: (input: unknown) => LogSettings;
+  listRequests: (query: Record<string, unknown>) => LogList;
+  getRequest: (id: string) => unknown;
+  clearRequests: () => void;
 };
 
 const repoRoot = process.env.OPENBOT_REPO ?? fileURLToPath(new URL("../..", import.meta.url));
@@ -65,6 +88,10 @@ function send(res: http.ServerResponse, status: number, body: string | Buffer, t
   res.end(buf);
 }
 
+function sendJson(res: http.ServerResponse, status: number, payload: unknown): void {
+  send(res, status, JSON.stringify(payload), "application/json; charset=utf-8");
+}
+
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -93,6 +120,10 @@ function snapshotForUi(snapshot: Snapshot): Snapshot & { tunnel: TunnelObserved 
   return { ...snapshot, tunnel: tunnelForUi(snapshot.tunnel) };
 }
 
+function logSettings(): LogSettings {
+  return requestLog.loadSettings();
+}
+
 function publicState(current: SupervisorDeps, catalog?: Catalog) {
   const saved = catalog ?? catalogFromPlanJson(current.fs.read(current.paths.plan));
   const store = loadSecrets(current.fs, current.paths.secrets);
@@ -103,19 +134,114 @@ function publicState(current: SupervisorDeps, catalog?: Catalog) {
     models: saved.models,
     keyedProviders,
     activeModelId: active?.modelId ?? null,
+    logSettings: logSettings(),
   };
+}
+
+function parseLogsQuery(url: URL): Record<string, unknown> {
+  const q = url.searchParams.get("q") ?? "";
+  const model = url.searchParams.get("model") ?? "";
+  const from = url.searchParams.get("from") ?? "";
+  const to = url.searchParams.get("to") ?? "";
+  const okRaw = url.searchParams.get("ok");
+  const page = Number(url.searchParams.get("page"));
+  const pageSize = Number(url.searchParams.get("pageSize"));
+  const query: Record<string, unknown> = {};
+  if (q.trim()) {
+    query.q = q;
+  }
+  if (model.trim()) {
+    query.model = model;
+  }
+  if (from.trim()) {
+    query.from = from;
+  }
+  if (to.trim()) {
+    query.to = to;
+  }
+  if (okRaw === "true") {
+    query.ok = true;
+  } else if (okRaw === "false") {
+    query.ok = false;
+  }
+  if (Number.isInteger(page)) {
+    query.page = page;
+  }
+  if (Number.isInteger(pageSize)) {
+    query.pageSize = pageSize;
+  }
+  return query;
+}
+
+function logIdFromPath(pathname: string): string | undefined {
+  const prefix = "/api/logs/";
+  if (!pathname.startsWith(prefix)) {
+    return undefined;
+  }
+  const rest = pathname.slice(prefix.length);
+  if (!rest || rest.includes("/")) {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(rest);
+  } catch {
+    return undefined;
+  }
+}
+
+async function handleLogsApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+  if (req.method === "GET" && url.pathname === "/api/logs/settings") {
+    sendJson(res, 200, logSettings());
+    return true;
+  }
+  if (req.method === "PUT" && url.pathname === "/api/logs/settings") {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readBody(req)) as unknown;
+    } catch {
+      sendJson(res, 400, { error: "invalid json" });
+      return true;
+    }
+    try {
+      sendJson(res, 200, requestLog.saveSettings(parsed));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "invalid log settings";
+      sendJson(res, 400, { error: message });
+    }
+    return true;
+  }
+  if (req.method === "POST" && url.pathname === "/api/logs/clear") {
+    requestLog.clearRequests();
+    sendJson(res, 200, { ok: true });
+    return true;
+  }
+  if (req.method === "GET" && url.pathname === "/api/logs") {
+    sendJson(res, 200, requestLog.listRequests(parseLogsQuery(url)));
+    return true;
+  }
+  if (req.method === "GET") {
+    const id = logIdFromPath(url.pathname);
+    if (id) {
+      const detail = requestLog.getRequest(id);
+      if (detail === null || detail === undefined) {
+        sendJson(res, 404, { error: "not found" });
+        return true;
+      }
+      sendJson(res, 200, detail);
+      return true;
+    }
+  }
+  return false;
 }
 
 async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
   const current = deps();
   if (req.method === "GET" && (url.pathname === "/api/snapshot" || url.pathname === "/api/state")) {
     const snapshot = await observe(current);
-    send(
-      res,
-      200,
-      JSON.stringify({ snapshot: snapshotForUi(snapshot), ...publicState(current) }),
-      "application/json; charset=utf-8",
-    );
+    sendJson(res, 200, { snapshot: snapshotForUi(snapshot), ...publicState(current) });
+    return;
+  }
+  if (await handleLogsApi(req, res, url)) {
     return;
   }
   if (req.method === "POST" && url.pathname === "/api/save") {
@@ -128,7 +254,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       });
       const result = await reconcile(parsed.desired, current);
       if (result.kind === "refused") {
-        send(res, 409, JSON.stringify(result), "application/json; charset=utf-8");
+        sendJson(res, 409, result);
         return;
       }
       if (parsed.catalogWrite && parsed.catalogWrite.providers.length === 0) {
@@ -143,21 +269,16 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         );
       }
       const catalog = catalogAfterSave(parsed, catalogFromPlanJson(current.fs.read(current.paths.plan)));
-      send(
-        res,
-        200,
-        JSON.stringify({
-          ok: true,
-          wrapBytesChanged: result.wrapBytesChanged,
-          snapshot: snapshotForUi(result.snapshot),
-          ...publicState(current, catalog),
-        }),
-        "application/json; charset=utf-8",
-      );
+      sendJson(res, 200, {
+        ok: true,
+        wrapBytesChanged: result.wrapBytesChanged,
+        snapshot: snapshotForUi(result.snapshot),
+        ...publicState(current, catalog),
+      });
     });
     return;
   }
-  send(res, 404, JSON.stringify({ error: "not found" }), "application/json; charset=utf-8");
+  sendJson(res, 404, { error: "not found" });
 }
 
 function safeUiPath(urlPath: string): string | undefined {
@@ -207,7 +328,7 @@ const server = http.createServer((req, res) => {
     } catch (err) {
       const message = err instanceof Error ? err.message : "error";
       if (!res.headersSent) {
-        send(res, 500, JSON.stringify({ error: message }), "application/json; charset=utf-8");
+        sendJson(res, 500, { error: message });
       }
     }
   })();

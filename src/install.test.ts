@@ -76,7 +76,7 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
 
   const result = spawnSync("bash", [installSh], {
     encoding: "utf8",
-    timeout: 30000,
+    timeout: 45000,
     env: {
       ...process.env,
       OPENBOT_HOST_MAIN: hostMain,
@@ -134,6 +134,7 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     assert.match(app.body, /These chips choose what Chat can pick/);
     assert.match(app.body, /Grok Bot sends this on the next message/);
     assert.match(app.body, /Open from phone with Cloudflare Tunnel/);
+    assert.match(app.body, /Refresh URL/);
     assert.match(app.body, /Skip to content/);
     assert.match(app.body, /Logs/);
     assert.match(app.body, /Record requests/);
@@ -190,6 +191,58 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     const logsList = await get(`${UI}/api/logs`);
     assert.equal(logsList.status, 200);
     assert.equal((JSON.parse(logsList.body) as { total: number }).total, 0);
+
+    const destCli = path.join(sandData, "openbot", "src", "cli.ts");
+    const cliEnv = { ...process.env };
+    delete cliEnv.OPENBOT_TUNNEL;
+    const custom = spawnSync(
+      "node",
+      [
+        "--experimental-strip-types",
+        destCli,
+        "install",
+        "--host-main",
+        hostMain,
+        "--sand-data",
+        sandData,
+        "--origin",
+        "https://example.invalid/v1",
+        "--model",
+        "glm-test",
+        "--name",
+        "Zhipu",
+      ],
+      {
+        encoding: "utf8",
+        timeout: 20000,
+        env: {
+          ...cliEnv,
+          OPENBOT_HOST_MAIN: hostMain,
+          OPENBOT_SAND_DATA: sandData,
+          OPENBOT_API_KEY: "sk-test",
+        },
+      },
+    );
+    assert.equal(custom.status, 0, custom.stderr || custom.stdout);
+    assert.equal(readFileSync(hostMain, "utf8").includes(OPENBOT_MARKER), true);
+    assert.match(readFileSync(path.join(sandData, "openbot-mode"), "utf8"), /custom/);
+
+    const update = spawnSync(
+      "node",
+      ["--experimental-strip-types", destCli, "install", "--host-main", hostMain, "--sand-data", sandData],
+      {
+        encoding: "utf8",
+        timeout: 20000,
+        env: {
+          ...cliEnv,
+          OPENBOT_HOST_MAIN: hostMain,
+          OPENBOT_SAND_DATA: sandData,
+        },
+      },
+    );
+    assert.equal(update.status, 0, update.stderr || update.stdout);
+    assert.equal(readFileSync(hostMain, "utf8").includes(OPENBOT_MARKER), true);
+    assert.match(readFileSync(path.join(sandData, "openbot-mode"), "utf8"), /custom/);
   } finally {
     killPidFile(path.join(sandData, "openbot-ui.pid"));
     killPidFile(path.join(sandData, "openbot-hop.pid"));

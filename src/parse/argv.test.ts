@@ -1,7 +1,34 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-import { parseInstallCommand, repoRootFromMeta } from "./argv.ts";
+import { HIGH_AGENT_MAX_TOKENS, loopbackExpose, type Catalog } from "../domain/types.ts";
+import { makeModel } from "../domain/model.ts";
+import { parseModelId, parseModelSlug } from "../supervisor/plan.ts";
+import { boxPathsFrom } from "../supervisor/paths.ts";
+import { parseProviderId } from "../supervisor/secrets.ts";
+import { boxFromSavedMode, parseInstallCommand, parseUpstreamOrigin, repoRootFromMeta } from "./argv.ts";
+
+function testPaths() {
+  return boxPathsFrom({ repoRoot: "/tmp/openbot", sandData: "/tmp/openbot-data" });
+}
+
+function zhipuCatalog(): Catalog {
+  const providerId = parseProviderId("zhipu");
+  const modelId = parseModelId("zhipu:glm-5.3-flash");
+  return {
+    providers: [
+      {
+        id: providerId,
+        name: "Zhipu",
+        origin: parseUpstreamOrigin("https://open.bigmodel.cn/api/paas/v4"),
+        maxTokensDefault: HIGH_AGENT_MAX_TOKENS,
+        mapFile: "provider-maps.cjs",
+      },
+    ],
+    models: [makeModel({ id: modelId, providerId, slug: parseModelSlug("glm-5.3-flash") })],
+    bindings: [{ conversation: { kind: "wildcard" }, modelId }],
+  };
+}
 
 test("refuses an API key on argv", () => {
   assert.throws(
@@ -107,4 +134,48 @@ test("cli file URL resolves to the directory that contains src/", () => {
   assert.equal(parsed.paths.logsSettings, "/home/box/sand-data/openbot-logs.json");
   assert.equal(parsed.paths.requestLog, "/home/box/sand-data/openbot-requests.jsonl");
   assert.equal(parsed.paths.requestBodiesDir, "/home/box/sand-data/openbot-request-bodies");
+});
+
+test("boxFromSavedMode keeps custom wrap when mode is custom", () => {
+  const box = boxFromSavedMode({
+    paths: testPaths(),
+    mode: "custom\n",
+    catalog: zhipuCatalog(),
+    expose: loopbackExpose(),
+  });
+  assert.equal(box.kind, "custom");
+  if (box.kind === "custom") {
+    assert.equal(box.catalog.models.length, 1);
+  }
+});
+
+test("boxFromSavedMode keeps official when mode is official even if the plan has models", () => {
+  const box = boxFromSavedMode({
+    paths: testPaths(),
+    mode: "official",
+    catalog: zhipuCatalog(),
+    expose: { kind: "cloudflare-quick" },
+  });
+  assert.equal(box.kind, "official");
+  assert.equal(box.expose.kind, "cloudflare-quick");
+});
+
+test("boxFromSavedMode infers custom from a catalog when mode is missing", () => {
+  const box = boxFromSavedMode({
+    paths: testPaths(),
+    mode: undefined,
+    catalog: zhipuCatalog(),
+    expose: loopbackExpose(),
+  });
+  assert.equal(box.kind, "custom");
+});
+
+test("boxFromSavedMode is official on a first install with no models", () => {
+  const box = boxFromSavedMode({
+    paths: testPaths(),
+    mode: undefined,
+    catalog: { providers: [], models: [], bindings: [] },
+    expose: loopbackExpose(),
+  });
+  assert.equal(box.kind, "official");
 });

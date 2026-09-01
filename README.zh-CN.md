@@ -32,15 +32,19 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 看到 `OpenBot is ready` 和 `This Computer` 后，用 Computer 浏览器打开 `http://127.0.0.1:9280`。
 
-安装时会在 Computer 键盘上等待 `Use Cloudflare Tunnel? [y/N]`（`curl | bash` 也会等）。输入 `y` 再回车会打印手机 URL 和二维码；只按回车则只在本机。可用 `--tunnel off`、`--tunnel cloudflare` 或 `OPENBOT_TUNNEL=off` 跳过提问。
+用**同一条命令更新** OpenBot。Chat 保持官方或自定义，不会被切回官方 Grok。已经打开的 Cloudflare Tunnel 也会保留。
+
+Cloudflare 提问只在**第一次安装**（还没有保存过 expose）时出现。输入 `y` 再回车会打印手机 URL 和二维码；只按回车则只在本机。之后再跑安装会沿用你已经选好的方式。可用 `--tunnel off`、`--tunnel cloudflare` 或 `OPENBOT_TUNNEL=off` 覆盖。
 
 在你接入服务商之前，聊天仍是官方 Grok。这是故意的。
 
 ```bash
-openbot tunnel on      # 公网 URL + 二维码
+openbot tunnel on      # 公网 URL + 二维码；失效的 trycloudflare 链接也会换新
 openbot tunnel off     # 只在这台 Computer
 openbot tunnel status
 ```
+
+trycloudflare 地址会过期。更新、`openbot tunnel on`，或 Chat 上的 **Refresh URL**，都会探测已保存的链接，失效就重新开一条隧道。
 
 ## 接入一个模型
 
@@ -84,7 +88,7 @@ openbot tunnel status
 
 ## 回到官方 Grok
 
-在 **Chat** 里点列表中的 **Official Grok**。聊天回到原厂。服务商和 Key 仍留在 Computer 上，之后还能切回自定义模型，不用重配。正在跑的 Tunnel 会一直保留，直到你关掉它。
+在 **Chat** 里点列表中的 **Official Grok**。聊天回到原厂。服务商和 Key 仍留在 Computer 上，之后还能切回自定义模型，不用重配。正在跑的 Tunnel 会一直保留，直到你关掉它。更新 OpenBot 不会替你点 Official。
 
 ## 使用前请知道
 

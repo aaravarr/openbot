@@ -1,17 +1,22 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
-import { parseInstallCommand, officialBox, customBoxFromProvider, slugify } from "./parse/argv.ts";
+import {
+  parseInstallCommand,
+  officialBox,
+  customBoxFromProvider,
+  slugify,
+  boxFromSavedMode,
+} from "./parse/argv.ts";
 import { observe } from "./supervisor/observe.ts";
 import { dryRunWrap, reconcile } from "./supervisor/reconcile.ts";
 import { nodeFs, nodeProcs } from "./supervisor/procs.ts";
 import { loadSecrets, parseProviderId, saveSecrets, upsertSecret } from "./supervisor/secrets.ts";
 import { catalogFromPlanJson } from "./supervisor/plan.ts";
-import { readExposeFile } from "./supervisor/tunnel.ts";
+import { exposeFilePresent, readExposeFile } from "./supervisor/tunnel.ts";
 import { censusHost } from "./host/census.ts";
 import { loopbackExpose, type Expose } from "./domain/types.ts";
 import { type SupervisorDeps } from "./supervisor/observe.ts";
-import { customBoxFromCatalog } from "./parse/argv.ts";
 import { printResult, printStatus } from "./cli/print.ts";
 
 function depsFrom(paths: SupervisorDeps["paths"]): SupervisorDeps {
@@ -28,6 +33,23 @@ export function exposeFromTunnelAnswer(raw: string | undefined): Expose {
     return { kind: "cloudflare-quick" };
   }
   return loopbackExpose();
+}
+
+/** Flag wins. Later installs keep the saved expose so an update does not stop Cloudflare. */
+export function resolveInstallExpose(input: {
+  specified: boolean;
+  flagged: Expose;
+  saved: Expose;
+  savedPresent: boolean;
+  asked: Expose;
+}): Expose {
+  if (input.specified) {
+    return input.flagged;
+  }
+  if (input.savedPresent) {
+    return input.saved;
+  }
+  return input.asked;
 }
 
 function readTtyLine(): string | undefined {
@@ -85,6 +107,12 @@ function askTunnel(): Expose {
   return exposeFromTunnelAnswer(answer);
 }
 
+function boxFromDisk(deps: SupervisorDeps, expose: Expose) {
+  const mode = deps.fs.read(deps.paths.mode);
+  const catalog = catalogFromPlanJson(deps.fs.read(deps.paths.plan));
+  return boxFromSavedMode({ paths: deps.paths, mode, catalog, expose });
+}
+
 async function main(argv: string[]): Promise<number> {
   const parsed = parseInstallCommand({ argv, env: process.env, metaUrl: import.meta.url });
   const deps = depsFrom(parsed.paths);
@@ -121,13 +149,7 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     const expose: Expose = parsed.command.action === "on" ? { kind: "cloudflare-quick" } : loopbackExpose();
-    const mode = deps.fs.read(deps.paths.mode)?.trim();
-    const catalog = catalogFromPlanJson(deps.fs.read(deps.paths.plan));
-    const desired =
-      mode === "custom" && catalog.models.length > 0
-        ? customBoxFromCatalog({ paths: parsed.paths, catalog, expose })
-        : officialBox(parsed.paths, expose);
-    const result = await reconcile(desired, deps, { reloadService: true });
+    const result = await reconcile(boxFromDisk(deps, expose), deps, { reloadService: true });
     printResult(result, parsed.json);
     return result.kind === "ok" ? 0 : 1;
   }
@@ -141,7 +163,14 @@ async function main(argv: string[]): Promise<number> {
   const custom = parsed.command.kind === "install" ? parsed.command.custom : undefined;
   const flagged = parsed.command.kind === "install" ? parsed.command.expose : loopbackExpose();
   const specified = parsed.command.kind === "install" && parsed.command.exposeSpecified;
-  const expose = specified ? flagged : askTunnel();
+  const savedPresent = exposeFilePresent(deps.fs, deps.paths.expose);
+  const expose = resolveInstallExpose({
+    specified,
+    flagged,
+    saved: savedExpose,
+    savedPresent,
+    asked: savedPresent || specified ? loopbackExpose() : askTunnel(),
+  });
 
   if (custom) {
     const box = customBoxFromProvider({
@@ -164,7 +193,7 @@ async function main(argv: string[]): Promise<number> {
     return result.kind === "ok" ? 0 : 1;
   }
 
-  const result = await reconcile(officialBox(parsed.paths, expose), deps, { reloadService: true });
+  const result = await reconcile(boxFromDisk(deps, expose), deps, { reloadService: true });
   printResult(result, parsed.json);
   return result.kind === "ok" ? 0 : 1;
 }
@@ -180,5 +209,3 @@ if (isMain) {
     },
   );
 }
-
-export { main };

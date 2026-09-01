@@ -12,14 +12,17 @@ export type TunnelDeps = {
 
 export type TunnelNet = {
   download(url: string, dest: AbsPath): Promise<void>;
+  probeUrl?(url: string): Promise<boolean>;
 };
 
-const QUICK_URL = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/iu;
+const QUICK_URL = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/giu;
 const WAIT_MS = 12000;
+const PROBE_MS = 2500;
 
 export function parseQuickTunnelUrl(log: string): string | undefined {
-  const match = log.match(QUICK_URL);
-  return match?.[0];
+  const matches = [...log.matchAll(QUICK_URL)];
+  const last = matches[matches.length - 1];
+  return last?.[0];
 }
 
 export function readExposeFile(fsDeps: FsDeps, path: AbsPath): Expose {
@@ -28,6 +31,11 @@ export function readExposeFile(fsDeps: FsDeps, path: AbsPath): Expose {
     return { kind: "cloudflare-quick" };
   }
   return { kind: "loopback" };
+}
+
+export function exposeFilePresent(fsDeps: FsDeps, path: AbsPath): boolean {
+  const raw = fsDeps.read(path);
+  return typeof raw === "string" && raw.trim() !== "";
 }
 
 export function writeExposeFile(fsDeps: FsDeps, path: AbsPath, expose: Expose): void {
@@ -151,6 +159,40 @@ export async function downloadHttps(url: string, dest: AbsPath): Promise<void> {
   });
 }
 
+/**
+ * Expired trycloudflare hostnames typically return 530 or 404.
+ * Origin 502/503 during a UI reload must not rotate a hostname that is still booked.
+ */
+export function trycloudflareProbeOk(status: number): boolean {
+  if (status === 404 || status === 410 || status === 530) {
+    return false;
+  }
+  return status > 0;
+}
+
+export async function probeTrycloudflare(url: string, timeoutMs = PROBE_MS): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(ok);
+    };
+    const req = https.get(url, { headers: { "User-Agent": "openbot" } }, (res) => {
+      res.resume();
+      const code = res.statusCode ?? 0;
+      finish(trycloudflareProbeOk(code));
+    });
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      finish(false);
+    });
+    req.on("error", () => finish(false));
+  });
+}
+
 export async function ensureCloudflared(deps: TunnelDeps, net: TunnelNet = { download: downloadHttps }): Promise<AbsPath> {
   if (deps.fs.exists(deps.paths.tunnelBin)) {
     return deps.paths.tunnelBin;
@@ -174,6 +216,35 @@ async function waitForUrl(deps: TunnelDeps, budgetMs: number): Promise<string | 
   return parseQuickTunnelUrl(deps.fs.read(deps.paths.tunnelLog) ?? "");
 }
 
+async function startQuickTunnel(deps: TunnelDeps, net: TunnelNet): Promise<TunnelObserved> {
+  const bin = await ensureCloudflared(deps, net);
+  deps.fs.mkdirp(deps.paths.sandData);
+  deps.fs.write(deps.paths.tunnelLog, "", 0o644);
+  const pid = deps.procs.start({
+    command: bin,
+    argv: ["tunnel", "--no-autoupdate", "--url", internalControlUrl()],
+    env: { ...process.env },
+    log: deps.paths.tunnelLog,
+    pidFile: deps.paths.tunnelPid,
+  });
+  const url = await waitForUrl(deps, WAIT_MS);
+  if (!url) {
+    deps.procs.stop(pid);
+    clearTunnelCache(deps);
+    return {
+      kind: "error",
+      message: "Cloudflare Tunnel started but no public URL appeared. Check openbot-tunnel.log.",
+    };
+  }
+  writeTunnelCache(deps, url, pid);
+  return {
+    kind: "cloudflare-quick",
+    url,
+    internal: internalControlUrl(),
+    pid,
+  };
+}
+
 export async function reconcileExpose(
   expose: Expose,
   deps: TunnelDeps,
@@ -184,36 +255,18 @@ export async function reconcileExpose(
     stopOwnedTunnel(deps);
     return { kind: "off" };
   }
+  const transport: TunnelNet = net ?? { download: downloadHttps };
+  const probe = transport.probeUrl ?? probeTrycloudflare;
   const cached = readTunnelCache(deps);
   if (cached.kind === "cloudflare-quick") {
-    return cached;
+    const live = await probe(cached.url);
+    if (live) {
+      return cached;
+    }
+    stopOwnedTunnel(deps);
   }
   try {
-    const bin = await ensureCloudflared(deps, net ?? { download: downloadHttps });
-    deps.fs.mkdirp(deps.paths.sandData);
-    const pid = deps.procs.start({
-      command: bin,
-      argv: ["tunnel", "--no-autoupdate", "--url", internalControlUrl()],
-      env: { ...process.env },
-      log: deps.paths.tunnelLog,
-      pidFile: deps.paths.tunnelPid,
-    });
-    const url = await waitForUrl(deps, WAIT_MS);
-    if (!url) {
-      deps.procs.stop(pid);
-      clearTunnelCache(deps);
-      return {
-        kind: "error",
-        message: "Cloudflare Tunnel started but no public URL appeared. Check openbot-tunnel.log.",
-      };
-    }
-    writeTunnelCache(deps, url, pid);
-    return {
-      kind: "cloudflare-quick",
-      url,
-      internal: internalControlUrl(),
-      pid,
-    };
+    return await startQuickTunnel(deps, transport);
   } catch (err) {
     stopOwnedTunnel(deps);
     return {

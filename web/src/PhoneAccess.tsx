@@ -22,9 +22,17 @@ export function PhoneAccess({
           </p>
           {tunnel.qr ? <pre className="qr" aria-label="QR code for the phone URL">{tunnel.qr}</pre> : null}
           <p className="hint-soft">Anyone with that URL can open the control page. Keys stay on this Computer.</p>
-          <button type="button" className="button-tertiary" disabled={busy} onClick={() => onExpose("off")}>
-            Stop Cloudflare Tunnel
-          </button>
+          <p className="hint-soft">If that URL stops working, refresh it here.</p>
+          <div>
+            <button type="button" className="button-tertiary" disabled={busy} onClick={() => onExpose("cloudflare")}>
+              Refresh URL
+            </button>
+          </div>
+          <div>
+            <button type="button" className="button-tertiary" disabled={busy} onClick={() => onExpose("off")}>
+              Stop Cloudflare Tunnel
+            </button>
+          </div>
         </>
       ) : tunnel.kind === "error" ? (
         <>

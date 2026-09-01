@@ -32,15 +32,19 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 When it prints `OpenBot is ready` and `This Computer`, open `http://127.0.0.1:9280` on the Computer.
 
-The installer waits on the Computer keyboard for `Use Cloudflare Tunnel? [y/N]` (including `curl | bash`). Type `y` then Enter for a phone URL and QR. Enter alone stays on this Computer. Skip the prompt with `--tunnel off` or `--tunnel cloudflare`, or `OPENBOT_TUNNEL=off`.
+Re-run that same command to **update** OpenBot. Chat stays Official or custom. A saved Cloudflare Tunnel stays on. The installer does not switch you back to official Grok.
+
+The Cloudflare prompt is **first install only** (no saved expose yet). Type `y` then Enter for a phone URL and QR. Enter alone stays on this Computer. Later installs keep what you already chose. Override with `--tunnel off`, `--tunnel cloudflare`, or `OPENBOT_TUNNEL=off`.
 
 Chat stays on official Grok until you connect a provider. That is on purpose.
 
 ```bash
-openbot tunnel on      # public URL + QR
+openbot tunnel on      # public URL + QR; also replaces a dead trycloudflare link
 openbot tunnel off     # this Computer only
 openbot tunnel status
 ```
+
+trycloudflare URLs expire. On update, `openbot tunnel on`, or **Refresh URL** on Chat, OpenBot probes the saved link and starts a new tunnel when it is gone.
 
 ## Connect a model
 
@@ -84,7 +88,7 @@ Reinstall or reload OpenBot on the Computer so hop-handler picks up the change.
 
 ## Back to official Grok
 
-On **Chat**, click **Official Grok** in the list. Stock chat comes back. Providers and keys remain on the Computer, so you can return to a custom model without setting it up again. A running tunnel stays until you stop it.
+On **Chat**, click **Official Grok** in the list. Stock chat comes back. Providers and keys remain on the Computer, so you can return to a custom model without setting it up again. A running tunnel stays until you stop it. Updating OpenBot does not click Official for you.
 
 ## Good to know
 

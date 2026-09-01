@@ -234,6 +234,30 @@ export function customBoxFromProvider(input: {
   });
 }
 
+/**
+ * Re-running install must follow openbot-mode, not wipe Chat back to official.
+ * A missing mode file may still infer custom from a catalog (same as observe).
+ */
+export function boxFromSavedMode(input: {
+  paths: BoxPaths;
+  mode: string | undefined;
+  catalog: Catalog;
+  expose: Expose;
+}): OfficialBox | CustomBox {
+  const mode = input.mode?.trim();
+  const hasModels = input.catalog.models.length > 0;
+  if (mode === "custom" && hasModels) {
+    return customBoxFromCatalog({ paths: input.paths, catalog: input.catalog, expose: input.expose });
+  }
+  if (mode === "official") {
+    return officialBox(input.paths, input.expose);
+  }
+  if (hasModels) {
+    return customBoxFromCatalog({ paths: input.paths, catalog: input.catalog, expose: input.expose });
+  }
+  return officialBox(input.paths, input.expose);
+}
+
 export function parseDisableCommand(input: {
   argv: readonly string[];
   env: NodeJS.ProcessEnv;

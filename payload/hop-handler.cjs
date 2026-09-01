@@ -286,13 +286,13 @@ async function handleCompletions(req, res) {
       body = JSON.parse(raw.toString("utf8"));
     } catch (err) {
       var invalid = { error: { message: "invalid json" } };
-      sendJson(res, 400, invalid);
       record({
         status: 400,
         error: "invalid json",
         requestBody: raw.toString("utf8").slice(0, 8000),
         responseBody: invalid,
       });
+      sendJson(res, 400, invalid);
       return;
     }
     if (isRecord(body)) {
@@ -305,16 +305,16 @@ async function handleCompletions(req, res) {
       plan = readJson(planPath());
     } catch (err) {
       var missing = { error: { message: "openbot plan missing; save a provider in the UI" } };
-      sendJson(res, 503, missing);
       record({ status: 503, error: missing.error.message, responseBody: missing });
+      sendJson(res, 503, missing);
       return;
     }
     var requested = body && body.model;
     var route = lookupRoute(plan, requested);
     if (!route) {
       var unknown = { error: { message: "unknown model slug" } };
-      sendJson(res, 400, unknown);
       record({ status: 400, error: unknown.error.message, responseBody: unknown });
+      sendJson(res, 400, unknown);
       return;
     }
     fields.model = route.model.slug;
@@ -336,28 +336,28 @@ async function handleCompletions(req, res) {
     var key = loadKey(route.provider.id);
     if (!key) {
       var noSecret = { error: { message: "no secret for this provider" } };
-      sendJson(res, 503, noSecret);
       record({ status: 503, error: noSecret.error.message, responseBody: noSecret });
+      sendJson(res, 503, noSecret);
       return;
     }
     var upstream = completionsUrl(route.provider.origin);
     fields.upstreamEndpoint = upstream;
     var out = await postUpstream(upstream, body, key);
-    send(res, out.status, out.raw, (out.headers && (out.headers["content-type"] || out.headers["Content-Type"])) || "application/json");
     record({
       status: out.status,
       responseRaw: Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw),
     });
+    send(res, out.status, out.raw, (out.headers && (out.headers["content-type"] || out.headers["Content-Type"])) || "application/json");
   } catch (err) {
     var failed = { error: { message: "hop failed" } };
-    if (!res.headersSent) {
-      sendJson(res, 502, failed);
-    }
     record({
       status: 502,
       error: errorMessage(err, "hop failed"),
       responseBody: failed,
     });
+    if (!res.headersSent) {
+      sendJson(res, 502, failed);
+    }
   }
 }
 
@@ -374,9 +374,6 @@ async function handleHopRequest(req, res) {
     }
     return false;
   } catch (err) {
-    if (!res.headersSent) {
-      sendJson(res, 502, { error: { message: "hop failed" } });
-    }
     if (pathname === "/v1/chat/completions") {
       recordHopSafe({
         startedAt: new Date().toISOString(),
@@ -386,6 +383,9 @@ async function handleHopRequest(req, res) {
         error: errorMessage(err, "hop failed"),
         responseBody: { error: { message: "hop failed" } },
       });
+    }
+    if (!res.headersSent) {
+      sendJson(res, 502, { error: { message: "hop failed" } });
     }
     return true;
   }

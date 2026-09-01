@@ -296,10 +296,11 @@ test("logBodiesOnError keeps a body on error only", () => {
 test("prune keeps only maxRecords newest rows and deletes orphan bodies", () => {
   withSand((dir) => {
     log.saveSettings({ loggingEnabled: true, maxRecords: 3, logBodies: true, logBodiesOnError: true });
+    const origin = Date.now();
     for (let i = 1; i <= 5; i += 1) {
       log.recordHop({
         id: `req-prune-0${String(i)}`,
-        startedAt: `2026-04-0${String(i)}T00:00:00.000Z`,
+        startedAt: new Date(origin + i * 1000).toISOString(),
         status: 200,
         model: `m${String(i)}`,
         requestBody: { model: `m${String(i)}` },
@@ -320,16 +321,17 @@ test("prune keeps only maxRecords newest rows and deletes orphan bodies", () => 
 test("listRequests filters q, ok, and model newest-first", () => {
   withSand(() => {
     log.saveSettings({ loggingEnabled: true });
+    const origin = Date.now();
     log.recordHop({
       id: "req-list-aa",
-      startedAt: "2026-05-01T00:00:00.000Z",
+      startedAt: new Date(origin).toISOString(),
       status: 200,
       model: "glm-5.3-flash",
       providerName: "Zhipu",
     });
     log.recordHop({
       id: "req-list-bb",
-      startedAt: "2026-05-02T00:00:00.000Z",
+      startedAt: new Date(origin + 1000).toISOString(),
       status: 400,
       model: "deepseek-v4-flash",
       error: "missing field tool_call_id",

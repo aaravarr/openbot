@@ -1,5 +1,6 @@
 export type Route =
   | { kind: "chat" }
+  | { kind: "logs" }
   | { kind: "add" }
   | { kind: "provider"; providerId: string }
   | { kind: "model"; providerId: string; modelId: string };
@@ -8,6 +9,9 @@ export function parseHash(hash: string): Route {
   const raw = hash.replace(/^#/, "").replace(/^\/+/, "");
   if (!raw || raw === "chat") {
     return { kind: "chat" };
+  }
+  if (raw === "logs") {
+    return { kind: "logs" };
   }
   if (raw === "add") {
     return { kind: "add" };
@@ -31,6 +35,9 @@ export function toHash(route: Route): string {
   if (route.kind === "chat") {
     return "#/";
   }
+  if (route.kind === "logs") {
+    return "#/logs";
+  }
   if (route.kind === "add") {
     return "#/add";
   }
@@ -51,6 +58,6 @@ export function go(route: Route): void {
   window.location.hash = next;
 }
 
-export function paneKind(route: Route): "chat" | "provider" | "model" | "add" {
+export function paneKind(route: Route): "chat" | "logs" | "provider" | "model" | "add" {
   return route.kind;
 }

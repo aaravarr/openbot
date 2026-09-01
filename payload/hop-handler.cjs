@@ -6,6 +6,7 @@ var https = require("https");
 var { URL } = require("url");
 var path = require("path");
 var { toOpenAIMessages } = require("./openai-messages.cjs");
+var requestLog = require("./request-log.cjs");
 
 var TIMEOUT_MS = Number(process.env.OPENBOT_HOP_TIMEOUT || "1800000");
 var HIGH_AGENT_MAX_TOKENS = 65536;
@@ -234,47 +235,130 @@ function readBody(req) {
   });
 }
 
+function recordHopSafe(entry) {
+  try {
+    requestLog.recordHop(entry);
+  } catch (err) {
+    /* never throw into the chat path */
+  }
+}
+
+function errorMessage(err, fallback) {
+  if (err && typeof err.message === "string" && err.message.trim()) return err.message;
+  return fallback || "hop failed";
+}
+
 async function handleCompletions(req, res) {
-  var raw = await readBody(req);
-  var body;
+  var startedMs = Date.now();
+  var startedAt = new Date().toISOString();
+  var fields = {
+    inboundEndpoint: "/v1/chat/completions",
+    stream: false,
+  };
+  var recorded = false;
+
+  function record(extra) {
+    if (recorded) return;
+    recorded = true;
+    extra = extra || {};
+    recordHopSafe({
+      startedAt: startedAt,
+      completedAt: new Date().toISOString(),
+      latencyMs: Date.now() - startedMs,
+      inboundEndpoint: fields.inboundEndpoint,
+      stream: extra.stream === undefined ? fields.stream : extra.stream,
+      model: extra.model !== undefined ? extra.model : fields.model,
+      providerId: extra.providerId !== undefined ? extra.providerId : fields.providerId,
+      providerName: extra.providerName !== undefined ? extra.providerName : fields.providerName,
+      upstreamEndpoint: extra.upstreamEndpoint !== undefined ? extra.upstreamEndpoint : fields.upstreamEndpoint,
+      requestBody: extra.requestBody !== undefined ? extra.requestBody : fields.requestBody,
+      responseBody: extra.responseBody,
+      responseRaw: extra.responseRaw,
+      status: extra.status,
+      error: extra.error,
+    });
+  }
+
   try {
-    body = JSON.parse(raw.toString("utf8"));
+    var raw = await readBody(req);
+    var body;
+    try {
+      body = JSON.parse(raw.toString("utf8"));
+    } catch (err) {
+      var invalid = { error: { message: "invalid json" } };
+      sendJson(res, 400, invalid);
+      record({
+        status: 400,
+        error: "invalid json",
+        requestBody: raw.toString("utf8").slice(0, 8000),
+        responseBody: invalid,
+      });
+      return;
+    }
+    if (isRecord(body)) {
+      fields.stream = body.stream === true;
+      if (typeof body.model === "string") fields.model = body.model;
+      fields.requestBody = body;
+    }
+    var plan;
+    try {
+      plan = readJson(planPath());
+    } catch (err) {
+      var missing = { error: { message: "openbot plan missing; save a provider in the UI" } };
+      sendJson(res, 503, missing);
+      record({ status: 503, error: missing.error.message, responseBody: missing });
+      return;
+    }
+    var requested = body && body.model;
+    var route = lookupRoute(plan, requested);
+    if (!route) {
+      var unknown = { error: { message: "unknown model slug" } };
+      sendJson(res, 400, unknown);
+      record({ status: 400, error: unknown.error.message, responseBody: unknown });
+      return;
+    }
+    fields.model = route.model.slug;
+    fields.providerId = route.provider.id;
+    fields.providerName = route.provider.name;
+    body.model = route.model.slug;
+    if (Array.isArray(body.messages)) {
+      body.messages = toOpenAIMessages(body.messages);
+    }
+    applyMaxTokens(body, route.model);
+    applyMaps(body, {
+      modelId: route.model.slug,
+      baseUrl: route.provider.origin,
+      maxMode: false,
+      parameters: hopParameters(route.model),
+    });
+    fields.requestBody = body;
+    fields.stream = body.stream === true;
+    var key = loadKey(route.provider.id);
+    if (!key) {
+      var noSecret = { error: { message: "no secret for this provider" } };
+      sendJson(res, 503, noSecret);
+      record({ status: 503, error: noSecret.error.message, responseBody: noSecret });
+      return;
+    }
+    var upstream = completionsUrl(route.provider.origin);
+    fields.upstreamEndpoint = upstream;
+    var out = await postUpstream(upstream, body, key);
+    send(res, out.status, out.raw, (out.headers && (out.headers["content-type"] || out.headers["Content-Type"])) || "application/json");
+    record({
+      status: out.status,
+      responseRaw: Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw),
+    });
   } catch (err) {
-    sendJson(res, 400, { error: { message: "invalid json" } });
-    return;
+    var failed = { error: { message: "hop failed" } };
+    if (!res.headersSent) {
+      sendJson(res, 502, failed);
+    }
+    record({
+      status: 502,
+      error: errorMessage(err, "hop failed"),
+      responseBody: failed,
+    });
   }
-  var plan;
-  try {
-    plan = readJson(planPath());
-  } catch (err) {
-    sendJson(res, 503, { error: { message: "openbot plan missing; save a provider in the UI" } });
-    return;
-  }
-  var requested = body && body.model;
-  var route = lookupRoute(plan, requested);
-  if (!route) {
-    sendJson(res, 400, { error: { message: "unknown model slug" } });
-    return;
-  }
-  body.model = route.model.slug;
-  if (Array.isArray(body.messages)) {
-    body.messages = toOpenAIMessages(body.messages);
-  }
-  applyMaxTokens(body, route.model);
-  applyMaps(body, {
-    modelId: route.model.slug,
-    baseUrl: route.provider.origin,
-    maxMode: false,
-    parameters: hopParameters(route.model),
-  });
-  var key = loadKey(route.provider.id);
-  if (!key) {
-    sendJson(res, 503, { error: { message: "no secret for this provider" } });
-    return;
-  }
-  var upstream = completionsUrl(route.provider.origin);
-  var out = await postUpstream(upstream, body, key);
-  send(res, out.status, out.raw, (out.headers && (out.headers["content-type"] || out.headers["Content-Type"])) || "application/json");
 }
 
 async function handleHopRequest(req, res) {
@@ -292,6 +376,16 @@ async function handleHopRequest(req, res) {
   } catch (err) {
     if (!res.headersSent) {
       sendJson(res, 502, { error: { message: "hop failed" } });
+    }
+    if (pathname === "/v1/chat/completions") {
+      recordHopSafe({
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        inboundEndpoint: "/v1/chat/completions",
+        status: 502,
+        error: errorMessage(err, "hop failed"),
+        responseBody: { error: { message: "hop failed" } },
+      });
     }
     return true;
   }

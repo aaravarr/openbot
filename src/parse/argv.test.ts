@@ -104,4 +104,7 @@ test("cli file URL resolves to the directory that contains src/", () => {
   assert.equal(parsed.paths.repoRoot, "/tmp/openbot-pkg");
   assert.equal(parsed.paths.uiServer, "/tmp/openbot-pkg/src/ui/server.ts");
   assert.equal(parsed.paths.expose, "/home/box/sand-data/openbot-expose");
+  assert.equal(parsed.paths.logsSettings, "/home/box/sand-data/openbot-logs.json");
+  assert.equal(parsed.paths.requestLog, "/home/box/sand-data/openbot-requests.jsonl");
+  assert.equal(parsed.paths.requestBodiesDir, "/home/box/sand-data/openbot-request-bodies");
 });

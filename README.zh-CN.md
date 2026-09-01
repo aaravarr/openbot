@@ -66,14 +66,21 @@ openbot tunnel status
 
 ## 控制页怎么分层
 
-两层屏幕。限额在弹窗里改，不会再开第三页把表单平铺下去。
+三层屏幕。限额在弹窗里改，不会再开第三页把表单平铺下去。
 
 - **Chat** —— 这台 Computer 上 Grok Bot 用哪个模型。官方 Grok，或一个自定义模型。**Thinking** 是独立模块，只针对当前 On 的模型。下面一行列表用来切换 `slug · 服务商`。不是按会话配置——同一时间只有一个模型。这里不填 Key，也不改限额。
 - **Provider** —— 账号。页眉始终有 **Edit**（无障碍名称 **Edit endpoint**）、**Key**，以及 Key saved 标记。**Edit** 弹出名称和 Base URL。**Key** 弹出 API Key。**Add model** 弹出 **New model**（模型 ID 加限额）。点模型行会弹出限额编辑。**Use** 把它放到 Chat。思考强度在 Chat 上选，不在这里选。
+- **Logs** —— 这台 Computer 上的 hop 请求记录。默认关闭，不记录。
 
 如果某个模型还没有 Key，Chat 会带你去对应的服务商页，而不是悄悄失败。没有 Key 也可以先打开模型弹窗改限额。
 
 图片、视频、音频会记在模型配置里，供以后使用。当前聊天仍只发送文本。
+
+## 请求日志
+
+**Logs** 用来排查卡住、又看不到 hop 记录的 Grok Bot 回合（例如 DeepSeek 报 `missing field tool_call_id`）。打开 **Record requests** 后才会记下 hop 请求和错误。API Key 不会写入日志。除非你选择在出错时保留正文，或保留全部正文，否则只存元数据。
+
+在 Computer 上重新安装或 reload OpenBot 后，才会用到新的 hop-handler。
 
 ## 回到官方 Grok
 

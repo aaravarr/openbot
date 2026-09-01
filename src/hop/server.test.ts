@@ -79,6 +79,8 @@ async function startHop(input: {
       ...process.env,
       OPENBOT_HOP_HOST: "127.0.0.1",
       OPENBOT_HOP_PORT: String(port),
+      OPENBOT_SAND_DATA: dir,
+      OPENBOT_LOGS: path.join(dir, "openbot-logs.json"),
       OPENBOT_PLAN: planPath,
       OPENBOT_SECRETS: secretsPath,
     },

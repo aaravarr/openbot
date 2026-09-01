@@ -11,6 +11,7 @@ import {
   type Command,
 } from "./api";
 import { Chat } from "./Chat";
+import { Logs } from "./Logs";
 import { ProviderPage } from "./ProviderPage";
 import { Rail } from "./Rail";
 import { Setup, type ProviderDraft } from "./Setup";
@@ -318,6 +319,8 @@ export function App() {
         onCancel={() => go({ kind: "chat" })}
       />
     );
+  } else if (shown.kind === "logs") {
+    body = <Logs />;
   } else if ((shown.kind === "provider" || shown.kind === "model") && provider) {
     body = (
       <ProviderPage

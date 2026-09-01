@@ -135,6 +135,8 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     assert.match(app.body, /Grok Bot sends this on the next message/);
     assert.match(app.body, /Open from phone with Cloudflare Tunnel/);
     assert.match(app.body, /Skip to content/);
+    assert.match(app.body, /Logs/);
+    assert.match(app.body, /Record requests/);
     assert.match(app.body, /\bOff\b/);
     assert.equal(app.body.includes("On Chat now"), false);
     assert.equal(app.body.includes("Use this model"), false);
@@ -173,6 +175,7 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
         hopListen: { kind: string; port?: number };
       };
       catalog?: unknown;
+      logSettings?: { loggingEnabled?: boolean };
     };
     assert.equal(parsed.snapshot.wrap.kind, "stock-unmarked");
     assert.equal(parsed.snapshot.uiListen.kind, "ours");
@@ -180,6 +183,13 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     assert.equal(parsed.snapshot.uiListen.port, 9280);
     assert.equal(parsed.snapshot.hopListen.port, 9280);
     assert.equal("catalog" in parsed, false);
+    assert.equal(parsed.logSettings?.loggingEnabled, false);
+    const logsSettings = await get(`${UI}/api/logs/settings`);
+    assert.equal(logsSettings.status, 200);
+    assert.equal((JSON.parse(logsSettings.body) as { loggingEnabled: boolean }).loggingEnabled, false);
+    const logsList = await get(`${UI}/api/logs`);
+    assert.equal(logsList.status, 200);
+    assert.equal((JSON.parse(logsList.body) as { total: number }).total, 0);
   } finally {
     killPidFile(path.join(sandData, "openbot-ui.pid"));
     killPidFile(path.join(sandData, "openbot-hop.pid"));

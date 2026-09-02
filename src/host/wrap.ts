@@ -7,12 +7,12 @@ export type WrapProof =
   | { readonly kind: "refused"; readonly census: HostCensus; readonly reason: string };
 
 const WRAPPER = `function createProtoSessionProvider() {
-  return __openbotRuntime.wrapSession(createProtoSessionProvider_stock, arguments);
+  return __openbotRuntime.attachSession(createProtoSessionProvider_stock, arguments);
 }
 `;
 
 const HEADER_RE =
-  /^\/\* openbot-stock-wrap \*\/\nvar __openbotRuntime = require\((?:'[^']+'|"[^"]+")\);\nfunction createProtoSessionProvider\(\) \{\n  return __openbotRuntime\.wrapSession\(createProtoSessionProvider_stock, arguments\);\n\}\n/;
+  /^\/\* openbot-stock-wrap \*\/\nvar __openbotRuntime = require\((?:'[^']+'|"[^"]+")\);\nfunction createProtoSessionProvider\(\) \{\n  return __openbotRuntime\.(?:wrapSession|attachSession)\(createProtoSessionProvider_stock, arguments\);\n\}\n/;
 
 const OPENGROK_HEADER_RE =
   /^\/\* opengrok-stock-wrap \*\/\nvar __opengrokRuntime = require\((?:'[^']+'|"[^"]+")\);\n(?:async )?function createProtoSessionProvider\(\) \{\n  return __opengrokRuntime\.wrapSession\(createProtoSessionProvider_stock, arguments\);\n\}\n/;

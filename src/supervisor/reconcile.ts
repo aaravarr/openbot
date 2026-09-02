@@ -165,6 +165,33 @@ async function stopStaleService(deps: SupervisorDeps): Promise<void> {
   deps.fs.remove(deps.paths.uiPid);
 }
 
+
+function loggingEnabledFromDisk(deps: SupervisorDeps): boolean {
+  const raw = deps.fs.read(deps.paths.logsSettings);
+  if (raw === undefined) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(raw) as { loggingEnabled?: unknown };
+    return parsed.loggingEnabled === true;
+  } catch {
+    return false;
+  }
+}
+
+function sourceForMarkedWrap(source: string): string {
+  if (
+    source.includes("attachSession(createProtoSessionProvider_stock") ||
+    source.includes("wrapSession(createProtoSessionProvider_stock")
+  ) {
+    return source;
+  }
+  if (source.includes(OPENBOT_MARKER)) {
+    return stripWrap(source);
+  }
+  return source;
+}
+
 function restoreOfficialHost(deps: SupervisorDeps, source: string): boolean {
   const peeled = peelOpengrokToStock(source);
   if (peeled.kind === "stock" && peeled.source !== source) {
@@ -267,7 +294,23 @@ export async function reconcile(
 
   if (desired.kind === "official") {
     writeMode(deps, "official");
-    wrapBytesChanged = restoreOfficialHost(deps, raw);
+    if (loggingEnabledFromDisk(deps)) {
+      const toWrap = sourceForMarkedWrap(source);
+      const census = censusHost(toWrap);
+      if (census.kind === "private-lane" || census.kind === "gap" || census.kind === "ambiguous-factory") {
+        return {
+          kind: "refused",
+          error: { kind: "census-refused", reason: `cannot wrap a ${census.kind} host` },
+        };
+      }
+      const wrapped = installCustomWrap(deps, toWrap);
+      if ("kind" in wrapped) {
+        return wrapped;
+      }
+      wrapBytesChanged = wrapped.changed || raw !== toWrap;
+    } else {
+      wrapBytesChanged = restoreOfficialHost(deps, raw);
+    }
     const service = await ensureService(deps, before.uiListen.kind, opts);
     if (service) {
       return service;

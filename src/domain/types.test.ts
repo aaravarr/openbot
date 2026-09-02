@@ -64,3 +64,16 @@ test("official box has no catalog and no hop", () => {
   assert.equal("catalog" in official ? official.catalog : undefined, undefined);
   assert.equal("hop" in official ? official.hop : undefined, undefined);
 });
+
+test("align is ok when official is desired and wrap is a logging tap", () => {
+  const desired: OfficialBox = {
+    kind: "official",
+    wrap: { kind: "stock" },
+    hopListen: { kind: "stop-owned" },
+    uiListen: { kind: "loopback", host: LOOPBACK, port: SERVICE_PORT },
+    secretsPath,
+    expose: { kind: "loopback" },
+  };
+  const a = align(desired, { kind: "openbot-marked", marker: OPENBOT_MARKER });
+  assert.equal(a.kind, "ok");
+});

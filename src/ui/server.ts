@@ -4,6 +4,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { LOOPBACK, SERVICE_PORT, type Catalog, type Snapshot, type TunnelObserved } from "../domain/types.ts";
+import { officialBox } from "../parse/argv.ts";
 import { catalogAfterSave, parseUiProviderSave } from "../parse/ui.ts";
 import { renderQrAscii } from "../qrcode.ts";
 import { boxPathsFrom } from "../supervisor/paths.ts";
@@ -159,6 +160,10 @@ function parseLogsQuery(url: URL): Record<string, unknown> {
   if (to.trim()) {
     query.to = to;
   }
+  const channel = url.searchParams.get("channel") ?? "";
+  if (channel.trim()) {
+    query.channel = channel.trim();
+  }
   if (okRaw === "true") {
     query.ok = true;
   } else if (okRaw === "false") {
@@ -203,7 +208,24 @@ async function handleLogsApi(req: http.IncomingMessage, res: http.ServerResponse
       return true;
     }
     try {
-      sendJson(res, 200, requestLog.saveSettings(parsed));
+      await enqueueSave(async () => {
+        const saved = requestLog.saveSettings(parsed);
+        let wrapBytesChanged = false;
+        let wrapError: string | undefined;
+        const current = deps();
+        if (wrapMode(current.fs.read(current.paths.mode)) === "official") {
+          const result = await reconcile(
+            officialBox(current.paths, readExposeFile(current.fs, current.paths.expose)),
+            current,
+          );
+          if (result.kind === "refused") {
+            wrapError = result.error.kind;
+          } else {
+            wrapBytesChanged = result.wrapBytesChanged;
+          }
+        }
+        sendJson(res, 200, { ...saved, wrapBytesChanged, wrapError });
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "invalid log settings";
       sendJson(res, 400, { error: message });

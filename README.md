@@ -74,7 +74,7 @@ Three panes. Limits open as dialogs, not a third page of stacked forms.
 
 - **Chat** — which model Grok Bot uses on this Computer. Official Grok or one custom model. **Thinking** is its own module for the model that is On. A quiet list switches `slug · provider`. No keys, no limits. Not per-conversation — one model at a time.
 - **Provider** — the account. The header always shows **Edit** (accessible name **Edit endpoint**), **Key**, and a Key saved badge. **Edit** opens name and base URL in a dialog. **Key** opens the API key dialog. **Add model** opens a **New model** dialog (model ID plus limits). Click a model row to edit limits in a dialog. **Use** puts that model on Chat. Thinking is chosen on Chat, not here.
-- **Logs** — hop request records for this Computer. Recording is **off by default**.
+- **Logs** — hop and official host-stream records for this Computer. Recording is **off by default**.
 
 If a model still needs a key, Chat takes you to that provider instead of failing silently. You can still open a model dialog and set limits before a key exists.
 
@@ -82,9 +82,11 @@ Image, video, and audio are stored on the model for later. Chat still sends text
 
 ## Logs
 
-The **Logs** pane is for stalled Grok Bot turns that have no inspectable hop record (for example DeepSeek `missing field tool_call_id`). Enable **Record requests** to capture hop metadata and errors. Keys are never stored. Bodies stay off unless you keep them on errors or keep all bodies.
+The **Logs** pane is for stalled Grok Bot turns. Enable **Record requests** to capture records. Keys are never stored. Bodies stay off unless you keep them on errors or keep all bodies.
 
-Reinstall or reload OpenBot on the Computer so hop-handler picks up the change.
+Custom chat writes **Hop** rows (`POST /v1/chat/completions`) and **Host** rows (the AI SDK parts OpenBot yields). Official Grok writes **Official** rows: the real host stream (`tool-call-streaming-start`, deltas, `tool-call`, `response.messages`). Official chat still uses Grok; the tap does not hop. Turn on **Keep all bodies** to store those packets. Enabling recording while Official is on installs the tap and may restart the host once.
+
+Reinstall or reload OpenBot on the Computer so the loopback service picks up the change.
 
 ## Back to official Grok
 

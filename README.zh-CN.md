@@ -74,7 +74,7 @@ trycloudflare 地址会过期。更新、`openbot tunnel on`，或 Chat 上的 *
 
 - **Chat** —— 这台 Computer 上 Grok Bot 用哪个模型。官方 Grok，或一个自定义模型。**Thinking** 是独立模块，只针对当前 On 的模型。下面一行列表用来切换 `slug · 服务商`。不是按会话配置——同一时间只有一个模型。这里不填 Key，也不改限额。
 - **Provider** —— 账号。页眉始终有 **Edit**（无障碍名称 **Edit endpoint**）、**Key**，以及 Key saved 标记。**Edit** 弹出名称和 Base URL。**Key** 弹出 API Key。**Add model** 弹出 **New model**（模型 ID 加限额）。点模型行会弹出限额编辑。**Use** 把它放到 Chat。思考强度在 Chat 上选，不在这里选。
-- **Logs** —— 这台 Computer 上的 hop 请求记录。默认关闭，不记录。
+- **Logs** —— 这台 Computer 上的 hop 与官方 host 流记录。默认关闭，不记录。
 
 如果某个模型还没有 Key，Chat 会带你去对应的服务商页，而不是悄悄失败。没有 Key 也可以先打开模型弹窗改限额。
 
@@ -82,9 +82,11 @@ trycloudflare 地址会过期。更新、`openbot tunnel on`，或 Chat 上的 *
 
 ## 请求日志
 
-**Logs** 用来排查卡住、又看不到 hop 记录的 Grok Bot 回合（例如 DeepSeek 报 `missing field tool_call_id`）。打开 **Record requests** 后才会记下 hop 请求和错误。API Key 不会写入日志。除非你选择在出错时保留正文，或保留全部正文，否则只存元数据。
+**Logs** 用来排查卡住的 Grok Bot 回合。打开 **Record requests** 后才会写入记录。API Key 不会写入日志。除非你选择在出错时保留正文，或保留全部正文，否则只存元数据。
 
-在 Computer 上重新安装或 reload OpenBot 后，才会用到新的 hop-handler。
+自定义模型会各写一行 **Hop**（`POST /v1/chat/completions`）和 **Host**（OpenBot 交给 harness 的 AI SDK 片段）。官方 Grok 写 **Official** 行：真实 host 流（`tool-call-streaming-start`、delta、`tool-call`、`response.messages`）。官方聊天仍走 Grok，tap 不会 hop。打开 **Keep all bodies** 才会存这些报文。在 Official 下打开记录会装上 tap，host 可能重启一次。
+
+在 Computer 上重新安装或 reload OpenBot 后，loopback 服务才会用到新代码。
 
 ## 回到官方 Grok
 

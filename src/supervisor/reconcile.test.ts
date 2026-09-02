@@ -335,3 +335,45 @@ test("CLI reload restarts the owned loopback service", async () => {
   assert.equal(ctx.procs.started.some((row) => row.includes("server.ts")), true);
 });
 
+
+test("official with logging on installs a tap wrap and keeps the plan", async () => {
+  const ctx = setup(STOCK);
+  ctx.fs.write(
+    ctx.paths.logsSettings,
+    JSON.stringify({
+      loggingEnabled: true,
+      logBodies: true,
+      logBodiesOnError: true,
+      logRetentionDays: 7,
+      maxBodyCaptureBytes: 65536,
+      maxRecords: 200,
+    }),
+  );
+  ctx.fs.write(ctx.paths.plan, '{"kind":"custom","catalog":{"providers":[{"id":"zhipu"}],"models":[],"bindings":[]}}\n');
+  const result = await reconcile(officialBox(ctx.paths), ctx.deps);
+  assert.equal(result.kind, "ok");
+  const written = ctx.fs.read(ctx.paths.hostMain);
+  assert.equal(written?.includes(OPENBOT_MARKER), true);
+  assert.equal(written?.includes("attachSession(createProtoSessionProvider_stock"), true);
+  assert.match(ctx.fs.read(ctx.paths.plan) ?? "", /zhipu/);
+  assert.equal(ctx.fs.read(ctx.paths.mode)?.trim(), "official");
+  assert.equal(ctx.procs.termed.length, 1);
+});
+
+test("official with logging off still restores stock and does not wrap identity", async () => {
+  const wrapped = wrapHostSource({ source: STOCK, runtimePath: "/tmp/runtime.cjs" });
+  assert.equal(wrapped.kind, "wrapped");
+  if (wrapped.kind !== "wrapped") {
+    return;
+  }
+  const ctx = setup(wrapped.source);
+  ctx.fs.write(ctx.paths.knownBackup, STOCK);
+  ctx.fs.write(
+    ctx.paths.logsSettings,
+    JSON.stringify({ loggingEnabled: false, logBodies: false, logBodiesOnError: true }),
+  );
+  const result = await reconcile(officialBox(ctx.paths), ctx.deps);
+  assert.equal(result.kind, "ok");
+  assert.equal(ctx.fs.read(ctx.paths.hostMain), STOCK);
+  assert.equal(ctx.fs.read(ctx.paths.hostMain)?.includes(OPENBOT_MARKER), false);
+});

@@ -5,6 +5,7 @@ import {
   listLogs,
   loadLogSettings,
   saveLogSettings,
+  type LogChannel,
   type LogDetail,
   type LogRecord,
   type LogSettings,
@@ -50,6 +51,16 @@ function truncatedNote(value: unknown): string | null {
   return null;
 }
 
+function channelLabel(channel: LogChannel | undefined): string {
+  if (channel === "official") {
+    return "Official";
+  }
+  if (channel === "custom-host") {
+    return "Host";
+  }
+  return "Hop";
+}
+
 export function Logs() {
   const searchId = useId();
   const filterId = useId();
@@ -58,7 +69,7 @@ export function Logs() {
   const [items, setItems] = useState<LogRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [q, setQ] = useState("");
-  const [filter, setFilter] = useState<"all" | "errors">("all");
+  const [filter, setFilter] = useState<"all" | "official" | "custom" | "errors">("all");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [noteError, setNoteError] = useState(false);
@@ -76,6 +87,7 @@ export function Logs() {
     const listed = await listLogs({
       q: q.trim() || undefined,
       ok: filter === "errors" ? false : undefined,
+      channel: filter === "official" || filter === "custom" ? filter : undefined,
       page: 1,
       pageSize: 50,
     });
@@ -103,9 +115,20 @@ export function Logs() {
     setNoteError(false);
     try {
       const saved = await saveLogSettings(next);
-      setSettings(saved);
-      setDays(String(saved.logRetentionDays));
+      const { wrapBytesChanged, wrapError, ...settingsOnly } = saved;
+      setSettings(settingsOnly);
+      setDays(String(settingsOnly.logRetentionDays));
       await refreshList();
+      if (wrapError) {
+        setNote(`Recording saved, but the host tap could not be applied (${wrapError}).`);
+        setNoteError(true);
+      } else if (wrapBytesChanged) {
+        setNote(
+          settingsOnly.loggingEnabled
+            ? "Official Grok capture is on. The host restarted; send a new message to record a turn."
+            : "Official tap removed. Chat is stock Grok again.",
+        );
+      }
     } catch (err) {
       setNote(err instanceof Error ? err.message : "Could not save log settings");
       setNoteError(true);
@@ -172,7 +195,8 @@ export function Logs() {
         Logs
       </h1>
       <p className="lede">
-        Hop request records for this Computer. Recording is off by default. Keys are never stored.
+        Hop, host, and official Grok stream records for this Computer. Recording is off by default. Keys are never
+        stored. Turn on Keep all bodies to compare real packets.
       </p>
 
       {settings ? (
@@ -245,7 +269,7 @@ export function Logs() {
             id={searchId}
             type="search"
             value={q}
-            placeholder="id, model, error, provider"
+            placeholder="id, model, official, error"
             onChange={(event) => setQ(event.target.value)}
           />
         </label>
@@ -258,9 +282,17 @@ export function Logs() {
             value={filter}
             options={[
               { value: "all", label: "All" },
+              { value: "official", label: "Official" },
+              { value: "custom", label: "Custom" },
               { value: "errors", label: "Errors" },
             ]}
-            onChange={(value) => setFilter(value === "errors" ? "errors" : "all")}
+            onChange={(value) => {
+              if (value === "official" || value === "custom" || value === "errors") {
+                setFilter(value);
+                return;
+              }
+              setFilter("all");
+            }}
           />
         </div>
       </div>
@@ -284,7 +316,10 @@ export function Logs() {
       {emptyOff ? (
         <p className="page-foot">Recording is off. Nothing is stored until you enable Record requests.</p>
       ) : emptyOn ? (
-        <p className="page-foot">No hop requests yet. Send a message in Grok Bot, then refresh this list.</p>
+        <p className="page-foot">
+          No records yet. Send a message in Grok Bot, then refresh this list. Official Grok rows appear here when
+          recording is on.
+        </p>
       ) : (
         <div className="list-card">
           {items.map((row) => (
@@ -297,6 +332,8 @@ export function Logs() {
               }}
             >
               <span className="log-line-top">
+                <span className="log-channel">{channelLabel(row.channel)}</span>
+                <span className="line-sep">·</span>
                 <span className="log-time">{formatTime(row.startedAt)}</span>
                 {row.model ? (
                   <>
@@ -338,6 +375,10 @@ export function Logs() {
           <div className="log-detail">
             <dl className="log-kv">
               <div>
+                <dt>Channel</dt>
+                <dd>{channelLabel(detail.channel)}</dd>
+              </div>
+              <div>
                 <dt>Time</dt>
                 <dd>{formatTime(detail.startedAt)}</dd>
               </div>
@@ -355,6 +396,12 @@ export function Logs() {
                 <div>
                   <dt>Provider</dt>
                   <dd>{detail.providerName}</dd>
+                </div>
+              ) : null}
+              {detail.inboundEndpoint ? (
+                <div>
+                  <dt>Endpoint</dt>
+                  <dd className="mono">{detail.inboundEndpoint}</dd>
                 </div>
               ) : null}
               {detail.upstreamEndpoint ? (

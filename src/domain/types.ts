@@ -1,6 +1,8 @@
 /**
  * OpenBot domain types. The product is a box supervisor.
- * Official chat is wrap-gone. Custom chat is marked wrap plus loopback hop.
+ * Official chat does not hop. Wrap is stock when request logging is off.
+ * When logging is on, a marked tap spies on stock Grok (host-stream records).
+ * Custom chat is marked wrap plus loopback hop.
  * Secrets never appear on Binding. The generic hop cannot drop SendToUser.
  *
  * Hop and the control UI share one loopback service. Chat is POST /v1/chat/completions.

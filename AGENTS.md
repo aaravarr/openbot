@@ -16,8 +16,8 @@ The domain is a box supervisor. Callers parse input into `DesiredState`, then `r
 
 `DesiredState` is `OfficialBox | CustomBox` in `src/domain/types.ts`.
 
-- Official: wrap is stock (gone). Leftover hop-only processes are stopped. The loopback service stays so the user can switch back. DesiredState has no catalog, hop URL, or upstream. The plan file on disk stays unless the user removed the last provider. Secrets stay. `openbot-mode` is `official`.
-- Custom: wrap is marked `/* openbot-stock-wrap */`. One loopback service on `127.0.0.1:9280` serves the control UI, `/api/*`, and hop `POST /v1/chat/completions`. Catalog holds providers, models, and bindings. `openbot-mode` is `custom`.
+- Official: chat uses stock Grok. Leftover hop-only processes are stopped. The loopback service stays so the user can switch back. DesiredState has no catalog, hop URL, or upstream. The plan file on disk stays unless the user removed the last provider. Secrets stay. `openbot-mode` is `official`. Wrap is stock (gone) when request logging is off. When logging is on, the host may stay marked: `attachSession` / `wrapSession` delegates to `tapSession`, which calls stock Grok and records host-format messages, tools, stream parts, and `response.messages`. That tap is not a hop and is not `IdentityOfficialWrap`.
+- Custom: wrap is marked `/* openbot-stock-wrap */`. One loopback service on `127.0.0.1:9280` serves the control UI, `/api/*`, and hop `POST /v1/chat/completions`. Catalog holds providers, models, and bindings. `openbot-mode` is `custom`. Custom wrap also records a `custom-host` row (what we yield to the harness) beside the hop OpenAI row.
 
 A known `/* opengrok-stock-wrap */` header is peeled back to stock before official restore or custom wrap. `python …/hop-server.py` leftovers are SIGTERM'd. A leftover `hop-server.cjs` pid is stopped. Any other foreign listener on `:9280` is refused, not adopted.
 
@@ -27,7 +27,7 @@ Bindings are `{ conversation, modelId }`. Derive `hopBaseUrl` with `hopBaseUrl(L
 
 The generic hop unwraps `{ jsonSchema }`, maps OpenAI `tool_calls` to host `tool-call` parts, maps `finish_reason: "tool_calls"` to `finishReason: "tool-calls"`, and honors the model's `stop`. Do not add a SendToUser-drop or a forced `finish=stop` on `GenericHop`. Named opt-in strategies are a separate union.
 
-`wrapSession` exists only in a marked host. Official turns never enter it. It is sync. Do not return a Promise. Do not add `wrapBareHop`.
+`wrapSession` exists only in a marked host. It is sync. Do not return a Promise. Do not add `wrapBareHop`. Official turns never hop: `wrapSession` / `attachSession` must delegate to `tapSession` when `openbot-mode` is official. `tapSession` is sync, calls stock, and must yield the original stream parts.
 
 Default agent `max_tokens` is `HIGH_AGENT_MAX_TOKENS` (65536). Do not default to 8192. Do not write GLM `fast: true` as an installer default. Live maps file is `provider-maps.cjs` only.
 

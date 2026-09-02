@@ -43,6 +43,8 @@ export type LogSettings = {
   maxRecords: number;
 };
 
+export type LogChannel = "hop" | "official" | "custom-host";
+
 export type LogRecord = {
   id: string;
   startedAt: string;
@@ -50,6 +52,7 @@ export type LogRecord = {
   latencyMs?: number;
   ok: boolean;
   status: number;
+  channel?: LogChannel;
   model?: string;
   providerId?: string;
   providerName?: string;
@@ -205,17 +208,20 @@ export async function loadLogSettings(): Promise<LogSettings> {
   return (await readJson("/api/logs/settings")) as LogSettings;
 }
 
-export async function saveLogSettings(settings: LogSettings): Promise<LogSettings> {
+export async function saveLogSettings(
+  settings: LogSettings,
+): Promise<LogSettings & { wrapBytesChanged?: boolean; wrapError?: string }> {
   return (await readJson("/api/logs/settings", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings),
-  })) as LogSettings;
+  })) as LogSettings & { wrapBytesChanged?: boolean; wrapError?: string };
 }
 
 export async function listLogs(query: {
   q?: string;
   ok?: boolean;
+  channel?: "official" | "custom";
   model?: string;
   page?: number;
   pageSize?: number;
@@ -229,6 +235,9 @@ export async function listLogs(query: {
   }
   if (query.ok === false) {
     params.set("ok", "false");
+  }
+  if (query.channel) {
+    params.set("channel", query.channel);
   }
   if (query.model) {
     params.set("model", query.model);

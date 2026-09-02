@@ -226,9 +226,9 @@ function num(value) {
 function extractUsage(payload) {
   if (!isRecord(payload) || !isRecord(payload.usage)) return undefined;
   var usage = payload.usage;
-  var promptTokens = num(usage.prompt_tokens) ?? num(usage.input_tokens);
-  var completionTokens = num(usage.completion_tokens) ?? num(usage.output_tokens);
-  var totalTokens = num(usage.total_tokens);
+  var promptTokens = num(usage.prompt_tokens) ?? num(usage.input_tokens) ?? num(usage.promptTokens);
+  var completionTokens = num(usage.completion_tokens) ?? num(usage.output_tokens) ?? num(usage.completionTokens);
+  var totalTokens = num(usage.total_tokens) ?? num(usage.totalTokens);
   if (totalTokens === undefined && promptTokens !== undefined && completionTokens !== undefined) {
     totalTokens = promptTokens + completionTokens;
   }
@@ -283,6 +283,12 @@ function publicUrl(urlStr) {
   } catch (err) {
     return String(urlStr);
   }
+}
+
+
+function normalizeChannel(raw) {
+  if (raw === "official" || raw === "custom-host" || raw === "hop") return raw;
+  return "hop";
 }
 
 function makeId(raw) {
@@ -447,13 +453,18 @@ function recordHopInner(input) {
     }
   }
 
+  var channel = normalizeChannel(src.channel);
+  var inbound = typeof src.inboundEndpoint === "string" && src.inboundEndpoint
+    ? src.inboundEndpoint
+    : (channel === "hop" ? "/v1/chat/completions" : "host-stream");
   var row = {
     id: id,
     startedAt: startedAt,
     completedAt: completedAt,
     ok: ok,
     status: status,
-    inboundEndpoint: typeof src.inboundEndpoint === "string" ? src.inboundEndpoint : "/v1/chat/completions",
+    channel: channel,
+    inboundEndpoint: inbound,
     stream: src.stream === true,
     hasRequest: hasRequest,
     hasResponse: hasResponse,
@@ -491,6 +502,13 @@ function recordHop(input) {
 function matchesQuery(row, query) {
   if (query.ok === true && row.ok !== true) return false;
   if (query.ok === false && row.ok !== false) return false;
+  if (query.channel === "official") {
+    if (row.channel !== "official") return false;
+  } else if (query.channel === "custom") {
+    if (row.channel === "official") return false;
+  } else if (typeof query.channel === "string" && query.channel) {
+    if (row.channel !== query.channel) return false;
+  }
   if (typeof query.model === "string" && query.model) {
     if (row.model !== query.model) return false;
   }
@@ -508,6 +526,7 @@ function matchesQuery(row, query) {
       row.error,
       row.providerId,
       row.providerName,
+      row.channel,
       row.inboundEndpoint,
       row.upstreamEndpoint,
     ]

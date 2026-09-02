@@ -37,6 +37,17 @@ function opengrokWrap(stock: string): string {
   );
 }
 
+function legacyWrapSessionHeader(stock: string): string {
+  return (
+    `${OPENBOT_MARKER}\n` +
+    `var __openbotRuntime = require("/tmp/runtime.cjs");\n` +
+    `function createProtoSessionProvider() {\n` +
+    `  return __openbotRuntime.wrapSession(createProtoSessionProvider_stock, arguments);\n` +
+    `}\n` +
+    stock.replaceAll("function createProtoSessionProvider(", "function createProtoSessionProvider_stock(")
+  );
+}
+
 test("wrap prepends the marker and renames the stock factory", () => {
   const proof = wrapHostSource({ source: STOCK, runtimePath: "/home/box/sand-data/openbot/payload/runtime.cjs" });
   assert.equal(proof.kind, "wrapped");
@@ -45,7 +56,7 @@ test("wrap prepends the marker and renames the stock factory", () => {
   }
   assert.equal(proof.source.includes(OPENBOT_MARKER), true);
   assert.equal(proof.source.includes("function createProtoSessionProvider_stock("), true);
-  assert.equal(proof.source.includes("wrapSession(createProtoSessionProvider_stock, arguments)"), true);
+  assert.equal(proof.source.includes("attachSession(createProtoSessionProvider_stock, arguments)"), true);
   assert.equal(proof.source.includes("async function createProtoSessionProvider"), false);
 });
 
@@ -82,6 +93,13 @@ test("stripWrap restores the factory name", () => {
   assert.equal(stripped.includes(OPENBOT_MARKER), false);
   assert.equal(stripped.includes("createProtoSessionProvider_stock"), false);
   assert.equal(stripped.includes("function createProtoSessionProvider("), true);
+});
+
+test("stripWrap peels a wrapSession header from an older host", () => {
+  const stripped = stripWrap(legacyWrapSessionHeader(STOCK));
+  assert.equal(stripped.includes(OPENBOT_MARKER), false);
+  assert.equal(stripped.includes("createProtoSessionProvider_stock"), false);
+  assert.equal(stripped, STOCK);
 });
 
 test("stripOpengrokWrap restores the stock factory", () => {

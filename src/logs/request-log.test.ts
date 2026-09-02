@@ -468,3 +468,32 @@ test("enabled hop records upstream 400 JSON error text", async () => {
     upstream.server.close();
   }
 });
+
+test("channel official vs custom filters host-stream rows", () => {
+  withSand(() => {
+    log.saveSettings({ loggingEnabled: true, logBodies: true });
+    log.recordHop({
+      id: "req-official-01",
+      channel: "official",
+      inboundEndpoint: "host-stream",
+      status: 200,
+      model: "grok-4.5",
+      requestBody: { messages: [{ role: "user", content: "hi" }] },
+      responseBody: { parts: [{ type: "tool-call", toolName: "GetDynamicTools" }] },
+    });
+    log.recordHop({
+      id: "req-hop-01",
+      channel: "hop",
+      status: 200,
+      model: "glm-5.3-flash",
+      requestBody: { model: "glm-5.3-flash" },
+      responseBody: { choices: [] },
+    });
+    assert.equal(log.listRequests({ channel: "official" }).total, 1);
+    assert.equal(log.listRequests({ channel: "official" }).items[0]?.model, "grok-4.5");
+    assert.equal(log.listRequests({ channel: "custom" }).total, 1);
+    assert.equal(log.listRequests({ channel: "custom" }).items[0]?.model, "glm-5.3-flash");
+    const detail = log.getRequest("req-official-01");
+    assert.equal((detail as { channel?: string } | null)?.channel, "official");
+  });
+});

@@ -5,6 +5,8 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { LOOPBACK, SERVICE_PORT, type Catalog, type Snapshot, type TunnelObserved } from "../domain/types.ts";
 import { officialBox } from "../parse/argv.ts";
+import { fetchModelsForProvider } from "../catalog/provider-models.ts";
+import { createCatalogManager } from "../catalog/model-catalog.ts";
 import { catalogAfterSave, parseUiProviderSave } from "../parse/ui.ts";
 import { renderQrAscii } from "../qrcode.ts";
 import { boxPathsFrom } from "../supervisor/paths.ts";
@@ -49,6 +51,18 @@ const host = process.env.OPENBOT_UI_HOST ?? LOOPBACK;
 const port = Number(process.env.OPENBOT_UI_PORT ?? String(SERVICE_PORT));
 
 let saveChain: Promise<void> = Promise.resolve();
+
+let catalogManager: ReturnType<typeof createCatalogManager> | undefined;
+
+function modelCatalog() {
+  if (catalogManager === undefined) {
+    catalogManager = createCatalogManager({
+      fs: nodeFs(),
+      cachePath: paths().modelCatalog,
+    });
+  }
+  return catalogManager;
+}
 
 function enqueueSave<T>(work: () => Promise<T>): Promise<T> {
   const run = saveChain.then(work, work);
@@ -178,6 +192,23 @@ function parseLogsQuery(url: URL): Record<string, unknown> {
   return query;
 }
 
+function providerIdFromFetchPath(pathname: string): string | undefined {
+  const prefix = "/api/providers/";
+  const suffix = "/fetch-models";
+  if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) {
+    return undefined;
+  }
+  const rest = pathname.slice(prefix.length, pathname.length - suffix.length);
+  if (!rest || rest.includes("/")) {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(rest);
+  } catch {
+    return undefined;
+  }
+}
+
 function logIdFromPath(pathname: string): string | undefined {
   const prefix = "/api/logs/";
   if (!pathname.startsWith(prefix)) {
@@ -262,6 +293,26 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     const snapshot = await observe(current);
     sendJson(res, 200, { snapshot: snapshotForUi(snapshot), ...publicState(current) });
     return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/model-catalog") {
+    const modelId = url.searchParams.get("modelId") ?? undefined;
+    sendJson(res, 200, modelCatalog().snapshot(modelId));
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/model-catalog/refresh") {
+    const { startedAt } = modelCatalog().refresh();
+    sendJson(res, 202, { ok: true, status: "loading", startedAt });
+    return;
+  }
+  if (req.method === "POST") {
+    const providerId = providerIdFromFetchPath(url.pathname);
+    if (providerId !== undefined) {
+      const catalog = catalogFromPlanJson(current.fs.read(current.paths.plan));
+      const store = loadSecrets(current.fs, current.paths.secrets);
+      const result = await fetchModelsForProvider({ providerId, catalog, secretStore: store });
+      sendJson(res, result.status, result.body);
+      return;
+    }
   }
   if (await handleLogsApi(req, res, url)) {
     return;
@@ -360,5 +411,7 @@ server.listen(port, host, () => {
   const box = paths();
   fs.mkdirSync(box.sandData, { recursive: true });
   fs.writeFileSync(box.uiPid, `${String(process.pid)}\n`);
+  // Non-blocking: load the public catalog cache from disk, then re-fetch in the background.
+  void modelCatalog().start();
   process.stdout.write(`openbot listening on http://${host}:${String(port)}\n`);
 });

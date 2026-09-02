@@ -5,12 +5,17 @@ var http = require("http");
 var https = require("https");
 var { URL } = require("url");
 var { toOpenAIMessages } = require("./openai-messages.cjs");
+var openaiStream = require("./openai-stream.cjs");
 
 var PLAN = process.env.OPENBOT_PLAN || "/home/box/sand-data/openbot-plan.json";
 var LOG = process.env.OPENBOT_LOG || "/tmp/openbot-session.log";
 var HOP_HOST = process.env.OPENBOT_HOP_HOST || "127.0.0.1";
 var HOP_PORT = Number(process.env.OPENBOT_HOP_PORT || "9280");
 var HIGH_AGENT_MAX_TOKENS = 65536;
+
+var mapToolCalls = openaiStream.mapToolCalls;
+var mapFinishReason = openaiStream.mapFinishReason;
+var iterateOpenAiResponse = openaiStream.iterateOpenAiResponse;
 
 function log(line) {
   try {
@@ -58,36 +63,6 @@ function unwrapJsonSchemaTools(tools) {
     });
   }
   return out.length ? out : undefined;
-}
-
-function mapToolCalls(openAiCalls) {
-  if (!Array.isArray(openAiCalls)) return [];
-  var out = [];
-  for (var i = 0; i < openAiCalls.length; i++) {
-    var raw = openAiCalls[i] || {};
-    var fn = raw.function || {};
-    var args = {};
-    if (typeof fn.arguments === "string") {
-      try { args = JSON.parse(fn.arguments || "{}"); } catch (err) { args = {}; }
-    } else if (isRecord(fn.arguments)) {
-      args = fn.arguments;
-    } else if (isRecord(raw.args)) {
-      args = raw.args;
-    }
-    out.push({
-      type: "tool-call",
-      toolCallId: raw.id || ("call_" + i),
-      toolName: fn.name || "",
-      args: args,
-    });
-  }
-  return out;
-}
-
-function mapFinishReason(reason) {
-  if (reason === "tool_calls" || reason === "tool-calls") return "tool-calls";
-  if (reason === "length") return "length";
-  return "stop";
 }
 
 function defaultMaxTokens(requested, cap) {
@@ -167,9 +142,24 @@ function resolveAgent(args) {
   };
 }
 
-function postJson(urlStr, body) {
+function hopUrl() {
+  return "http://" + HOP_HOST + ":" + String(HOP_PORT) + "/v1/chat/completions";
+}
+
+function readAll(res) {
   return new Promise(function (resolve, reject) {
-    var u = new URL(urlStr);
+    var chunks = [];
+    res.on("data", function (c) { chunks.push(c); });
+    res.on("end", function () {
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+    res.on("error", reject);
+  });
+}
+
+function hopRequest(body) {
+  return new Promise(function (resolve, reject) {
+    var u = new URL(hopUrl());
     var lib = u.protocol === "https:" ? https : http;
     var payload = Buffer.from(JSON.stringify(body), "utf8");
     var req = lib.request({
@@ -181,18 +171,11 @@ function postJson(urlStr, body) {
       headers: {
         "Content-Type": "application/json",
         "Content-Length": String(payload.length),
-        "Accept": "application/json",
+        "Accept": "text/event-stream, application/json",
         "Authorization": "Bearer openbot-runtime",
       },
     }, function (res) {
-      var chunks = [];
-      res.on("data", function (c) { chunks.push(c); });
-      res.on("end", function () {
-        var raw = Buffer.concat(chunks).toString("utf8");
-        var json = null;
-        try { json = JSON.parse(raw); } catch (err) { json = null; }
-        resolve({ status: res.statusCode, raw: raw, json: json });
-      });
+      resolve(res);
     });
     req.setTimeout(1800000, function () {
       req.destroy();
@@ -202,10 +185,6 @@ function postJson(urlStr, body) {
     req.write(payload);
     req.end();
   });
-}
-
-function hopUrl() {
-  return "http://" + HOP_HOST + ":" + String(HOP_PORT) + "/v1/chat/completions";
 }
 
 function swallow(p) {
@@ -251,40 +230,36 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
       var body = {
         model: agent.modelId,
         messages: toOpenAIMessages(msgs),
-        stream: false,
+        stream: true,
         max_tokens: defaultMaxTokens(options2 && options2.maxTokens, agent.maxOutputTokens),
       };
       var openaiTools = unwrapJsonSchemaTools(tools);
       if (openaiTools) body.tools = openaiTools;
       log("stream messages=" + body.messages.length + " tools=" + ((body.tools && body.tools.length) || 0));
-      var out = await postJson(hopUrl(), body);
-      if (out.status < 200 || out.status >= 300) {
-        throw new Error("openbot-runtime: hop HTTP " + out.status + " " + String(out.raw || "").slice(0, 300));
+      var res = await hopRequest(body);
+      var status = res.statusCode || 0;
+      if (status < 200 || status >= 300) {
+        var raw = await readAll(res);
+        throw new Error("openbot-runtime: hop HTTP " + status + " " + String(raw || "").slice(0, 300));
       }
-      var choice = out.json && out.json.choices && out.json.choices[0];
-      var message = (choice && choice.message) || {};
-      var text = typeof message.content === "string" ? message.content : "";
-      var calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-      if (message.reasoning_content) {
-        yield { type: "reasoning", textDelta: message.reasoning_content };
-      }
-      if (text) yield { type: "text-delta", textDelta: text };
-      var mapped = mapToolCalls(calls);
-      for (var i = 0; i < mapped.length; i++) yield mapped[i];
+      var text = "";
       var u = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-      var ru = out.json && out.json.usage;
-      if (ru) {
-        u.promptTokens = ru.prompt_tokens || 0;
-        u.completionTokens = ru.completion_tokens || 0;
-        u.totalTokens = ru.total_tokens || 0;
+      var hopId = "";
+      for await (var part of iterateOpenAiResponse(res)) {
+        if (part && part.type === "text-delta" && part.textDelta) {
+          text += part.textDelta;
+        }
+        if (part && part.type === "finish") {
+          if (part.usage) u = part.usage;
+          if (part.id) hopId = part.id;
+        }
+        yield part;
       }
-      var finish = mapFinishReason(choice && choice.finish_reason);
-      yield { type: "finish", finishReason: finish, usage: u };
       okUsage(u);
       if (!settled.r) {
         settled.r = true;
         resR({
-          id: (out.json && out.json.id) || "",
+          id: hopId,
           modelId: agent.modelId,
           timestamp: new Date(),
           messages: [{ role: "assistant", content: [{ type: "text", text: text }] }],
@@ -376,5 +351,6 @@ module.exports = {
   resolveAgent: resolveAgent,
   lookupMaxOutput: lookupMaxOutput,
   toOpenAIMessages: toOpenAIMessages,
+  hopFullStream: hopFullStream,
   HIGH_AGENT_MAX_TOKENS: HIGH_AGENT_MAX_TOKENS,
 };

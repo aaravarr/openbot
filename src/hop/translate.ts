@@ -111,12 +111,39 @@ export function mapToolCalls(openAiCalls: readonly unknown[]): HostToolCallPart[
   return out;
 }
 
-export function mapFinishReason(reason: string | undefined): FinishReason {
-  if (reason === "tool_calls" || reason === "tool-calls") {
-    return "tool-calls";
+export function messageContentText(content: unknown): string {
+  if (content == null) {
+    return "";
   }
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const bits: string[] = [];
+  for (const part of content) {
+    if (typeof part === "string") {
+      bits.push(part);
+      continue;
+    }
+    if (isRecord(part) && typeof part.text === "string") {
+      bits.push(part.text);
+    }
+  }
+  return bits.join("");
+}
+
+export function mapFinishReason(reason: string | undefined, toolCallCount = 0): FinishReason {
+  const n = toolCallCount > 0 ? toolCallCount : 0;
   if (reason === "length") {
     return "length";
+  }
+  if (n > 0) {
+    return "tool-calls";
+  }
+  if (reason === "tool_calls" || reason === "tool-calls" || reason === "function_call") {
+    return "tool-calls";
   }
   return "stop";
 }

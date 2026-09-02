@@ -185,7 +185,14 @@ function hopAccept(wantStream) {
   return wantStream ? "text/event-stream, application/json" : "application/json";
 }
 
-function openUpstream(urlStr, body, key) {
+function inboundUserAgent(inbound) {
+  if (!inbound || !inbound.headers) return "";
+  var ua = inbound.headers["user-agent"];
+  if (typeof ua === "string" && ua.trim()) return ua;
+  return "";
+}
+
+function openUpstream(urlStr, body, key, inbound) {
   var u = new URL(urlStr);
   var lib = u.protocol === "https:" ? https : http;
   var payload = Buffer.from(JSON.stringify(body), "utf8");
@@ -198,6 +205,8 @@ function openUpstream(urlStr, body, key) {
   };
   if (key) headers.Authorization = "Bearer " + key;
   applyOpenBotVersionHeader(headers);
+  var ua = inboundUserAgent(inbound);
+  if (ua) headers["User-Agent"] = ua;
   var req = lib.request({
     protocol: u.protocol,
     hostname: u.hostname,
@@ -221,9 +230,9 @@ function collectResponse(res) {
   });
 }
 
-function postUpstream(urlStr, body, key) {
+function postUpstream(urlStr, body, key, inbound) {
   return new Promise(function (resolve, reject) {
-    var req = openUpstream(urlStr, body, key);
+    var req = openUpstream(urlStr, body, key, inbound);
     req.setTimeout(TIMEOUT_MS, function () {
       req.destroy();
       reject(new Error("openbot-hop: upstream timeout"));
@@ -236,9 +245,9 @@ function postUpstream(urlStr, body, key) {
   });
 }
 
-function pipeOrBufferUpstream(urlStr, body, key, clientRes) {
+function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
   return new Promise(function (resolve, reject) {
-    var req = openUpstream(urlStr, body, key);
+    var req = openUpstream(urlStr, body, key, inbound);
     var settled = false;
     function fail(err) {
       if (settled) return;
@@ -430,13 +439,13 @@ async function handleCompletions(req, res) {
     fields.upstreamEndpoint = upstream;
     var out;
     if (body.stream === true) {
-      out = await pipeOrBufferUpstream(upstream, body, key, res);
+      out = await pipeOrBufferUpstream(upstream, body, key, res, req);
       record({
         status: out.status,
         responseRaw: Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw),
       });
     } else {
-      out = await postUpstream(upstream, body, key);
+      out = await postUpstream(upstream, body, key, req);
       record({
         status: out.status,
         responseRaw: Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw),

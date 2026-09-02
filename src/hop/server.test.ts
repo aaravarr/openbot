@@ -501,8 +501,45 @@ test("hop sends x-openbot-version from OPENBOT_COMMIT", async () => {
     const out = await post(hop.port, { model: "deepseek-v4-flash", messages: [] }, { Authorization: "Bearer openbot-runtime" });
     assert.equal(out.status, 200);
     assert.equal(upstream.getVersion(), "cafed00d");
-    assert.equal(upstream.getUserAgent(), "openbot/cafed00d");
+    assert.equal(upstream.getUserAgent(), "");
     assert.equal(upstream.getPath(), "/v1/chat/completions");
+  } finally {
+    hop.child.kill("SIGTERM");
+    upstream.server.close();
+  }
+});
+
+test("hop copies inbound User-Agent and does not invent one", async () => {
+  const upstream = await captureUpstream();
+  const hop = await startHop({
+    env: { OPENBOT_COMMIT: "cafed00d" },
+    plan: {
+      kind: "custom",
+      catalog: {
+        providers: [
+          {
+            id: "deepseek",
+            name: "DeepSeek",
+            origin: `http://127.0.0.1:${String(upstream.port)}/v1`,
+            maxTokensDefault: 65536,
+            mapFile: "provider-maps.cjs",
+          },
+        ],
+        models: [{ id: "deepseek:v4", providerId: "deepseek", slug: "deepseek-v4-flash", parameters: [] }],
+        bindings: [],
+      },
+    },
+    secrets: { providers: { deepseek: "sk-deepseek" } },
+  });
+  try {
+    const out = await post(
+      hop.port,
+      { model: "deepseek-v4-flash", messages: [] },
+      { Authorization: "Bearer openbot-runtime", "User-Agent": "GrokBot/0.30" },
+    );
+    assert.equal(out.status, 200);
+    assert.equal(upstream.getVersion(), "cafed00d");
+    assert.equal(upstream.getUserAgent(), "GrokBot/0.30");
   } finally {
     hop.child.kill("SIGTERM");
     upstream.server.close();

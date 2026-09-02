@@ -27,7 +27,7 @@ Bindings are `{ conversation, modelId }`. Derive `hopBaseUrl` with `hopBaseUrl(L
 
 The generic hop unwraps `{ jsonSchema }`, maps OpenAI `tool_calls` to host `tool-call` parts, maps `finish_reason: "tool_calls"` to `finishReason: "tool-calls"`, and honors the model's `stop`. Custom wrap emits `tool-call-streaming-start` then `tool-call-delta` then `tool-call`, and settles `response.messages` as host content parts (reasoning text, text, and tool-call together). Do not invent `reasoning-signature` or official-only fields. Do not map leftover assistant text onto SendToUser. Do not add a SendToUser-drop or a forced `finish=stop` on `GenericHop`. Named opt-in strategies are a separate union.
 
-Outbound hop requests send `x-openbot-version` and `User-Agent: openbot/<commit>` with `OPENBOT_COMMIT`, then the install stamp in `payload/version.json`, then git HEAD. Tarball installs have no `.git`; `install.sh` stamps the commit. Do not commit `payload/version.json`. Gateway dashboards often hide custom `x-*` headers; `User-Agent` is the visible fallback.
+Outbound hop requests send `x-openbot-version` with `OPENBOT_COMMIT`, then the install stamp in `payload/version.json`, then git HEAD. Tarball installs have no `.git`; `install.sh` stamps the commit. Do not commit `payload/version.json`. Do not invent or replace `User-Agent`; copy the inbound value if present.
 
 Host→OpenAI (`toOpenAIMessages`) is a structural conversion only: tool-call parts become `tool_calls`, tool-result becomes `role: tool`. Do not peel `<system_reminder>` or `[SAND_HIDDEN_PROMPT]`. Do not drop a reminder-only user turn. Do not insert a reminder. The official harness hides those strings from the user; the hop model must still see them.
 

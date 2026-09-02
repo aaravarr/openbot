@@ -78,10 +78,11 @@ test("openBotVersion is unknown without stamp, git, or env", () => {
   assert.equal(result.stdout.trim(), "unknown");
 });
 
-test("applyOpenBotVersionHeader sets x-openbot-version and User-Agent", () => {
+test("applyOpenBotVersionHeader sets x-openbot-version and does not invent User-Agent", () => {
   const result = printApplied(versionCjs, { ...process.env, OPENBOT_COMMIT: "cafed00d" });
   assert.equal(result.status, 0, result.stderr);
   const headers = JSON.parse(result.stdout) as Record<string, string>;
   assert.equal(headers["x-openbot-version"], "cafed00d");
-  assert.equal(headers["User-Agent"], "openbot/cafed00d");
+  assert.equal(headers["User-Agent"], undefined);
+  assert.equal(headers["user-agent"], undefined);
 });

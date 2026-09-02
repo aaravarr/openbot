@@ -204,8 +204,15 @@ code, kbd, .mono { font-family: var(--font-mono); }
 .loopback-chip .dot-live {
   width: 6px; height: 6px; border-radius: 50%; background: var(--success);
 }
-.loopback-chip button { display: inline-flex; color: var(--muted); }
-.loopback-chip button:hover { color: var(--ink); }
+.loopback-chip button {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; flex: none;
+  border: none; background: transparent; border-radius: var(--r-xs);
+  color: var(--muted); cursor: pointer;
+  transition: background var(--dur-1) var(--ease-standard), color var(--dur-1) var(--ease-standard);
+}
+.loopback-chip button:hover { background: var(--surface-3); color: var(--ink); }
+.loopback-chip button svg { width: 13px; height: 13px; }
 
 .icon-btn {
   width: 28px; height: 28px; border-radius: var(--r-sm);
@@ -375,8 +382,14 @@ code, kbd, .mono { font-family: var(--font-mono); }
 .btn--ghost { background: transparent; color: var(--body); font-weight: 500; }
 .btn--ghost:hover:not(:disabled) { background: var(--surface-3); color: var(--ink); }
 
+.btn--ghost-sm { height: 28px; padding: 0 10px; font-size: var(--text-sm); font-weight: 500; background: transparent; color: var(--body); border-color: var(--hairline); }
+.btn--ghost-sm:hover:not(:disabled) { background: var(--surface-3); color: var(--ink); border-color: var(--hairline-strong); }
+
 .btn--ghost-danger { background: transparent; color: var(--danger); font-weight: 500; }
 .btn--ghost-danger:hover:not(:disabled) { background: var(--danger-tint); }
+
+.btn--ghost-danger-sm { height: 28px; padding: 0 10px; font-size: var(--text-sm); font-weight: 500; background: transparent; color: var(--danger); border-color: var(--hairline); }
+.btn--ghost-danger-sm:hover:not(:disabled) { background: var(--danger-tint); color: var(--danger-strong); }
 
 .btn .spinner { width: 13px; height: 13px; }
 .spinner { display: inline-block; flex: none; animation: spin 1s linear infinite; }

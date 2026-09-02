@@ -21,6 +21,7 @@ import {
   refreshModelCatalog,
 } from "../api/client";
 import type {
+  CatalogLookupModel,
   FetchModelsError,
   FetchModelsResult,
   FetchedModel,
@@ -32,6 +33,7 @@ import type {
   SaveResult,
 } from "../api/types";
 import { formatInteger, formatTime, formatTokens, reasoningListLabel } from "../lib/format";
+import { enrichCatalogModels, modelImportFields } from "../lib/import-models";
 import { navigate } from "../lib/router";
 import { useApp, useBoxState } from "../store";
 import { ImportModelsDialog } from "../components/ImportModelsDialog";
@@ -66,6 +68,7 @@ export function Models({ providerId }: { providerId?: string }) {
   const [fetchResult, setFetchResult] = useState<FetchModelsResult | null>(null);
   const [fetchError, setFetchError] = useState<FetchModelsError | null>(null);
   const [catalogMatched, setCatalogMatched] = useState<Set<string>>(new Set());
+  const [catalogLookup, setCatalogLookup] = useState<Map<string, CatalogLookupModel>>(new Map());
 
   // Source B catalog card
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
@@ -100,19 +103,9 @@ export function Models({ providerId }: { providerId?: string }) {
   }, []);
 
   const enrichCatalog = useCallback(async (fetched: FetchedModel[]) => {
-    const matched = new Set<string>();
-    const batch = fetched.slice(0, 40);
-    await Promise.all(
-      batch.map(async (m) => {
-        try {
-          const c = await getModelCatalog(m.id);
-          if (c.lookup?.found) matched.add(m.id);
-        } catch {
-          /* skip */
-        }
-      }),
-    );
+    const { matched, lookup } = await enrichCatalogModels(fetched);
     setCatalogMatched(matched);
+    setCatalogLookup(lookup);
   }, []);
 
   const doFetch = async (provider: Provider) => {
@@ -162,11 +155,7 @@ export function Models({ providerId }: { providerId?: string }) {
         {
           kind: "upsert-model",
           providerId: selected!.id,
-          slug: m.id,
-          contextTokens: m.contextLength ?? undefined,
-          maxOutputTokens: m.maxOutputTokens ?? undefined,
-          reasoningLevels: m.reasoningLevels?.length ? m.reasoningLevels : undefined,
-          modalities: m.modalities?.length ? m.modalities : undefined,
+          ...modelImportFields(m, catalogLookup.get(m.id)),
         },
         {
           title: "Models imported",
@@ -312,16 +301,16 @@ export function Models({ providerId }: { providerId?: string }) {
                     No API key
                   </Badge>
                 )}
-                <Button variant="secondary" icon={Download} loading={fetching} loadingLabel="Fetching…" onClick={() => void doFetch(selected)}>
+                <Button variant="ghost-sm" icon={Download} loading={fetching} loadingLabel="Fetching…" onClick={() => void doFetch(selected)}>
                   Fetch models
                 </Button>
-                <Button variant="ghost" icon={Pencil} onClick={() => setEditProvider(true)}>
+                <Button variant="ghost-sm" icon={Pencil} onClick={() => setEditProvider(true)}>
                   Edit
                 </Button>
-                <Button variant="ghost" icon={KeyRound} onClick={() => setReplaceKey(true)}>
+                <Button variant="ghost-sm" icon={KeyRound} onClick={() => setReplaceKey(true)}>
                   {selectedHasKey ? "Replace key" : "Add key"}
                 </Button>
-                <Button variant="ghost-danger" icon={Trash2} onClick={() => setConfirmRemove(true)}>
+                <Button variant="ghost-danger-sm" icon={Trash2} onClick={() => setConfirmRemove(true)}>
                   Remove
                 </Button>
               </div>
@@ -373,7 +362,7 @@ export function Models({ providerId }: { providerId?: string }) {
                           {isActive ? (
                             <Badge tone="accent">Active</Badge>
                           ) : (
-                            <Button variant="secondary-sm" onClick={() => void useModel(m)}>
+                            <Button variant="ghost-sm" onClick={() => void useModel(m)}>
                               Use
                             </Button>
                           )}{" "}

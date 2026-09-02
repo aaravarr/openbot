@@ -15,7 +15,9 @@ export type ButtonVariant =
   | "ink"
   | "danger"
   | "ghost"
-  | "ghost-danger";
+  | "ghost-sm"
+  | "ghost-danger"
+  | "ghost-danger-sm";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: ButtonVariant;

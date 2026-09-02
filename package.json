@@ -11,7 +11,7 @@
     "openbot": "src/cli.ts"
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test $(find src -name '*.test.ts')",
+    "test": "node --experimental-strip-types --test \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web",
     "start": "node --experimental-strip-types src/cli.ts",
     "start:ui": "node --experimental-strip-types src/ui/server.ts",

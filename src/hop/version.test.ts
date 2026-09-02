@@ -22,6 +22,14 @@ function printVersion(file: string, env: NodeJS.ProcessEnv) {
   });
 }
 
+function printApplied(file: string, env: NodeJS.ProcessEnv) {
+  return spawnSync(
+    process.execPath,
+    ["-e", `console.log(JSON.stringify(require(${JSON.stringify(file)}).applyOpenBotVersionHeader({})))`],
+    { env, encoding: "utf8" },
+  );
+}
+
 test("openBotVersion prefers OPENBOT_COMMIT over git", () => {
   const result = printVersion(versionCjs, { ...process.env, OPENBOT_COMMIT: "cafed00d" });
   assert.equal(result.status, 0, result.stderr);
@@ -68,4 +76,12 @@ test("openBotVersion is unknown without stamp, git, or env", () => {
   const result = printVersion(copied, envWithoutCommit());
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), "unknown");
+});
+
+test("applyOpenBotVersionHeader sets x-openbot-version and User-Agent", () => {
+  const result = printApplied(versionCjs, { ...process.env, OPENBOT_COMMIT: "cafed00d" });
+  assert.equal(result.status, 0, result.stderr);
+  const headers = JSON.parse(result.stdout) as Record<string, string>;
+  assert.equal(headers["x-openbot-version"], "cafed00d");
+  assert.equal(headers["User-Agent"], "openbot/cafed00d");
 });

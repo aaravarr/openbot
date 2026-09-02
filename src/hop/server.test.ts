@@ -107,10 +107,12 @@ async function captureUpstream(): Promise<{
   getAuth: () => string;
   getBody: () => Record<string, unknown> | undefined;
   getVersion: () => string;
+  getUserAgent: () => string;
   getPath: () => string;
 }> {
   let auth = "";
   let version = "";
+  let userAgent = "";
   let urlPath = "";
   let body: Record<string, unknown> | undefined;
   const { server, port } = await listen((req, res) => {
@@ -118,6 +120,8 @@ async function captureUpstream(): Promise<{
     auth = typeof header === "string" ? header : "";
     const versionHeader = req.headers["x-openbot-version"];
     version = typeof versionHeader === "string" ? versionHeader : "";
+    const ua = req.headers["user-agent"];
+    userAgent = typeof ua === "string" ? ua : "";
     urlPath = req.url || "";
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -137,6 +141,7 @@ async function captureUpstream(): Promise<{
     getAuth: () => auth,
     getBody: () => body,
     getVersion: () => version,
+    getUserAgent: () => userAgent,
     getPath: () => urlPath,
   };
 }
@@ -496,6 +501,7 @@ test("hop sends x-openbot-version from OPENBOT_COMMIT", async () => {
     const out = await post(hop.port, { model: "deepseek-v4-flash", messages: [] }, { Authorization: "Bearer openbot-runtime" });
     assert.equal(out.status, 200);
     assert.equal(upstream.getVersion(), "cafed00d");
+    assert.equal(upstream.getUserAgent(), "openbot/cafed00d");
     assert.equal(upstream.getPath(), "/v1/chat/completions");
   } finally {
     hop.child.kill("SIGTERM");

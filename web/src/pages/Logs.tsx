@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
   RefreshCw,
@@ -15,16 +15,40 @@ import {
   listLogs,
   saveLogSettings,
 } from "../api/client";
-import type { LogChannelFilter, LogDetail, LogRecord, LogSettings } from "../api/types";
-import { channelLabel, formatLatency, formatTime, formatTimestamp } from "../lib/format";
+import type { LogChannel, LogChannelFilter, LogDetail, LogRecord, LogSettings } from "../api/types";
+import { LogChannelPair } from "../components/LogChannel";
+import { channelSubtitle, formatLatency, formatTime, formatTimestamp } from "../lib/format";
+import {
+  findPairById,
+  pairChannels,
+  pairContainsId,
+  pairError,
+  pairIds,
+  pairKey,
+  pairLatency,
+  pairLogRows,
+  pairModel,
+  pairStartedAt,
+  pairStatus,
+  pairStream,
+  pairTokens,
+  type LogRowPair,
+} from "../lib/pair-logs";
 import { navigate } from "../lib/router";
 import { useApp, useBoxState } from "../store";
 import { Listbox, type ListboxGroup } from "../components/Listbox";
 import { ConfirmDialog, Modal } from "../components/overlays";
-import { Badge, Button, EmptyState, IconButton, StatusPill } from "../components/ui";
+import { Button, EmptyState, IconButton, StatusPill } from "../components/ui";
 import { NumberInput } from "../components/fields";
 
-type DrawerState = { id: string; detail: LogDetail | null; notFound: boolean };
+type DrawerState = { ids: string[]; details: LogDetail[]; notFound: boolean };
+
+function asLogChannels(values: ReadonlyArray<string | undefined>): Array<LogChannel | undefined> {
+  return values.map((value) => {
+    if (value === "official" || value === "custom-host" || value === "hop") return value;
+    return undefined;
+  });
+}
 
 export function Logs({ logId }: { logId?: string }) {
   const state = useBoxState();
@@ -65,6 +89,8 @@ export function Logs({ logId }: { logId?: string }) {
     return [...seen];
   }, [state.models, records]);
 
+  const pairs = useMemo(() => pairLogRows(records), [records]);
+
   const loadRecords = useCallback(async () => {
     setLoading(true);
     try {
@@ -89,14 +115,20 @@ export function Logs({ logId }: { logId?: string }) {
   }, [loadRecords]);
 
   const openDrawer = useCallback(
-    async (id: string) => {
-      setDrawer({ id, detail: null, notFound: false });
+    async (ids: readonly string[]) => {
+      const unique = [...new Set(ids.filter(Boolean))];
+      setDrawer({ ids: unique, details: [], notFound: false });
       setDrawerLoading(true);
       try {
-        const detail = await getLog(id);
-        setDrawer({ id, detail, notFound: false });
-      } catch {
-        setDrawer({ id, detail: null, notFound: true });
+        const details: LogDetail[] = [];
+        for (const id of unique) {
+          try {
+            details.push(await getLog(id));
+          } catch {
+            /* pruned */
+          }
+        }
+        setDrawer({ ids: unique, details, notFound: details.length === 0 });
       } finally {
         setDrawerLoading(false);
       }
@@ -104,9 +136,22 @@ export function Logs({ logId }: { logId?: string }) {
     [],
   );
 
+  const openPair = useCallback(
+    (pair: LogRowPair<LogRecord>) => {
+      void openDrawer(pairIds(pair));
+    },
+    [openDrawer],
+  );
+
   useEffect(() => {
-    if (logId) void openDrawer(logId);
-  }, [logId, openDrawer]);
+    if (!logId) return;
+    const match = findPairById(pairs, logId);
+    if (match) {
+      void openDrawer(pairIds(match));
+      return;
+    }
+    void openDrawer([logId]);
+  }, [logId, pairs, openDrawer]);
 
   const saveSettingsAction = async () => {
     setSettingsError(null);
@@ -171,8 +216,8 @@ export function Logs({ logId }: { logId?: string }) {
         label: "Channel",
         options: [
           { value: "", label: "All channels" },
-          { value: "official", label: "Official" },
-          { value: "custom", label: "Custom" },
+          { value: "official", label: "Official", sublabel: "Stock Grok tap" },
+          { value: "custom", label: "Custom", sublabel: "Upstream + harness" },
         ],
       },
     ],
@@ -180,12 +225,14 @@ export function Logs({ logId }: { logId?: string }) {
   );
 
   const recordingOff = !recording;
+  const turnCount = pairs.length;
+  const openId = drawer?.ids[0];
 
   return (
     <>
       <div className="page-title-row">
         <h1>Logs</h1>
-        <span className="sub">What did the hop actually do?</span>
+        <span className="sub">One custom turn is an upstream call plus a harness stream — not two events.</span>
       </div>
 
       {/* Settings */}
@@ -275,7 +322,8 @@ export function Logs({ logId }: { logId?: string }) {
             triggerStyle={{ height: 30 }}
           />
           <span className="mono" style={{ fontSize: 12, color: "var(--muted)" }}>
-            {total} record{total === 1 ? "" : "s"}
+            {turnCount} turn{turnCount === 1 ? "" : "s"}
+            {total !== turnCount ? ` · ${String(total)} records` : ""}
           </span>
           <span className="logs-toolbar__spacer" />
           <IconButton label="Refresh records" icon={RefreshCw} onClick={() => void loadRecords()} />
@@ -305,29 +353,35 @@ export function Logs({ logId }: { logId?: string }) {
                     <td colSpan={8} style={{ padding: 0 }}><div className="skel skel--row" /></td>
                   </tr>
                 ))
-              ) : records.length ? (
-                records.map((r) => (
-                  <tr
-                    key={r.id}
-                    className="is-clickable"
-                    tabIndex={0}
-                    onClick={() => void openDrawer(r.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void openDrawer(r.id);
-                    }}
-                  >
-                    <td className="mono" data-label="Time">{formatTime(r.startedAt)}</td>
-                    <td data-label="Channel"><span className="log-channel">{channelLabel(r.channel)}</span></td>
-                    <td className="mono" data-label="Model">{r.model ?? "—"}</td>
-                    <td data-label="Status"><StatusPill status={r.status} /></td>
-                    <td className="num mono" data-label="Latency">{formatLatency(r.latencyMs)}</td>
-                    <td className="num mono" data-label="Tokens">{r.totalTokens ?? "—"}</td>
-                    <td className="mono" data-label="Stream">{r.stream ? "yes" : "no"}</td>
-                    <td className="ellipsis" data-label="Error" style={r.error ? { color: "var(--danger)" } : undefined}>
-                      {r.error ?? "—"}
-                    </td>
-                  </tr>
-                ))
+              ) : pairs.length ? (
+                pairs.map((pair) => {
+                  const error = pairError(pair);
+                  const selected = openId ? pairContainsId(pair, openId) : false;
+                  return (
+                    <tr
+                      key={pairKey(pair)}
+                      className={`is-clickable${selected ? " is-open" : ""}`}
+                      tabIndex={0}
+                      onClick={() => openPair(pair)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") openPair(pair);
+                      }}
+                    >
+                      <td className="mono" data-label="Time">{formatTime(pairStartedAt(pair))}</td>
+                      <td data-label="Channel">
+                        <LogChannelPair channels={asLogChannels(pairChannels(pair))} />
+                      </td>
+                      <td className="mono" data-label="Model">{pairModel(pair) ?? "—"}</td>
+                      <td data-label="Status"><StatusPill status={pairStatus(pair)} /></td>
+                      <td className="num mono" data-label="Latency">{formatLatency(pairLatency(pair))}</td>
+                      <td className="num mono" data-label="Tokens">{pairTokens(pair) ?? "—"}</td>
+                      <td className="mono" data-label="Stream">{pairStream(pair) ? "yes" : "no"}</td>
+                      <td className="ellipsis" data-label="Error" style={error ? { color: "var(--danger)" } : undefined}>
+                        {error ?? "—"}
+                      </td>
+                    </tr>
+                  );
+                })
               ) : recordingOff ? (
                 <tr className="row-empty">
                   <td colSpan={8}>
@@ -391,19 +445,37 @@ function LogDrawer({
   loading: boolean;
   onClose: () => void;
 }) {
-  const d = state?.detail;
+  const details = state?.details ?? [];
+  const primary = details[0];
+  const paired = details.length > 1;
+  const titleId = paired
+    ? (primary?.model ?? "Chat turn")
+    : (state?.ids[0] ?? "Record");
+  const started = details
+    .map((d) => d.startedAt)
+    .sort()[0];
+  const latency = paired
+    ? Math.max(...details.map((d) => d.latencyMs ?? 0))
+    : primary?.latencyMs;
+  const status = details.some((d) => d.status >= 400 || !d.ok)
+    ? (details.find((d) => d.status >= 400 || !d.ok)?.status ?? 0)
+    : (primary?.status ?? 0);
+
   return (
     <Modal open={state !== null} onClose={onClose} drawer labelledBy="drawer-id">
       {state ? (
         <div className="drawer">
           <div className="drawer__head">
             <div className="drawer__title">
-              <span className="id" id="drawer-id">{state.id}</span>
-              {d ? (
-                <span className="sub">{formatTime(d.startedAt)} · {formatLatency(d.latencyMs)}</span>
+              <span className="id" id="drawer-id">{titleId}</span>
+              {primary ? (
+                <span className="sub">
+                  {formatTime(started ?? primary.startedAt)} · {formatLatency(latency)}
+                  {paired ? " · 2 layers" : ""}
+                </span>
               ) : null}
             </div>
-            {d ? <StatusPill status={d.status} /> : null}
+            {primary ? <StatusPill status={status} /> : null}
             <IconButton label="Close" icon={X} onClick={onClose} />
           </div>
           <div className="drawer__body">
@@ -417,81 +489,108 @@ function LogDrawer({
               <div className="notice notice--warn">
                 <span className="text">This record was pruned by retention.</span>
               </div>
-            ) : d ? (
+            ) : details.length ? (
               <>
-                <div className="drawer-section">
-                  <span className="section-label">Overview</span>
-                  <div className="def-grid">
-                    <span className="k">Channel</span>
-                    <span className="v">{channelLabel(d.channel)}</span>
-                    <span className="k">Provider</span>
-                    <span className="v">{d.providerName ?? "—"}</span>
-                    <span className="k">Model</span>
-                    <span className="v mono">{d.model ?? "—"}</span>
-                    <span className="k">Started</span>
-                    <span className="v mono">{formatTimestamp(d.startedAt)}</span>
-                    <span className="k">Completed</span>
-                    <span className="v mono">{formatTimestamp(d.completedAt)}</span>
-                    <span className="k">Streaming</span>
-                    <span className="v mono">{d.stream ? "true" : "false"}</span>
-                    <span className="k">Inbound</span>
-                    <span className="v mono">{d.inboundEndpoint ?? "POST /v1/chat/completions"}</span>
-                  </div>
-                </div>
-
-                {d.error ? (
-                  <div className="drawer-section">
-                    <span className="section-label">Error</span>
-                    <div className="error-block">
-                      <span>{d.error}</span>
-                      <span className="mono">status {d.status}</span>
-                    </div>
-                  </div>
+                {paired ? (
+                  <p className="log-pair__intro">
+                    One chat turn recorded two layers: the upstream provider call and the host-format stream yielded to Grok Bot.
+                  </p>
                 ) : null}
-
-                <div className="drawer-section">
-                  <span className="section-label">Token usage</span>
-                  <div className="token-trio">
-                    <div className="token-stat"><div className="k">Prompt</div><div className="v">{d.promptTokens ?? "—"}</div></div>
-                    <div className="token-stat"><div className="k">Completion</div><div className="v">{d.completionTokens ?? "—"}</div></div>
-                    <div className="token-stat"><div className="k">Total</div><div className="v">{d.totalTokens ?? "—"}</div></div>
-                  </div>
-                </div>
-
-                {d.upstreamEndpoint ? (
-                  <div className="drawer-section">
-                    <span className="section-label">Upstream endpoint</span>
-                    <div className="code-pane">{d.upstreamEndpoint}</div>
-                  </div>
-                ) : null}
-
-                {d.hasRequest ? (
-                  <div className="drawer-section">
-                    <span className="section-label">Request body <span style={{ color: "var(--muted)", textTransform: "none", letterSpacing: 0 }}>· keys redacted</span></span>
-                    <div className="code-pane">{stringifyBody(d.request)}</div>
-                    {d.requestTruncated ? <span style={{ fontSize: 12, color: "var(--muted)" }}>Body truncated by retention settings.</span> : null}
-                  </div>
-                ) : null}
-
-                {d.hasResponse ? (
-                  <div className="drawer-section">
-                    <span className="section-label">Response body <span style={{ color: "var(--muted)", textTransform: "none", letterSpacing: 0 }}>· redacted</span></span>
-                    <div className="code-pane">{stringifyBody(d.response)}</div>
-                    {d.responseTruncated ? <span style={{ fontSize: 12, color: "var(--muted)" }}>Body truncated by retention settings.</span> : null}
-                  </div>
-                ) : null}
-
-                {!d.hasRequest && !d.hasResponse ? (
-                  <div className="notice notice--info">
-                    <span className="text">Bodies were not kept — recording keeps bodies on errors only by default.</span>
-                  </div>
-                ) : null}
+                {details.map((d) => (
+                  <LogLayer key={d.id} detail={d} stacked={paired} />
+                ))}
               </>
             ) : null}
           </div>
         </div>
       ) : null}
     </Modal>
+  );
+}
+
+function LogLayer({ detail: d, stacked }: { detail: LogDetail; stacked: boolean }) {
+  const body = (
+    <>
+      <div className="drawer-section">
+        <span className="section-label">Overview</span>
+        <div className="def-grid">
+          <span className="k">Record</span>
+          <span className="v mono">{d.id}</span>
+          <span className="k">Provider</span>
+          <span className="v">{d.providerName ?? "—"}</span>
+          <span className="k">Model</span>
+          <span className="v mono">{d.model ?? "—"}</span>
+          <span className="k">Started</span>
+          <span className="v mono">{formatTimestamp(d.startedAt)}</span>
+          <span className="k">Completed</span>
+          <span className="v mono">{formatTimestamp(d.completedAt)}</span>
+          <span className="k">Streaming</span>
+          <span className="v mono">{d.stream ? "true" : "false"}</span>
+          <span className="k">Inbound</span>
+          <span className="v mono">{d.inboundEndpoint ?? "POST /v1/chat/completions"}</span>
+        </div>
+      </div>
+
+      {d.error ? (
+        <div className="drawer-section">
+          <span className="section-label">Error</span>
+          <div className="error-block">
+            <span>{d.error}</span>
+            <span className="mono">status {d.status}</span>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="drawer-section">
+        <span className="section-label">Token usage</span>
+        <div className="token-trio">
+          <div className="token-stat"><div className="k">Prompt</div><div className="v">{d.promptTokens ?? "—"}</div></div>
+          <div className="token-stat"><div className="k">Completion</div><div className="v">{d.completionTokens ?? "—"}</div></div>
+          <div className="token-stat"><div className="k">Total</div><div className="v">{d.totalTokens ?? "—"}</div></div>
+        </div>
+      </div>
+
+      {d.upstreamEndpoint ? (
+        <div className="drawer-section">
+          <span className="section-label">Upstream endpoint</span>
+          <div className="code-pane">{d.upstreamEndpoint}</div>
+        </div>
+      ) : null}
+
+      {d.hasRequest ? (
+        <div className="drawer-section">
+          <span className="section-label">Request body <span style={{ color: "var(--muted)", textTransform: "none", letterSpacing: 0 }}>· keys redacted</span></span>
+          <div className="code-pane">{stringifyBody(d.request)}</div>
+          {d.requestTruncated ? <span style={{ fontSize: 12, color: "var(--muted)" }}>Body truncated by retention settings.</span> : null}
+        </div>
+      ) : null}
+
+      {d.hasResponse ? (
+        <div className="drawer-section">
+          <span className="section-label">Response body <span style={{ color: "var(--muted)", textTransform: "none", letterSpacing: 0 }}>· redacted</span></span>
+          <div className="code-pane">{stringifyBody(d.response)}</div>
+          {d.responseTruncated ? <span style={{ fontSize: 12, color: "var(--muted)" }}>Body truncated by retention settings.</span> : null}
+        </div>
+      ) : null}
+
+      {!d.hasRequest && !d.hasResponse ? (
+        <div className="notice notice--info">
+          <span className="text">Bodies were not kept — recording keeps bodies on errors only by default.</span>
+        </div>
+      ) : null}
+    </>
+  );
+
+  if (!stacked) return body;
+
+  return (
+    <section className="log-pair__layer" aria-label={channelSubtitle(d.channel)}>
+      <div className="log-pair__layer-head">
+        <LogChannelPair channels={[d.channel]} />
+        <span className="log-channel__hint">{channelSubtitle(d.channel)}</span>
+      </div>
+      {body}
+    </section>
   );
 }
 

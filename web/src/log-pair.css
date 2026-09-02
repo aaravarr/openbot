@@ -1,0 +1,90 @@
+/* Log channel pairing: hop + custom-host as one turn. Namespaced to
+   .log-pair / .log-channel so other stylesheet work can proceed. */
+
+.log-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+  vertical-align: middle;
+}
+
+.log-channel {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.88px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.log-channel--upstream,
+.log-channel--harness,
+.log-channel--official {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.88px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.log-channel--upstream {
+  background: var(--info-tint);
+  color: var(--info);
+}
+
+.log-channel--harness {
+  background: var(--neutral-tint);
+  color: var(--ink);
+}
+
+.log-channel--official {
+  background: var(--neutral-tint);
+  color: var(--body);
+}
+
+.log-channel__hint {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.log-pair__intro {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--body);
+}
+
+.log-pair__layer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  min-width: 0;
+}
+
+.log-pair__layer-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mini-row .log-pair {
+  flex: none;
+}
+
+table.data td .log-pair {
+  white-space: normal;
+}

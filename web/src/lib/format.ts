@@ -2,8 +2,27 @@ import type { LogChannel, ReasoningLevel } from "../api/types";
 
 export function channelLabel(channel: LogChannel | undefined): string {
   if (channel === "official") return "Official";
-  if (channel === "custom-host") return "Host";
-  return "Hop";
+  if (channel === "custom-host") return "Harness";
+  return "Upstream";
+}
+
+export function channelModifier(channel: LogChannel | undefined): "official" | "harness" | "upstream" {
+  if (channel === "official") return "official";
+  if (channel === "custom-host") return "harness";
+  return "upstream";
+}
+
+export function channelSubtitle(channel: LogChannel | undefined): string {
+  if (channel === "official") return "Stock Grok host stream";
+  if (channel === "custom-host") return "Host-format stream yielded to the Grok Bot harness";
+  return "OpenAI /v1/chat/completions to the upstream provider";
+}
+
+export function asLogChannels(values: ReadonlyArray<string | undefined>): Array<LogChannel | undefined> {
+  return values.map((value) => {
+    if (value === "official" || value === "custom-host" || value === "hop") return value;
+    return undefined;
+  });
 }
 
 export function formatTokens(value: number | null | undefined): string {

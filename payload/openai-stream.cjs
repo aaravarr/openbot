@@ -1,5 +1,7 @@
 "use strict";
 
+var { stripHostInjectedText } = require("./openai-messages.cjs");
+
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -119,7 +121,71 @@ function asToolCallArray(message) {
   return [];
 }
 
-function jsonToHostParts(json) {
+function schemaProperties(parameters) {
+  var p = parameters;
+  if (isRecord(p) && isRecord(p.jsonSchema)) p = p.jsonSchema;
+  if (!isRecord(p) || !isRecord(p.properties)) return {};
+  return p.properties;
+}
+
+function findVoiceTool(tools) {
+  if (!Array.isArray(tools)) return null;
+  for (var i = 0; i < tools.length; i++) {
+    var t = tools[i];
+    if (!t) continue;
+    var fn = t.function || t;
+    var name = t.name || fn.name;
+    if (name !== "SendToUser" && name !== "SendMessage") continue;
+    return { name: name, parameters: fn.parameters || t.parameters };
+  }
+  return null;
+}
+
+function voiceArgsFromText(text, parameters) {
+  var props = schemaProperties(parameters);
+  if (props.message && !props.content) {
+    return { message: text };
+  }
+  var args = { content: text };
+  if (props.type) args.type = "text";
+  return args;
+}
+
+function isScratchReasoningText(text) {
+  var s = String(text || "").trim();
+  if (!s || s.charAt(0) !== "{") return false;
+  try {
+    var j = JSON.parse(s);
+    return isRecord(j) && (j.type === "reasoning" || typeof j.reasoning === "string");
+  } catch (err) {
+    return false;
+  }
+}
+
+function alreadyHasVoice(mapped, voiceName) {
+  for (var i = 0; i < mapped.length; i++) {
+    if (mapped[i] && mapped[i].toolName === voiceName) return true;
+  }
+  return false;
+}
+
+/** Host voice is a tool. Reuse the model's text; never invent an acknowledgement. */
+function mapAssistantTextToVoice(text, mapped, voiceTool) {
+  if (!voiceTool || !voiceTool.name) return mapped;
+  var body = stripHostInjectedText(String(text || "")).trim();
+  if (!body) return mapped;
+  if (isScratchReasoningText(body)) return mapped;
+  if (alreadyHasVoice(mapped, voiceTool.name)) return mapped;
+  var voice = {
+    type: "tool-call",
+    toolCallId: "call_" + String(mapped.length),
+    toolName: voiceTool.name,
+    args: voiceArgsFromText(body, voiceTool.parameters),
+  };
+  return [voice].concat(mapped);
+}
+
+function jsonToHostParts(json, voiceTool) {
   var choice = json && json.choices && json.choices[0];
   var message = (choice && choice.message) || {};
   var text = messageContentText(message.content);
@@ -129,7 +195,7 @@ function jsonToHostParts(json) {
   var parts = [];
   if (reasoning) parts.push({ type: "reasoning", textDelta: reasoning });
   if (text) parts.push({ type: "text-delta", textDelta: text });
-  var mapped = mapToolCalls(calls);
+  var mapped = mapAssistantTextToVoice(text, mapToolCalls(calls), voiceTool);
   for (var i = 0; i < mapped.length; i++) parts.push(mapped[i]);
   parts.push({
     type: "finish",
@@ -173,6 +239,7 @@ function newSseState() {
     finishReason: undefined,
     usage: undefined,
     id: "",
+    text: "",
   };
 }
 
@@ -198,7 +265,10 @@ function applyOpenAiEvent(state, data) {
     var r = reasoningText(delta);
     if (r) out.push({ type: "reasoning", textDelta: r });
     var t = messageContentText(delta.content);
-    if (t) out.push({ type: "text-delta", textDelta: t });
+    if (t) {
+      state.text += t;
+      out.push({ type: "text-delta", textDelta: t });
+    }
     mergeToolCalls(state.calls, delta.tool_calls);
     if (delta.function_call) mergeFunctionCall(state.calls, delta.function_call);
   }
@@ -209,7 +279,10 @@ function applyOpenAiEvent(state, data) {
       var r2 = reasoningText(message);
       if (r2) out.push({ type: "reasoning", textDelta: r2 });
       var t2 = messageContentText(message.content);
-      if (t2) out.push({ type: "text-delta", textDelta: t2 });
+      if (t2) {
+        state.text += t2;
+        out.push({ type: "text-delta", textDelta: t2 });
+      }
     }
     mergeToolCalls(state.calls, message.tool_calls);
     if (message.function_call) mergeFunctionCall(state.calls, message.function_call);
@@ -217,8 +290,8 @@ function applyOpenAiEvent(state, data) {
   return out;
 }
 
-function finishSse(state) {
-  var mapped = mapToolCalls(toolCallList(state.calls));
+function finishSse(state, voiceTool) {
+  var mapped = mapAssistantTextToVoice(state && state.text, mapToolCalls(toolCallList(state.calls)), voiceTool);
   var out = [];
   for (var i = 0; i < mapped.length; i++) out.push(mapped[i]);
   out.push({
@@ -230,7 +303,7 @@ function finishSse(state) {
   return out;
 }
 
-async function* iterateOpenAiResponse(res) {
+async function* iterateOpenAiResponse(res, voiceTool) {
   var buf = "";
   var mode = null;
   var sse = newSseState();
@@ -251,7 +324,7 @@ async function* iterateOpenAiResponse(res) {
   }
   if (mode === "json") {
     var json = JSON.parse(buf);
-    var parts = jsonToHostParts(json);
+    var parts = jsonToHostParts(json, voiceTool);
     for (var k = 0; k < parts.length; k++) yield parts[k];
     return;
   }
@@ -263,7 +336,7 @@ async function* iterateOpenAiResponse(res) {
         for (var m = 0; m < more.length; m++) yield more[m];
       }
     }
-    var tail = finishSse(sse);
+    var tail = finishSse(sse, voiceTool);
     for (var p = 0; p < tail.length; p++) yield tail[p];
   }
 }
@@ -278,4 +351,6 @@ module.exports = {
   newSseState: newSseState,
   finishSse: finishSse,
   iterateOpenAiResponse: iterateOpenAiResponse,
+  findVoiceTool: findVoiceTool,
+  mapAssistantTextToVoice: mapAssistantTextToVoice,
 };

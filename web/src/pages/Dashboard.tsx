@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { hasKey, listLogs, modelById, providerById } from "../api/client";
 import type { LogRecord, Model, SaveResult, TunnelState } from "../api/types";
-import { formatLatency, formatTime, formatTokens, labelReasoning } from "../lib/format";
+import { channelLabel, formatLatency, formatTime, formatTokens, labelReasoning } from "../lib/format";
 import { deriveHealth } from "../lib/health";
 import type { Route } from "../lib/router";
 import { navigate } from "../lib/router";
@@ -386,6 +386,7 @@ export function Dashboard() {
                 <div className="mini-row" key={r.id}>
                   <span className="time">{formatTime(r.startedAt)}</span>
                   <span className="model">{r.model ?? "—"}</span>
+                  <span className="log-channel">{channelLabel(r.channel)}</span>
                   <StatusPill status={r.status} />
                   <span className="lat">{formatLatency(r.latencyMs)}</span>
                 </div>

@@ -510,6 +510,7 @@ table.data tbody tr:last-child td { border-bottom: none; }
 table.data td.mono, table.data td .mono { font-family: var(--font-mono); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 table.data td.ellipsis { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
 table.data td .cell-sub { color: var(--muted); font-family: var(--font-mono); font-size: 11px; }
+.log-channel { font-size: 11px; font-weight: 600; letter-spacing: 0.88px; text-transform: uppercase; color: var(--muted); }
 tr.is-open .row-indicator { border-left-color: var(--primary); }
 .row-indicator { border-left: 2px solid transparent; }
 

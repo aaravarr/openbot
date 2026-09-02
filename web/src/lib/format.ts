@@ -1,4 +1,10 @@
-import type { ReasoningLevel } from "../api/types";
+import type { LogChannel, ReasoningLevel } from "../api/types";
+
+export function channelLabel(channel: LogChannel | undefined): string {
+  if (channel === "official") return "Official";
+  if (channel === "custom-host") return "Host";
+  return "Hop";
+}
 
 export function formatTokens(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";

@@ -15,8 +15,8 @@ import {
   listLogs,
   saveLogSettings,
 } from "../api/client";
-import type { LogDetail, LogRecord, LogSettings } from "../api/types";
-import { formatLatency, formatTime, formatTimestamp } from "../lib/format";
+import type { LogChannelFilter, LogDetail, LogRecord, LogSettings } from "../api/types";
+import { channelLabel, formatLatency, formatTime, formatTimestamp } from "../lib/format";
 import { navigate } from "../lib/router";
 import { useApp, useBoxState } from "../store";
 import { Listbox, type ListboxGroup } from "../components/Listbox";
@@ -43,6 +43,7 @@ export function Logs({ logId }: { logId?: string }) {
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
   const [errorsOnly, setErrorsOnly] = useState(false);
+  const [channelFilter, setChannelFilter] = useState<LogChannelFilter | "">("");
   const [modelFilter, setModelFilter] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [drawer, setDrawer] = useState<DrawerState | null>(null);
@@ -70,6 +71,7 @@ export function Logs({ logId }: { logId?: string }) {
       const list = await listLogs({
         q: q || undefined,
         ok: errorsOnly ? false : undefined,
+        channel: channelFilter || undefined,
         model: modelFilter ?? undefined,
         pageSize: 100,
       });
@@ -80,7 +82,7 @@ export function Logs({ logId }: { logId?: string }) {
     } finally {
       setLoading(false);
     }
-  }, [q, errorsOnly, modelFilter]);
+  }, [q, errorsOnly, channelFilter, modelFilter]);
 
   useEffect(() => {
     void loadRecords();
@@ -121,7 +123,16 @@ export function Logs({ logId }: { logId?: string }) {
         logRetentionDays: retention,
       });
       setSettings(saved);
-      pushToast("success", "Settings saved", `Recording is ${recording ? "on" : "off"} — bodies kept ${bodiesAll ? "for all requests" : "on errors only"}, ${retention}-day retention.`);
+      if (saved.wrapError) {
+        setSettingsError(`Recording saved, but the host tap could not be applied (${saved.wrapError}).`);
+        pushToast("error", "Settings saved", `Recording is ${recording ? "on" : "off"} — the host tap could not be applied (${saved.wrapError}).`);
+      } else if (saved.wrapBytesChanged) {
+        pushToast("info", "Settings saved", recording
+          ? "Official Grok capture is on. The host restarted; send a new message to record a turn."
+          : "Official tap removed. Chat is stock Grok again.");
+      } else {
+        pushToast("success", "Settings saved", `Recording is ${recording ? "on" : "off"} — bodies kept ${bodiesAll ? "for all requests" : "on errors only"}, ${retention}-day retention.`);
+      }
     } catch (err) {
       setSettingsError(err instanceof Error ? err.message : "Could not save settings.");
     } finally {
@@ -152,6 +163,20 @@ export function Logs({ logId }: { logId?: string }) {
       },
     ],
     [modelOptions],
+  );
+
+  const channelGroups: ListboxGroup[] = useMemo(
+    () => [
+      {
+        label: "Channel",
+        options: [
+          { value: "", label: "All channels" },
+          { value: "official", label: "Official" },
+          { value: "custom", label: "Custom" },
+        ],
+      },
+    ],
+    [],
   );
 
   const recordingOff = !recording;
@@ -237,6 +262,13 @@ export function Logs({ logId }: { logId?: string }) {
             <span className="switch__label">Errors only</span>
           </label>
           <Listbox
+            label="Filter by channel"
+            groups={channelGroups}
+            value={channelFilter}
+            onChange={(v) => setChannelFilter(v === "official" || v === "custom" ? v : "")}
+            triggerStyle={{ height: 30 }}
+          />
+          <Listbox
             label="Filter by model"
             groups={modelGroups}
             value={modelFilter ?? ""}
@@ -258,6 +290,7 @@ export function Logs({ logId }: { logId?: string }) {
             <thead>
               <tr>
                 <th>Time</th>
+                <th>Channel</th>
                 <th>Model</th>
                 <th>Status</th>
                 <th className="num">Latency</th>
@@ -270,7 +303,7 @@ export function Logs({ logId }: { logId?: string }) {
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
-                    <td colSpan={7} style={{ padding: 0 }}><div className="skel skel--row" /></td>
+                    <td colSpan={8} style={{ padding: 0 }}><div className="skel skel--row" /></td>
                   </tr>
                 ))
               ) : records.length ? (
@@ -285,6 +318,7 @@ export function Logs({ logId }: { logId?: string }) {
                     }}
                   >
                     <td className="mono">{formatTime(r.startedAt)}</td>
+                    <td><span className="log-channel">{channelLabel(r.channel)}</span></td>
                     <td className="mono">{r.model ?? "—"}</td>
                     <td><StatusPill status={r.status} /></td>
                     <td className="num mono">{formatLatency(r.latencyMs)}</td>
@@ -297,7 +331,7 @@ export function Logs({ logId }: { logId?: string }) {
                 ))
               ) : recordingOff ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={8}>
                     <EmptyState
                       icon={ScrollText}
                       title="Recording is off"
@@ -312,7 +346,7 @@ export function Logs({ logId }: { logId?: string }) {
                 </tr>
               ) : (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={8}>
                     <EmptyState
                       icon={ScrollText}
                       title="No requests yet"
@@ -389,6 +423,8 @@ function LogDrawer({
                 <div className="drawer-section">
                   <span className="section-label">Overview</span>
                   <div className="def-grid">
+                    <span className="k">Channel</span>
+                    <span className="v">{channelLabel(d.channel)}</span>
                     <span className="k">Provider</span>
                     <span className="v">{d.providerName ?? "—"}</span>
                     <span className="k">Model</span>

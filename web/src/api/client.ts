@@ -10,6 +10,7 @@ import type {
   FetchModelsError,
   FetchModelsErrorKind,
   FetchModelsResult,
+  LogChannelFilter,
   LogDetail,
   LogList,
   LogRecord,
@@ -169,17 +170,20 @@ export async function loadLogSettings(): Promise<LogSettings> {
   return (await request("/api/logs/settings")) as LogSettings;
 }
 
-export async function saveLogSettings(settings: Partial<LogSettings>): Promise<LogSettings> {
+export async function saveLogSettings(
+  settings: Partial<LogSettings>,
+): Promise<LogSettings & { wrapBytesChanged?: boolean; wrapError?: string }> {
   return (await request("/api/logs/settings", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings),
-  })) as LogSettings;
+  })) as LogSettings & { wrapBytesChanged?: boolean; wrapError?: string };
 }
 
 export type LogQuery = {
   q?: string;
   ok?: boolean;
+  channel?: LogChannelFilter;
   model?: string;
   from?: string;
   to?: string;
@@ -192,6 +196,7 @@ export async function listLogs(query: LogQuery = {}): Promise<LogList> {
   if (query.q) params.set("q", query.q);
   if (query.ok === true) params.set("ok", "true");
   if (query.ok === false) params.set("ok", "false");
+  if (query.channel) params.set("channel", query.channel);
   if (query.model) params.set("model", query.model);
   if (query.from) params.set("from", query.from);
   if (query.to) params.set("to", query.to);

@@ -6,6 +6,8 @@
 
 export type ReasoningLevel = "default" | "none" | "low" | "medium" | "high" | "max" | "xhigh";
 export type Modality = "text" | "image" | "video" | "audio";
+export type LogChannel = "hop" | "official" | "custom-host";
+export type LogChannelFilter = "official" | "custom";
 
 export const REASONING_LEVELS: readonly ReasoningLevel[] = [
   "default",
@@ -139,6 +141,7 @@ export type LogRecord = {
   latencyMs?: number;
   ok: boolean;
   status: number;
+  channel?: LogChannel;
   model?: string;
   providerId?: string;
   providerName?: string;

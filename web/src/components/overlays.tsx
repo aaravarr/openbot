@@ -90,6 +90,7 @@ export function Modal({
     >
       <div
         ref={ref}
+        className="overlay-panel"
         role={role}
         aria-modal="true"
         aria-labelledby={labelledBy}

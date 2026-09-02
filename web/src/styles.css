@@ -659,6 +659,7 @@ tr.is-open .row-indicator { border-left-color: var(--primary); }
   animation: fade-in var(--dur-3) var(--ease-enter);
   overflow: auto;
 }
+.overlay-panel { min-width: 0; max-width: 100%; }
 @keyframes fade-in { from { opacity: 0; } }
 
 .dialog {
@@ -1136,7 +1137,7 @@ tr.is-open .row-indicator { border-left-color: var(--primary); }
     padding-top: var(--sp-3);
     padding-left: max(var(--sp-3), env(safe-area-inset-left));
     padding-right: max(var(--sp-3), env(safe-area-inset-right));
-    padding-bottom: calc(56px + env(safe-area-inset-bottom) + var(--sp-4));
+    padding-bottom: calc(56px + env(safe-area-inset-bottom) + var(--sp-6));
   }
   .page-title-row { flex-wrap: wrap; row-gap: var(--sp-2); }
   .page-title-row .sub { flex: 1 1 100%; }
@@ -1262,8 +1263,9 @@ tr.is-open .row-indicator { border-left-color: var(--primary); }
   .wizard .btn--primary-lg { min-height: 44px; height: auto; padding-top: 10px; padding-bottom: 10px; }
 
   /* Dialog / drawer → near-fullscreen bottom sheet. */
-  .overlay { align-items: flex-end; padding: 0; }
-  .overlay--drawer { align-items: stretch; }
+  .overlay { align-items: flex-end; justify-content: stretch; padding: 0; }
+  .overlay--drawer { align-items: stretch; justify-content: stretch; }
+  .overlay-panel { width: 100%; max-width: 100%; }
   .dialog {
     width: 100%; max-width: 100%;
     max-height: 92vh; overflow-y: auto;

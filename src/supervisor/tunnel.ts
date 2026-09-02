@@ -1,6 +1,13 @@
 import fs from "node:fs";
 import https from "node:https";
-import { LOOPBACK, SERVICE_PORT, type AbsPath, type Expose, type TunnelObserved } from "../domain/types.ts";
+import {
+  LOOPBACK,
+  SERVICE_PORT,
+  type AbsPath,
+  type Expose,
+  type OwnedPid,
+  type TunnelObserved,
+} from "../domain/types.ts";
 import { parseOwnedPid, type FsDeps, type ProcDeps } from "./procs.ts";
 import { type BoxPaths } from "./paths.ts";
 
@@ -220,13 +227,21 @@ async function startQuickTunnel(deps: TunnelDeps, net: TunnelNet): Promise<Tunne
   const bin = await ensureCloudflared(deps, net);
   deps.fs.mkdirp(deps.paths.sandData);
   deps.fs.write(deps.paths.tunnelLog, "", 0o644);
-  const pid = deps.procs.start({
-    command: bin,
-    argv: ["tunnel", "--no-autoupdate", "--url", internalControlUrl()],
-    env: { ...process.env },
-    log: deps.paths.tunnelLog,
-    pidFile: deps.paths.tunnelPid,
-  });
+  let pid: OwnedPid;
+  try {
+    pid = deps.procs.start({
+      command: bin,
+      argv: ["tunnel", "--no-autoupdate", "--url", internalControlUrl()],
+      env: { ...process.env },
+      log: deps.paths.tunnelLog,
+      pidFile: deps.paths.tunnelPid,
+    });
+  } catch (err) {
+    if (!deps.fs.exists(bin)) {
+      throw new Error(`cloudflared not found at ${bin}`);
+    }
+    throw err;
+  }
   const url = await waitForUrl(deps, WAIT_MS);
   if (!url) {
     deps.procs.stop(pid);

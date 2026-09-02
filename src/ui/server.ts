@@ -2,9 +2,11 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { LOOPBACK, SERVICE_PORT, type Catalog, type Snapshot, type TunnelObserved } from "../domain/types.ts";
 import { officialBox } from "../parse/argv.ts";
+import { fetchModelsForProvider } from "../catalog/provider-models.ts";
+import { createCatalogManager } from "../catalog/model-catalog.ts";
 import { catalogAfterSave, parseUiProviderSave } from "../parse/ui.ts";
 import { renderQrAscii } from "../qrcode.ts";
 import { boxPathsFrom } from "../supervisor/paths.ts";
@@ -49,6 +51,18 @@ const host = process.env.OPENBOT_UI_HOST ?? LOOPBACK;
 const port = Number(process.env.OPENBOT_UI_PORT ?? String(SERVICE_PORT));
 
 let saveChain: Promise<void> = Promise.resolve();
+
+let catalogManager: ReturnType<typeof createCatalogManager> | undefined;
+
+function modelCatalog() {
+  if (catalogManager === undefined) {
+    catalogManager = createCatalogManager({
+      fs: nodeFs(),
+      cachePath: paths().modelCatalog,
+    });
+  }
+  return catalogManager;
+}
 
 function enqueueSave<T>(work: () => Promise<T>): Promise<T> {
   const run = saveChain.then(work, work);
@@ -178,6 +192,23 @@ function parseLogsQuery(url: URL): Record<string, unknown> {
   return query;
 }
 
+function providerIdFromFetchPath(pathname: string): string | undefined {
+  const prefix = "/api/providers/";
+  const suffix = "/fetch-models";
+  if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) {
+    return undefined;
+  }
+  const rest = pathname.slice(prefix.length, pathname.length - suffix.length);
+  if (!rest || rest.includes("/")) {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(rest);
+  } catch {
+    return undefined;
+  }
+}
+
 function logIdFromPath(pathname: string): string | undefined {
   const prefix = "/api/logs/";
   if (!pathname.startsWith(prefix)) {
@@ -263,6 +294,26 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     sendJson(res, 200, { snapshot: snapshotForUi(snapshot), ...publicState(current) });
     return;
   }
+  if (req.method === "GET" && url.pathname === "/api/model-catalog") {
+    const modelId = url.searchParams.get("modelId") ?? undefined;
+    sendJson(res, 200, modelCatalog().snapshot(modelId));
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/model-catalog/refresh") {
+    const { startedAt } = modelCatalog().refresh();
+    sendJson(res, 202, { ok: true, status: "loading", startedAt });
+    return;
+  }
+  if (req.method === "POST") {
+    const providerId = providerIdFromFetchPath(url.pathname);
+    if (providerId !== undefined) {
+      const catalog = catalogFromPlanJson(current.fs.read(current.paths.plan));
+      const store = loadSecrets(current.fs, current.paths.secrets);
+      const result = await fetchModelsForProvider({ providerId, catalog, secretStore: store });
+      sendJson(res, result.status, result.body);
+      return;
+    }
+  }
   if (await handleLogsApi(req, res, url)) {
     return;
   }
@@ -306,59 +357,103 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
 function safeUiPath(urlPath: string): string | undefined {
   const rel = urlPath === "/" ? "/index.html" : urlPath;
   const resolved = path.resolve(uiDir, `.${rel}`);
-  if (!resolved.startsWith(uiDir)) {
+  // Resolve both sides so a Unix-style env path (e.g. OPENBOT_REPO=/Code/...) and
+  // the drive-lettered cwd resolve to the same absolute, normalized form on win32.
+  const base = path.resolve(uiDir);
+  const compare = (p: string) => (process.platform === "win32" ? p.toLowerCase() : p);
+  const resolvedKey = compare(resolved);
+  const baseKey = compare(base);
+  // Require a trailing separator so a sibling prefix like "<ui>-evil" cannot pass.
+  if (resolvedKey !== baseKey && !resolvedKey.startsWith(baseKey + path.sep)) {
     return undefined;
   }
   return resolved;
 }
 
-const server = http.createServer((req, res) => {
-  void (async () => {
-    try {
-      const url = new URL(req.url ?? "/", `http://${host}:${String(port)}`);
-      if (url.pathname.startsWith("/api/")) {
-        await handleApi(req, res, url);
-        return;
-      }
-      if (await hop.handleHopRequest(req, res)) {
-        return;
-      }
-      const file = safeUiPath(url.pathname);
-      if (file === undefined) {
-        send(res, 403, "forbidden", "text/plain; charset=utf-8");
-        return;
-      }
-      let body: Buffer;
-      try {
-        const stat = fs.statSync(file);
-        if (!stat.isFile()) {
-          send(res, 404, "not found", "text/plain; charset=utf-8");
-          return;
-        }
-        body = fs.readFileSync(file);
-      } catch (err) {
-        const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
-        if (code === "ENOENT") {
-          send(res, 404, "not found", "text/plain; charset=utf-8");
-          return;
-        }
-        throw err;
-      }
-      const ext = path.extname(file);
-      const type = TYPES[ext] ?? "application/octet-stream";
-      send(res, 200, body, type);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "error";
-      if (!res.headersSent) {
-        sendJson(res, 500, { error: message });
-      }
+export async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  try {
+    const url = new URL(req.url ?? "/", `http://${host}:${String(port)}`);
+    if (url.pathname.startsWith("/api/")) {
+      await handleApi(req, res, url);
+      return;
     }
-  })();
+    if (await hop.handleHopRequest(req, res)) {
+      return;
+    }
+    const file = safeUiPath(url.pathname);
+    if (file === undefined) {
+      send(res, 403, "forbidden", "text/plain; charset=utf-8");
+      return;
+    }
+    let body: Buffer;
+    try {
+      const stat = fs.statSync(file);
+      if (!stat.isFile()) {
+        send(res, 404, "not found", "text/plain; charset=utf-8");
+        return;
+      }
+      body = fs.readFileSync(file);
+    } catch (err) {
+      const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
+      if (code === "ENOENT") {
+        send(res, 404, "not found", "text/plain; charset=utf-8");
+        return;
+      }
+      throw err;
+    }
+    const ext = path.extname(file);
+    const type = TYPES[ext] ?? "application/octet-stream";
+    send(res, 200, body, type);
+  } catch (err) {
+    // A handler (sync or async) threw: return a structured 500 rather than
+    // letting the rejection escape into an uncaught exception.
+    const message = err instanceof Error ? err.message : "internal error";
+    if (!res.headersSent) {
+      sendJson(res, 500, { error: { kind: "internal", message } });
+    }
+  }
+}
+
+const server = http.createServer((req, res) => {
+  void handleRequest(req, res);
 });
 
-server.listen(port, host, () => {
-  const box = paths();
-  fs.mkdirSync(box.sandData, { recursive: true });
-  fs.writeFileSync(box.uiPid, `${String(process.pid)}\n`);
-  process.stdout.write(`openbot listening on http://${host}:${String(port)}\n`);
-});
+/**
+ * Last-resort process guards. This is a single-user local tool: staying up
+ * beats dying, so an unexpected exception or rejection is logged (with stack)
+ * and the process keeps serving. These are a final safety net only — they are
+ * NOT a substitute for local error handling; every child_process spawn and
+ * async handler must still surface its own failures.
+ */
+export function registerProcessFallbacks(
+  log: (line: string) => void = (line) => process.stderr.write(line),
+): void {
+  process.on("uncaughtException", (err) => {
+    log(`OpenBot: uncaught exception (process kept alive): ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
+  });
+  process.on("unhandledRejection", (reason) => {
+    log(
+      `OpenBot: unhandled rejection (process kept alive): ${
+        reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)
+      }\n`,
+    );
+  });
+}
+
+function startServer(): void {
+  registerProcessFallbacks();
+  server.listen(port, host, () => {
+    const box = paths();
+    fs.mkdirSync(box.sandData, { recursive: true });
+    fs.writeFileSync(box.uiPid, `${String(process.pid)}\n`);
+    // Non-blocking: load the public catalog cache from disk, then re-fetch in the background.
+    void modelCatalog().start();
+    process.stdout.write(`openbot listening on http://${host}:${String(port)}\n`);
+  });
+}
+
+// Start only when this file is the entry point; importing it (e.g. from tests)
+// must not open a listener or install the process guards.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  startServer();
+}

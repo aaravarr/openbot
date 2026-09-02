@@ -24,6 +24,7 @@ export type BoxPaths = {
   readonly repoRoot: AbsPath;
   readonly expose: AbsPath;
   readonly logsSettings: AbsPath;
+  readonly modelCatalog: AbsPath;
   readonly requestLog: AbsPath;
   readonly requestBodiesDir: AbsPath;
   readonly tunnelPid: AbsPath;
@@ -72,6 +73,7 @@ export function boxPathsFrom(input: {
     repoRoot,
     expose: joinAbs(sandData, "openbot-expose"),
     logsSettings: joinAbs(sandData, "openbot-logs.json"),
+    modelCatalog: joinAbs(sandData, "openbot-model-catalog.json"),
     requestLog: joinAbs(sandData, "openbot-requests.jsonl"),
     requestBodiesDir: joinAbs(sandData, "openbot-request-bodies"),
     tunnelPid: joinAbs(sandData, "openbot-tunnel.pid"),

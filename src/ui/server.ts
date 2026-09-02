@@ -357,7 +357,14 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
 function safeUiPath(urlPath: string): string | undefined {
   const rel = urlPath === "/" ? "/index.html" : urlPath;
   const resolved = path.resolve(uiDir, `.${rel}`);
-  if (!resolved.startsWith(uiDir)) {
+  // Resolve both sides so a Unix-style env path (e.g. OPENBOT_REPO=/Code/...) and
+  // the drive-lettered cwd resolve to the same absolute, normalized form on win32.
+  const base = path.resolve(uiDir);
+  const compare = (p: string) => (process.platform === "win32" ? p.toLowerCase() : p);
+  const resolvedKey = compare(resolved);
+  const baseKey = compare(base);
+  // Require a trailing separator so a sibling prefix like "<ui>-evil" cannot pass.
+  if (resolvedKey !== baseKey && !resolvedKey.startsWith(baseKey + path.sep)) {
     return undefined;
   }
   return resolved;

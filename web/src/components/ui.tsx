@@ -91,11 +91,12 @@ export function ModePill({ mode, model }: { mode: "official" | "custom"; model?:
   if (mode === "official") {
     return <span className="mode-pill mode-pill--official">Official</span>;
   }
+  const slug = model ?? "—";
   return (
-    <span className="mode-pill mode-pill--custom">
+    <span className="mode-pill mode-pill--custom" title={slug} aria-label={`Custom ${slug}`}>
       Custom
       <span className="mode-pill__divider" aria-hidden="true" />
-      <span className="mode-pill__model">{model ?? "—"}</span>
+      <span className="mode-pill__model">{slug}</span>
     </span>
   );
 }

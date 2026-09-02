@@ -10,7 +10,7 @@ import {
   Sun,
 } from "lucide-react";
 import { hostBlocked } from "../api/client";
-import { deriveHealth } from "../lib/health";
+import { deriveHealth, worstHealth } from "../lib/health";
 import { refusalDetail, refusalKindLabel, refusalRemedy } from "../lib/refusal";
 import type { Route } from "../lib/router";
 import { useApp } from "../store";
@@ -26,7 +26,8 @@ export function Shell({ route, onNavigate }: { route: Route; onNavigate: (r: Rou
   const active = state.models.find((m) => m.id === state.activeModelId);
   const blocked = hostBlocked(state);
   const health = deriveHealth(state, service);
-  const worst = health.find((h) => h.state === "fault");
+  const worst = worstHealth(health);
+  const compactTitle = health.map((h) => `${h.word}: ${h.value}`).join(" · ");
 
   const copyLoopback = async () => {
     try {
@@ -101,6 +102,11 @@ export function Shell({ route, onNavigate }: { route: Route; onNavigate: (r: Rou
             </span>
           ))}
         </div>
+        {worst ? (
+          <span className="health-compact" title={compactTitle}>
+            <HealthDot state={worst.state} label={worst.label} />
+          </span>
+        ) : null}
         <div className="status-strip__right">
           {saving ? (
             <span className="saving-pill">

@@ -255,7 +255,7 @@ export function Setup() {
             ))}
           </div>
           <div className="preset__hint">{preset.hint}</div>
-          <div className="row" style={{ justifyContent: "flex-end", marginTop: 20 }}>
+          <div className="row wrap" style={{ justifyContent: "flex-end", marginTop: 20 }}>
             <Button variant="primary" onClick={continueToCredentials}>
               Continue <ArrowRight aria-hidden="true" />
             </Button>
@@ -281,7 +281,7 @@ export function Setup() {
                 onChange={(e) => setModelSlug(e.target.value)}
                 placeholder="Optional — leave empty to fetch or add later"
               />
-              <div className="row row--between" style={{ marginTop: 4 }}>
+              <div className="row row--between wrap" style={{ marginTop: 4 }}>
                 <span className="helper">Optional — or save &amp; fetch the provider's list instead of typing.</span>
                 <Button
                   variant="secondary-sm"
@@ -325,7 +325,7 @@ export function Setup() {
               </Notice>
             ) : null}
           </div>
-          <div className="row" style={{ justifyContent: "space-between", marginTop: 20 }}>
+          <div className="row wrap" style={{ justifyContent: "space-between", marginTop: 20 }}>
             <Button variant="ghost" onClick={() => setStep(1)}>
               <ChevronLeft aria-hidden="true" />
               Back
@@ -361,7 +361,7 @@ export function Setup() {
                 <span>No model yet — you can fetch models from the Models page after activation.</span>
               </Notice>
             )}
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <div className="row wrap" style={{ justifyContent: "space-between", alignItems: "center" }}>
               <Button variant="ghost" onClick={() => setStep(2)}>
                 <ChevronLeft aria-hidden="true" />
                 Back

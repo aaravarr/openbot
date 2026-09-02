@@ -244,12 +244,11 @@ export function Logs({ logId }: { logId?: string }) {
 
       {/* Toolbar + table */}
       <section className="card" aria-label="Request records">
-        <div className="card__head" style={{ flexWrap: "wrap", gap: 10 }}>
-          <span style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
+        <div className="card__head logs-toolbar">
+          <span className="logs-search">
             <Search style={{ position: "absolute", left: 9, width: 13, height: 13, color: "var(--muted)", pointerEvents: "none" }} aria-hidden="true" />
             <input
               className="input"
-              style={{ paddingLeft: 28, width: 220, height: 30 }}
               placeholder="Search id, model, error…"
               aria-label="Search records"
               value={q}
@@ -278,7 +277,7 @@ export function Logs({ logId }: { logId?: string }) {
           <span className="mono" style={{ fontSize: 12, color: "var(--muted)" }}>
             {total} record{total === 1 ? "" : "s"}
           </span>
-          <span style={{ flex: 1 }} />
+          <span className="logs-toolbar__spacer" />
           <IconButton label="Refresh records" icon={RefreshCw} onClick={() => void loadRecords()} />
           <Button variant="ghost-danger" icon={Trash2} onClick={() => setConfirmClear(true)}>
             Clear all
@@ -286,7 +285,7 @@ export function Logs({ logId }: { logId?: string }) {
         </div>
 
         <div className="card__body--flush table-wrap">
-          <table className="data">
+          <table className="data table--stack">
             <thead>
               <tr>
                 <th>Time</th>
@@ -302,7 +301,7 @@ export function Logs({ logId }: { logId?: string }) {
             <tbody>
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
-                  <tr key={i}>
+                  <tr className="row-empty" key={i}>
                     <td colSpan={8} style={{ padding: 0 }}><div className="skel skel--row" /></td>
                   </tr>
                 ))
@@ -317,20 +316,20 @@ export function Logs({ logId }: { logId?: string }) {
                       if (e.key === "Enter") void openDrawer(r.id);
                     }}
                   >
-                    <td className="mono">{formatTime(r.startedAt)}</td>
-                    <td><span className="log-channel">{channelLabel(r.channel)}</span></td>
-                    <td className="mono">{r.model ?? "—"}</td>
-                    <td><StatusPill status={r.status} /></td>
-                    <td className="num mono">{formatLatency(r.latencyMs)}</td>
-                    <td className="num mono">{r.totalTokens ?? "—"}</td>
-                    <td className="mono">{r.stream ? "yes" : "no"}</td>
-                    <td className="ellipsis" style={r.error ? { color: "var(--danger)" } : undefined}>
+                    <td className="mono" data-label="Time">{formatTime(r.startedAt)}</td>
+                    <td data-label="Channel"><span className="log-channel">{channelLabel(r.channel)}</span></td>
+                    <td className="mono" data-label="Model">{r.model ?? "—"}</td>
+                    <td data-label="Status"><StatusPill status={r.status} /></td>
+                    <td className="num mono" data-label="Latency">{formatLatency(r.latencyMs)}</td>
+                    <td className="num mono" data-label="Tokens">{r.totalTokens ?? "—"}</td>
+                    <td className="mono" data-label="Stream">{r.stream ? "yes" : "no"}</td>
+                    <td className="ellipsis" data-label="Error" style={r.error ? { color: "var(--danger)" } : undefined}>
                       {r.error ?? "—"}
                     </td>
                   </tr>
                 ))
               ) : recordingOff ? (
-                <tr>
+                <tr className="row-empty">
                   <td colSpan={8}>
                     <EmptyState
                       icon={ScrollText}
@@ -345,7 +344,7 @@ export function Logs({ logId }: { logId?: string }) {
                   </td>
                 </tr>
               ) : (
-                <tr>
+                <tr className="row-empty">
                   <td colSpan={8}>
                     <EmptyState
                       icon={ScrollText}

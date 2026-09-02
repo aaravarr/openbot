@@ -200,7 +200,7 @@ export function Dashboard() {
                 ) : (
                   <Badge tone="warning">No API key</Badge>
                 )}
-                {activeProvider ? <span className="mono">{activeProvider.origin}</span> : null}
+                {activeProvider ? <span className="mono wrap-anywhere">{activeProvider.origin}</span> : null}
               </div>
 
               <div>

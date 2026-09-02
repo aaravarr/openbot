@@ -261,10 +261,10 @@ export function Models({ providerId }: { providerId?: string }) {
                   {p.name}
                   {p.id === activeProviderId ? <Zap aria-hidden="true" /> : null}
                 </div>
-                <div className="provider-row__origin">{p.origin}</div>
+                <div className="provider-row__origin" title={p.origin}>{p.origin}</div>
               </div>
               {hasKey(state, p.id) ? <Badge tone="success">Key</Badge> : <Badge tone="warning">No key</Badge>}
-              <ChevronRight style={{ width: 14, height: 14, color: "var(--muted)" }} aria-hidden="true" />
+              <ChevronRight style={{ width: 14, height: 14, color: "var(--muted)", flexShrink: 0 }} aria-hidden="true" />
             </button>
           ))}
           <div className="provider-rail__foot">
@@ -278,8 +278,8 @@ export function Models({ providerId }: { providerId?: string }) {
         {selected ? (
           <section className="card" aria-label={selected.name}>
             <div className="card__head">
-              <div>
-                <div className="row gap-2">
+              <div className="card__head-main">
+                <div className="row gap-2 wrap">
                   <span style={{ fontSize: 16, fontWeight: 600 }}>{selected.name}</span>
                   {selected.id === activeProviderId ? (
                     <Badge tone="accent" icon={Zap}>
@@ -287,9 +287,7 @@ export function Models({ providerId }: { providerId?: string }) {
                     </Badge>
                   ) : null}
                 </div>
-                <div className="mono" style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-                  {selected.origin}
-                </div>
+                <div className="origin-line">{selected.origin}</div>
               </div>
               <div className="row gap-2 wrap">
                 {selectedHasKey ? (
@@ -328,7 +326,7 @@ export function Models({ providerId }: { providerId?: string }) {
             ) : null}
 
             <div className="card__body--flush table-wrap">
-              <table className="data">
+              <table className="data table--stack">
                 <thead>
                   <tr>
                     <th>Model</th>
@@ -345,20 +343,20 @@ export function Models({ providerId }: { providerId?: string }) {
                     const isActive = m.id === state.activeModelId;
                     return (
                       <tr key={m.id}>
-                        <td>
+                        <td className="cell-primary" data-label="Model">
                           <span className="mono">{m.slug}</span>{" "}
                           {isActive ? <Zap style={{ width: 12, height: 12, color: "var(--primary-strong)", verticalAlign: -2 }} aria-hidden="true" /> : null}
                         </td>
-                        <td className="mono">{formatTokens(m.contextTokens)}</td>
-                        <td className="num mono">{formatInteger(m.maxOutputTokens)}</td>
-                        <td className="mono" style={{ color: "var(--muted)", fontSize: 11 }}>
+                        <td className="mono" data-label="Context">{formatTokens(m.contextTokens)}</td>
+                        <td className="num mono" data-label="Max output">{formatInteger(m.maxOutputTokens)}</td>
+                        <td className="mono" data-label="Reasoning" style={{ color: "var(--muted)", fontSize: 11 }}>
                           {reasoningListLabel(m.reasoningLevels)}
                         </td>
-                        <td>
+                        <td data-label="Active">
                           <ParamChip isStatic>{m.activeReasoning}</ParamChip>
                         </td>
-                        <td>{m.modalities.join(" · ")}</td>
-                        <td style={{ textAlign: "right" }}>
+                        <td data-label="Modalities">{m.modalities.join(" · ")}</td>
+                        <td className="cell-actions" data-label="Actions">
                           {isActive ? (
                             <Badge tone="accent">Active</Badge>
                           ) : (
@@ -372,7 +370,7 @@ export function Models({ providerId }: { providerId?: string }) {
                     );
                   })}
                   {!models.length ? (
-                    <tr>
+                    <tr className="row-empty">
                       <td colSpan={7}>
                         <div className="empty" style={{ padding: "24px 20px" }}>
                           <p>No models yet — add one manually or fetch the provider's list.</p>
@@ -417,7 +415,7 @@ export function Models({ providerId }: { providerId?: string }) {
           ) : (
             <Badge>Unknown</Badge>
           )}
-          <span className="mono" style={{ fontSize: 12, color: "var(--muted)" }}>
+          <span className="mono wrap-anywhere" style={{ fontSize: 12, color: "var(--muted)" }}>
             {catalog?.status === "ready" && catalog.lastFetched
               ? `Last fetched ${formatTime(catalog.lastFetched)} · ${catalog.totalModels ?? "—"} models · ${(catalog.sources ?? []).map((s) => s.name).join(" + ")}`
               : "Public model catalogs (openrouter + models.dev) for auto-fill."}

@@ -96,6 +96,10 @@ export function ImportModelsDialog({
       await onImport(chosen);
       setSelected(new Set());
       onClose();
+    } catch (err) {
+      // onImport is expected to toast its own errors; keep the dialog open so
+      // the user can retry instead of surfacing an unhandled rejection.
+      console.error("Import failed:", err);
     } finally {
       setBusy(false);
     }

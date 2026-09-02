@@ -148,16 +148,25 @@ export function Setup() {
 
   const importChosen = async (chosen: FetchedModel[]) => {
     if (!savedProviderId) return;
+    const added: FetchedModel[] = [];
     for (const m of chosen) {
-      await save(
-        { kind: "upsert-model", providerId: savedProviderId, ...modelImportFields(m, catalogLookup.get(m.id)) },
-        { successTitle: "Model imported", successMessage: `${m.id} added to ${name.trim()}.` },
-      );
+      try {
+        await save(
+          { kind: "upsert-model", providerId: savedProviderId, ...modelImportFields(m, catalogLookup.get(m.id)) },
+          { successTitle: "Model imported", successMessage: `${m.id} added to ${name.trim()}.` },
+        );
+        added.push(m);
+      } catch {
+        // The store already surfaced the error toast; stop importing the rest.
+        break;
+      }
     }
-    setImportedModels((prev) => {
-      const seen = new Set(prev.map((x) => x.id));
-      return [...prev, ...chosen.filter((m) => !seen.has(m.id))];
-    });
+    if (added.length) {
+      setImportedModels((prev) => {
+        const seen = new Set(prev.map((x) => x.id));
+        return [...prev, ...added.filter((m) => !seen.has(m.id))];
+      });
+    }
   };
 
   const activate = async () => {

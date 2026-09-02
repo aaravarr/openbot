@@ -25,11 +25,32 @@ type HostPart = {
   finishReason?: string;
   textDelta?: string;
   toolName?: string;
+  toolCallId?: string;
+  argsTextDelta?: string;
   args?: Record<string, unknown>;
+  id?: string;
+};
+
+type AssistantPart = {
+  type: string;
+  text?: string;
+  toolName?: string;
+  toolCallId?: string;
+  args?: Record<string, unknown>;
+};
+
+type HopResult = {
+  fullStream: AsyncIterable<HostPart>;
+  response: Promise<{
+    id?: string;
+    modelId?: string;
+    messages: Array<{ role: string; content: AssistantPart[] }>;
+  }>;
 };
 
 const stream = require(streamPath) as {
   mapFinishReason: (reason: string | undefined, n?: number) => string;
+  assistantMessageContent: (parts: HostPart[]) => AssistantPart[];
   jsonToHostParts: (
     json: unknown,
     voice?: { name: string; parameters?: unknown },
@@ -37,7 +58,7 @@ const stream = require(streamPath) as {
   applyOpenAiEvent: (
     state: Record<string, unknown>,
     data: string,
-  ) => { type: string; textDelta?: string }[];
+  ) => HostPart[];
   newSseState: () => Record<string, unknown>;
   finishSse: (
     state: Record<string, unknown>,
@@ -136,6 +157,34 @@ test("jsonToHostParts does not add SendToUser beside the model's other tools", (
   assert.equal(parts.find((p) => p.type === "finish")?.finishReason, "tool-calls");
 });
 
+test("jsonToHostParts emits start then delta then complete tool-call", () => {
+  const parts = stream.jsonToHostParts({
+    choices: [{
+      finish_reason: "tool_calls",
+      message: {
+        content: "checking",
+        tool_calls: [
+          { id: "c1", function: { name: "GetDynamicTools", arguments: "{\"namespace\":\"user-X\"}" } },
+        ],
+      },
+    }],
+  });
+  assert.deepEqual(parts.map((p) => p.type), [
+    "text-delta",
+    "tool-call-streaming-start",
+    "tool-call-delta",
+    "tool-call",
+    "finish",
+  ]);
+  assert.equal(parts[1]?.toolCallId, "c1");
+  assert.equal(parts[1]?.toolName, "GetDynamicTools");
+  assert.equal(parts[2]?.toolCallId, "c1");
+  assert.equal(parts[2]?.argsTextDelta, "{\"namespace\":\"user-X\"}");
+  assert.equal(parts[3]?.type, "tool-call");
+  assert.equal(parts[3]?.toolName, "GetDynamicTools");
+  assert.deepEqual(parts[3]?.args, { namespace: "user-X" });
+});
+
 test("jsonToHostParts does not map host reminder leftover as SendToUser", () => {
   const parts = stream.jsonToHostParts({
     choices: [{
@@ -167,6 +216,35 @@ test("SSE deltas assemble tool arguments and finish as tool-calls", () => {
   const tail = stream.finishSse(state);
   assert.equal(tail[0]?.type, "tool-call");
   assert.equal(tail[0]?.toolName, "get_users_me");
+  assert.equal(tail[1]?.finishReason, "tool-calls");
+});
+
+test("applyOpenAiEvent emits tool-call-streaming-start then tool-call-delta", () => {
+  const state = stream.newSseState();
+  const first = stream.applyOpenAiEvent(state, JSON.stringify({
+    choices: [{
+      delta: {
+        tool_calls: [{ index: 0, id: "call_x", function: { name: "get_users_me", arguments: "{\"id\"" } }],
+      },
+    }],
+  }));
+  assert.equal(first[0]?.type, "tool-call-streaming-start");
+  assert.equal(first[0]?.toolCallId, "call_x");
+  assert.equal(first[0]?.toolName, "get_users_me");
+  assert.equal(first[1]?.type, "tool-call-delta");
+  assert.equal(first[1]?.argsTextDelta, "{\"id\"");
+  const second = stream.applyOpenAiEvent(state, JSON.stringify({
+    choices: [{
+      delta: { tool_calls: [{ index: 0, function: { arguments: ":1}" } }] },
+      finish_reason: "tool_calls",
+    }],
+  }));
+  assert.equal(second[0]?.type, "tool-call-delta");
+  assert.equal(second[0]?.argsTextDelta, ":1}");
+  const tail = stream.finishSse(state);
+  assert.equal(tail[0]?.type, "tool-call");
+  assert.equal(tail[0]?.toolName, "get_users_me");
+  assert.deepEqual(tail[0]?.args, { id: 1 });
   assert.equal(tail[1]?.finishReason, "tool-calls");
 });
 
@@ -202,10 +280,10 @@ test("finishSse maps leftover SSE text onto host SendToUser", () => {
     choices: [{ finish_reason: "stop" }],
   }));
   const tail = stream.finishSse(state, hostVoice);
-  assert.equal(tail[0]?.type, "tool-call");
-  assert.equal(tail[0]?.toolName, "SendToUser");
-  assert.equal(tail[0]?.args?.content, "Got it — you're connected.");
-  assert.equal(tail[1]?.finishReason, "tool-calls");
+  assert.equal(tail[0]?.type, "tool-call-streaming-start");
+  const voice = tail.find((p) => p.type === "tool-call" && p.toolName === "SendToUser");
+  assert.equal(voice?.args?.content, "Got it — you're connected.");
+  assert.equal(tail.at(-1)?.finishReason, "tool-calls");
 });
 
 test("finishSse does not invent a second SendToUser when the model already called it", () => {
@@ -245,6 +323,29 @@ test("iterateOpenAiResponse yields text-delta before the SSE stream ends", async
   assert.equal(types[types.length - 1], "finish");
 });
 
+test("iterateOpenAiResponse yields tool-call-streaming-start before the complete tool-call", async () => {
+  async function* chunks() {
+    yield Buffer.from("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n");
+    yield Buffer.from(
+      "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"GetDynamicTools\",\"arguments\":\"{\\\"n\\\"}\"}}]}}]}\n\n",
+    );
+    yield Buffer.from(
+      "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"ame\\\":1}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+    );
+    yield Buffer.from("data: [DONE]\n\n");
+  }
+  const types: string[] = [];
+  for await (const part of stream.iterateOpenAiResponse(chunks())) {
+    types.push(part.type);
+  }
+  const start = types.indexOf("tool-call-streaming-start");
+  const complete = types.indexOf("tool-call");
+  assert.equal(types.includes("text-delta"), true);
+  assert.equal(types.includes("tool-call-delta"), true);
+  assert.ok(start >= 0 && complete > start);
+  assert.equal(types[types.length - 1], "finish");
+});
+
 test("findVoiceTool reads SendToUser off host tools", () => {
   const found = stream.findVoiceTool([
     { name: "SendToUser", parameters: { jsonSchema: { type: "object", properties: { content: {} } } } },
@@ -252,17 +353,57 @@ test("findVoiceTool reads SendToUser off host tools", () => {
   assert.equal(found?.name, "SendToUser");
 });
 
+test("assistantMessageContent keeps text and tool-call parts together", () => {
+  const content = stream.assistantMessageContent([
+    { type: "text-delta", textDelta: "先看一眼。" },
+    { type: "tool-call-streaming-start", toolCallId: "c1", toolName: "GetDynamicTools" },
+    { type: "tool-call-delta", toolCallId: "c1", argsTextDelta: "{}" },
+    {
+      type: "tool-call",
+      toolCallId: "c1",
+      toolName: "GetDynamicTools",
+      args: { namespace: "user-X" },
+    },
+    { type: "finish", finishReason: "tool-calls" },
+  ]);
+  assert.equal(content.length, 2);
+  assert.deepEqual(content[0], { type: "text", text: "先看一眼。" });
+  assert.equal(content[1]?.type, "tool-call");
+  assert.equal(content[1]?.toolName, "GetDynamicTools");
+  assert.equal(content[1]?.toolCallId, "c1");
+  assert.deepEqual(content[1]?.args, { namespace: "user-X" });
+});
+
+test("assistantMessageContent keeps leftover text beside synthesized SendToUser", () => {
+  const content = stream.assistantMessageContent([
+    { type: "text-delta", textDelta: "Got it — you're connected." },
+    {
+      type: "tool-call",
+      toolCallId: "call_0",
+      toolName: "SendToUser",
+      args: { content: "Got it — you're connected.", type: "text" },
+    },
+    { type: "finish", finishReason: "tool-calls" },
+  ]);
+  assert.equal(content[0]?.type, "text");
+  assert.equal(content[1]?.type, "tool-call");
+  assert.equal(content[1]?.toolName, "SendToUser");
+});
+
 async function withHopServer(
   reply: Record<string, unknown>,
-  run: (runtime: {
-    hopFullStream: (
-      exec: { getMessages: () => unknown[] },
-      agent: { modelId: string; maxOutputTokens: number },
-      ctx?: unknown,
-      invocationId?: string,
-      tools?: unknown[],
-    ) => { fullStream: AsyncIterable<HostPart> };
-  }, seen: Record<string, unknown>[]) => Promise<void>,
+  run: (
+    runtime: {
+      hopFullStream: (
+        exec: { getMessages: () => unknown[] },
+        agent: { modelId: string; maxOutputTokens: number },
+        ctx?: unknown,
+        invocationId?: string,
+        tools?: unknown[],
+      ) => HopResult;
+    },
+    seen: Record<string, unknown>[],
+  ) => Promise<void>,
 ) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "openbot-rt-"));
   const planPath = path.join(dir, "plan.json");
@@ -305,7 +446,7 @@ async function withHopServer(
       ctx?: unknown,
       invocationId?: string,
       tools?: unknown[],
-    ) => { fullStream: AsyncIterable<HostPart> };
+    ) => HopResult;
   };
   try {
     await run(runtime, seen);
@@ -350,7 +491,7 @@ test("hopFullStream maps leftover stop text onto host SendToUser", async () => {
       message: { role: "assistant", content: leftover },
     }],
   }, async (runtime) => {
-    const { fullStream } = runtime.hopFullStream(
+    const result = runtime.hopFullStream(
       { getMessages: () => [{ role: "user", content: "x" }] },
       { modelId: "glm-5.3-flash", maxOutputTokens: 4096 },
       {},
@@ -358,10 +499,47 @@ test("hopFullStream maps leftover stop text onto host SendToUser", async () => {
       [hostVoice],
     );
     const parts: HostPart[] = [];
-    for await (const part of fullStream) parts.push(part);
+    for await (const part of result.fullStream) parts.push(part);
     const voice = parts.find((p) => p.type === "tool-call" && p.toolName === "SendToUser");
     assert.equal(voice?.args?.content, leftover);
     assert.equal(voice?.args?.type, "text");
     assert.equal(parts.find((p) => p.type === "finish")?.finishReason, "tool-calls");
+    const response = await result.response;
+    const content = response.messages[0]?.content;
+    assert.equal(content?.some((p) => p.type === "text" && p.text === leftover), true);
+    assert.equal(content?.some((p) => p.type === "tool-call" && p.toolName === "SendToUser"), true);
+  });
+});
+
+test("hopFullStream settles response.messages with text and tool-call", async () => {
+  await withHopServer({
+    id: "cmpl-1",
+    choices: [{
+      finish_reason: "tool_calls",
+      message: {
+        content: "checking",
+        tool_calls: [{
+          id: "c1",
+          function: { name: "GetDynamicTools", arguments: "{\"namespace\":\"user-X\"}" },
+        }],
+      },
+    }],
+  }, async (runtime) => {
+    const result = runtime.hopFullStream(
+      { getMessages: () => [{ role: "user", content: "x" }] },
+      { modelId: "glm-5.3-flash", maxOutputTokens: 4096 },
+    );
+    const parts: HostPart[] = [];
+    for await (const part of result.fullStream) parts.push(part);
+    assert.equal(parts[0]?.type, "text-delta");
+    assert.equal(parts.some((p) => p.type === "tool-call-streaming-start"), true);
+    assert.equal(parts.some((p) => p.type === "tool-call-delta"), true);
+    assert.equal(parts.some((p) => p.type === "tool-call" && p.toolName === "GetDynamicTools"), true);
+    const response = await result.response;
+    const content = response.messages[0]?.content;
+    assert.equal(content?.some((p) => p.type === "text" && p.text === "checking"), true);
+    assert.equal(content?.some((p) => p.type === "tool-call" && p.toolName === "GetDynamicTools"), true);
+    assert.equal(response.id, "cmpl-1");
+    assert.equal(response.modelId, "glm-5.3-flash");
   });
 });

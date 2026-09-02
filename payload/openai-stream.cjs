@@ -186,6 +186,67 @@ function mapAssistantTextToVoice(text, mapped, voiceTool) {
   return [voice].concat(mapped);
 }
 
+function argsTextOf(fn) {
+  if (!isRecord(fn)) return "";
+  if (typeof fn.arguments === "string") return fn.arguments;
+  if (isRecord(fn.arguments)) {
+    try { return JSON.stringify(fn.arguments); } catch (err) { return ""; }
+  }
+  return "";
+}
+
+function markStarted(state, idx, id) {
+  if (!state.started) state.started = Object.create(null);
+  if (!state.startedIds) state.startedIds = Object.create(null);
+  state.started[idx] = true;
+  if (id) state.startedIds[id] = true;
+}
+
+function wasStarted(state, id) {
+  if (!id || !state || !state.startedIds) return false;
+  return Boolean(state.startedIds[id]);
+}
+
+/** Harness stream: start → args deltas → complete tool-call. Same ids as the final tool-call. */
+function hostToolPrelude(tc) {
+  var id = tc && tc.toolCallId ? tc.toolCallId : "call_0";
+  var name = (tc && tc.toolName) || "";
+  var raw = "{}";
+  try { raw = JSON.stringify((tc && tc.args) || {}); } catch (err) { raw = "{}"; }
+  return [
+    { type: "tool-call-streaming-start", toolCallId: id, toolName: name },
+    { type: "tool-call-delta", toolCallId: id, toolName: name, argsTextDelta: raw },
+  ];
+}
+
+function emitToolCallProgress(state, calls, out) {
+  if (!Array.isArray(calls) || !calls.length) return;
+  mergeToolCalls(state.calls, calls);
+  for (var i = 0; i < calls.length; i++) {
+    var tc = calls[i];
+    if (!isRecord(tc)) continue;
+    var idx = Number.isInteger(tc.index) ? tc.index : i;
+    var row = state.calls[idx];
+    if (!row) continue;
+    var id = row.id || ("call_" + idx);
+    var name = (row.function && row.function.name) || "";
+    if (!state.started) state.started = Object.create(null);
+    if (!state.started[idx] && name) {
+      markStarted(state, idx, id);
+      out.push({ type: "tool-call-streaming-start", toolCallId: id, toolName: name });
+    }
+    var chunk = argsTextOf(isRecord(tc.function) ? tc.function : {});
+    if (chunk) {
+      out.push({
+        type: "tool-call-delta",
+        toolCallId: id,
+        toolName: name,
+        argsTextDelta: chunk,
+      });
+    }
+  }
+}
+
 function jsonToHostParts(json, voiceTool) {
   var choice = json && json.choices && json.choices[0];
   var message = (choice && choice.message) || {};
@@ -197,7 +258,12 @@ function jsonToHostParts(json, voiceTool) {
   if (reasoning) parts.push({ type: "reasoning", textDelta: reasoning });
   if (text) parts.push({ type: "text-delta", textDelta: text });
   var mapped = mapAssistantTextToVoice(text, mapToolCalls(calls), voiceTool);
-  for (var i = 0; i < mapped.length; i++) parts.push(mapped[i]);
+  for (var i = 0; i < mapped.length; i++) {
+    var prelude = hostToolPrelude(mapped[i]);
+    parts.push(prelude[0]);
+    parts.push(prelude[1]);
+    parts.push(mapped[i]);
+  }
   parts.push({
     type: "finish",
     finishReason: mapFinishReason(choice && choice.finish_reason, mapped.length),
@@ -237,6 +303,8 @@ function newSseState() {
   return {
     sawDelta: false,
     calls: Object.create(null),
+    started: Object.create(null),
+    startedIds: Object.create(null),
     finishReason: undefined,
     usage: undefined,
     id: "",
@@ -270,8 +338,10 @@ function applyOpenAiEvent(state, data) {
       state.text += t;
       out.push({ type: "text-delta", textDelta: t });
     }
-    mergeToolCalls(state.calls, delta.tool_calls);
-    if (delta.function_call) mergeFunctionCall(state.calls, delta.function_call);
+    emitToolCallProgress(state, delta.tool_calls, out);
+    if (delta.function_call) {
+      emitToolCallProgress(state, [{ index: 0, id: "call_0", function: delta.function_call }], out);
+    }
   }
 
   var message = choice.message;
@@ -285,8 +355,7 @@ function applyOpenAiEvent(state, data) {
         out.push({ type: "text-delta", textDelta: t2 });
       }
     }
-    mergeToolCalls(state.calls, message.tool_calls);
-    if (message.function_call) mergeFunctionCall(state.calls, message.function_call);
+    emitToolCallProgress(state, asToolCallArray(message), out);
   }
   return out;
 }
@@ -294,7 +363,16 @@ function applyOpenAiEvent(state, data) {
 function finishSse(state, voiceTool) {
   var mapped = mapAssistantTextToVoice(state && state.text, mapToolCalls(toolCallList(state.calls)), voiceTool);
   var out = [];
-  for (var i = 0; i < mapped.length; i++) out.push(mapped[i]);
+  for (var i = 0; i < mapped.length; i++) {
+    var tc = mapped[i];
+    if (!wasStarted(state, tc.toolCallId)) {
+      var prelude = hostToolPrelude(tc);
+      out.push(prelude[0]);
+      out.push(prelude[1]);
+      markStarted(state, i, tc.toolCallId);
+    }
+    out.push(tc);
+  }
   out.push({
     type: "finish",
     finishReason: mapFinishReason(state.finishReason, mapped.length),
@@ -302,6 +380,33 @@ function finishSse(state, voiceTool) {
     id: state.id || "",
   });
   return out;
+}
+
+/** Build the host `response.messages` content array from yielded stream parts. */
+function assistantMessageContent(parts) {
+  var reasoning = "";
+  var text = "";
+  var tools = [];
+  if (!Array.isArray(parts)) return [];
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i];
+    if (!isRecord(p)) continue;
+    if (p.type === "reasoning" && p.textDelta) reasoning += p.textDelta;
+    if (p.type === "text-delta" && p.textDelta) text += p.textDelta;
+    if (p.type === "tool-call") {
+      tools.push({
+        type: "tool-call",
+        toolCallId: p.toolCallId,
+        toolName: p.toolName,
+        args: p.args,
+      });
+    }
+  }
+  var content = [];
+  if (reasoning) content.push({ type: "reasoning", text: reasoning });
+  if (text) content.push({ type: "text", text: text });
+  for (var t = 0; t < tools.length; t++) content.push(tools[t]);
+  return content;
 }
 
 async function* iterateOpenAiResponse(res, voiceTool) {
@@ -354,4 +459,5 @@ module.exports = {
   iterateOpenAiResponse: iterateOpenAiResponse,
   findVoiceTool: findVoiceTool,
   mapAssistantTextToVoice: mapAssistantTextToVoice,
+  assistantMessageContent: assistantMessageContent,
 };

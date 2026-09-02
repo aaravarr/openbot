@@ -25,7 +25,7 @@ A known `/* opengrok-stock-wrap */` header is peeled back to stock before offici
 
 Bindings are `{ conversation, modelId }`. Derive `hopBaseUrl` with `hopBaseUrl(LOOPBACK_HOP)`. Secret field names are unrepresentable on `Binding`.
 
-The generic hop unwraps `{ jsonSchema }`, maps OpenAI `tool_calls` to host `tool-call` parts, maps `finish_reason: "tool_calls"` to `finishReason: "tool-calls"`, and honors the model's `stop`. Do not add a SendToUser-drop or a forced `finish=stop` on `GenericHop`. Named opt-in strategies are a separate union.
+The generic hop unwraps `{ jsonSchema }`, maps OpenAI `tool_calls` to host `tool-call` parts, maps `finish_reason: "tool_calls"` to `finishReason: "tool-calls"`, and honors the model's `stop`. Custom wrap emits `tool-call-streaming-start` then `tool-call-delta` then `tool-call`, and settles `response.messages` as host content parts (reasoning text, text, and tool-call together). Do not invent `reasoning-signature` or official-only fields. Do not add a SendToUser-drop or a forced `finish=stop` on `GenericHop`. Named opt-in strategies are a separate union.
 
 `wrapSession` exists only in a marked host. It is sync. Do not return a Promise. Do not add `wrapBareHop`. Official turns never hop: `wrapSession` / `attachSession` must delegate to `tapSession` when `openbot-mode` is official. `tapSession` is sync, calls stock, and must yield the original stream parts.
 

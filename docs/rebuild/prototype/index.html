@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard · OpenBot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>
+(function(){try{var t=localStorage.getItem("openbot-theme");if(!t){t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();
+</script>
+</head>
+<body>
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+  <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-dashboard" viewBox="0 0 24 24"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></symbol>
+  <symbol id="i-boxes" viewBox="0 0 24 24"><path d="M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z"/><path d="m7 16.5-4.74-2.85"/><path d="m7 16.5 5-3"/><path d="M7 16.5v5.17"/><path d="M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z"/><path d="m17 16.5-5-3"/><path d="m17 16.5 4.74-2.85"/><path d="M17 16.5v5.17"/><path d="M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z"/><path d="M12 8 7.26 5.15"/><path d="m12 8 4.74-2.85"/><path d="M12 13.5V8"/></symbol>
+  <symbol id="i-message" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-scroll" viewBox="0 0 24 24"><path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 0 1-2 2Z"/><path d="M8 17a2 2 0 0 0-2-2H3"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="i-triangle" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-shield-alert" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
+  <symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-circle-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="m3 3 3 9-3 9 19-9Z"/><path d="M6 12h16"/></symbol>
+  <symbol id="i-square" viewBox="0 0 24 24"><rect width="12" height="12" x="6" y="6" rx="2"/></symbol>
+  <symbol id="i-loader" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></symbol>
+  <symbol id="i-qr" viewBox="0 0 24 24"><rect width="5" height="5" x="3" y="3" rx="1"/><rect width="5" height="5" x="16" y="3" rx="1"/><rect width="5" height="5" x="3" y="16" rx="1"/><path d="M21 16h-3a2 2 0 0 0-2 2v3"/><path d="M21 21v.01"/><path d="M12 7v3a2 2 0 0 1-2 2H7"/><path d="M3 12h.01"/><path d="M12 3h.01"/><path d="M12 16v.01"/><path d="M16 12h1"/><path d="M21 12v.01"/><path d="M12 21v-1"/></symbol>
+  <symbol id="i-unplug" viewBox="0 0 24 24"><path d="m19 5 3-3"/><path d="m2 22 3-3"/><path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z"/><path d="M7.5 13.5 10 11"/><path d="M10.5 16.5 13 14"/><path d="m12 6 6 6 2.3-2.3a2.4 2.4 0 0 0 0-3.4l-2.6-2.6a2.4 2.4 0 0 0-3.4 0Z"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></symbol>
+  <symbol id="i-heart-pulse" viewBox="0 0 24 24"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/></symbol>
+  <symbol id="i-file-json" viewBox="0 0 24 24"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M4 12a1 1 0 0 0-1 1v1a1 1 0 0 1-1 1 1 1 0 0 1 1 1v1a1 1 0 0 0 1 1"/><path d="M8 18a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1 1 1 0 0 1-1-1v-1a1 1 0 0 0-1-1"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
+  <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+  <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></symbol>
+</svg>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="shell">
+  <div class="topnav">
+    <a class="brand" href="index.html">
+      <span class="brand__mark"><svg class="ic"><use href="#i-chevron-right"/></svg></span>
+      OpenBot
+    </a>
+    <nav class="nav" aria-label="Primary">
+      <a class="nav__link is-active" href="index.html" aria-current="page"><svg class="ic"><use href="#i-dashboard"/></svg>Dashboard</a>
+      <a class="nav__link" href="models.html"><svg class="ic"><use href="#i-boxes"/></svg>Models</a>
+      <a class="nav__link" href="logs.html"><svg class="ic"><use href="#i-scroll"/></svg>Logs</a>
+    </nav>
+    <div class="topnav__right">
+      <span class="loopback-chip"><span class="dot-live"></span>127.0.0.1:9280<button class="icon-btn" data-copy="http://127.0.0.1:9280" aria-label="Copy loopback URL"><svg class="ic"><use href="#i-copy"/></svg></button></span>
+      <button class="icon-btn" data-theme-toggle aria-label="Switch theme"><svg class="ic ic-moon"><use href="#i-moon"/></svg><svg class="ic ic-sun" hidden><use href="#i-sun"/></svg></button>
+    </div>
+  </div>
+
+  <div class="status-strip">
+    <span class="mode-pill mode-pill--custom">Custom<span class="mode-pill__divider" aria-hidden="true"></span><span class="mode-pill__model">glm-5.3</span></span>
+    <div class="health-cluster">
+      <span class="health-item"><span class="health-dot health-dot--ok" role="img" aria-label="Host: running"></span><span class="word">Host</span><span class="val">running</span></span>
+      <span class="health-item"><span class="health-dot health-dot--ok" role="img" aria-label="Port 9280: ours"></span><span class="word">Port</span><span class="val">ours</span></span>
+      <span class="health-item"><span class="health-dot health-dot--ok" role="img" aria-label="Wrap: openbot"></span><span class="word">Wrap</span><span class="val">openbot</span></span>
+      <span class="health-item"><span class="health-dot health-dot--ok" role="img" aria-label="Service: ok"></span><span class="word">Service</span><span class="val">ok</span></span>
+    </div>
+    <div class="status-strip__right">
+      <span class="saving-pill is-hidden"><svg class="ic spinner"><use href="#i-loader"/></svg>Saving…</span>
+      <span class="last-poll">polled 12s ago</span>
+    </div>
+  </div>
+
+  <div class="blocked-banner is-hidden" role="alert">
+    <span class="blocked-banner__icon"><svg class="ic"><use href="#i-shield-alert"/></svg></span>
+    <div class="blocked-banner__body">
+      <span class="blocked-banner__kind">foreign-opengrok</span>
+      <div class="blocked-banner__remedy">A foreign opengrok wrap is present — remove it before OpenBot can manage the host. All changes are disabled. <button class="link" type="button">View diagnostics</button></div>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="main" tabindex="-1">
+
+  <!-- ============ Real content ============ -->
+  <div class="page">
+    <div class="page-title-row">
+      <h1>Dashboard</h1>
+      <span class="sub">Is my box working? What is active right now?</span>
+    </div>
+
+    <div class="grid grid--12">
+      <!-- Mode hero -->
+      <section class="card card--pad col-8" aria-labelledby="h-mode">
+        <div class="row row--between" style="margin-bottom:16px">
+          <span class="card__label" id="h-mode">Mode</span>
+          <span class="mode-pill mode-pill--custom">Custom<span class="mode-pill__divider" aria-hidden="true"></span><span class="mode-pill__model">glm-5.3</span></span>
+        </div>
+        <div class="hero-mode">
+          <div class="mode-row">
+            <span class="hero-model-id">glm-5.3</span>
+            <span class="badge badge--accent"><svg class="ic"><use href="#i-zap"/></svg>Active</span>
+          </div>
+          <div class="hero-sub">
+            <span>GLM Coding Plan</span>
+            <span class="badge badge--success"><svg class="ic"><use href="#i-check"/></svg>Key saved</span>
+            <span class="mono" style="color:var(--muted)">https://open.bigmodel.cn/api/paas/v4</span>
+          </div>
+
+          <div>
+            <div class="section-label" style="margin-bottom:8px">Reasoning level</div>
+            <div class="row gap-1 wrap" data-chip-group data-single>
+              <span class="param-chip is-pinned" data-chip>default</span>
+              <span class="param-chip" data-chip>none</span>
+              <span class="param-chip" data-chip>low</span>
+              <span class="param-chip" data-chip>medium</span>
+              <span class="param-chip is-active" data-chip>high</span>
+              <span class="param-chip" data-chip>max</span>
+              <span class="param-chip" data-chip>xhigh</span>
+            </div>
+          </div>
+
+          <div class="rule-microcopy">
+            <svg class="ic"><use href="#i-info"/></svg>
+            <span>Changes apply to the next new message in Grok Bot. One model is active at a time.</span>
+          </div>
+
+          <div class="row gap-2 wrap">
+            <div class="listbox" data-listbox>
+              <button type="button" class="listbox__trigger" aria-haspopup="listbox" aria-expanded="false">
+                <span class="listbox__value">glm-5.3 — GLM Coding Plan</span>
+                <svg class="ic listbox__chevron"><use href="#i-chevron-down"/></svg>
+              </button>
+              <div class="listbox__panel" hidden>
+                <div class="listbox__search" hidden>
+                  <svg class="ic listbox__search-icon"><use href="#i-search"/></svg>
+                  <input class="input" type="text" placeholder="Search models…" aria-label="Search models">
+                </div>
+                <div class="listbox__list" role="listbox" tabindex="-1" aria-label="Quick model switcher">
+                  <div class="listbox__group">
+                    <div class="listbox__group-label">GLM Coding Plan</div>
+                    <div class="listbox__option is-selected" role="option" aria-selected="true" data-value="glm-5.3" data-label="glm-5.3 — GLM Coding Plan"><span class="listbox__name">glm-5.3</span><span class="listbox__badges"><span class="badge">128K</span><span class="badge">65K out</span></span><svg class="ic listbox__check"><use href="#i-check"/></svg></div>
+                    <div class="listbox__option" role="option" aria-selected="false" data-value="glm-5.3-flash" data-label="glm-5.3-flash — GLM Coding Plan"><span class="listbox__name">glm-5.3-flash</span><span class="listbox__badges"><span class="badge">128K</span><span class="badge">65K out</span></span><svg class="ic listbox__check"><use href="#i-check"/></svg></div>
+                    <div class="listbox__option" role="option" aria-selected="false" data-value="glm-4.5" data-label="glm-4.5 — GLM Coding Plan"><span class="listbox__name">glm-4.5</span><span class="listbox__badges"><span class="badge">128K</span></span><svg class="ic listbox__check"><use href="#i-check"/></svg></div>
+                    <div class="listbox__option" role="option" aria-selected="false" data-value="glm-4v" data-label="glm-4v — GLM Coding Plan"><span class="listbox__name">glm-4v</span><span class="listbox__badges"><span class="badge">32K</span><span class="badge">image</span></span><svg class="ic listbox__check"><use href="#i-check"/></svg></div>
+                  </div>
+                  <div class="listbox__group">
+                    <div class="listbox__group-label">DeepSeek</div>
+                    <div class="listbox__option" role="option" aria-selected="false" data-value="deepseek-v4-pro" data-label="deepseek-v4-pro — DeepSeek"><span class="listbox__name">deepseek-v4-pro</span><span class="listbox__badges"><span class="badge">128K</span></span><svg class="ic listbox__check"><use href="#i-check"/></svg></div>
+                    <div class="listbox__option" role="option" aria-selected="false" data-value="deepseek-v4-flash" data-label="deepseek-v4-flash — DeepSeek"><span class="listbox__name">deepseek-v4-flash</span><span class="listbox__badges"><span class="badge">128K</span></span><svg class="ic listbox__check"><use href="#i-check"/></svg></div>
+                    <div class="listbox__option" role="option" aria-selected="false" data-value="deepseek-coder" data-label="deepseek-coder — DeepSeek"><span class="listbox__name">deepseek-coder</span><span class="listbox__badges"><span class="badge">64K</span></span><svg class="ic listbox__check"><use href="#i-check"/></svg></div>
+                  </div>
+                  <div class="listbox__group">
+                    <div class="listbox__group-label">OpenRouter</div>
+                    <div class="listbox__option" role="option" aria-selected="false" data-value="openrouter:auto" data-label="openrouter:auto — OpenRouter (no key)"><span class="listbox__name">openrouter:auto</span><span class="listbox__badges"><span class="badge badge--warning">No key</span></span><svg class="ic listbox__check"><use href="#i-check"/></svg></div>
+                    <div class="listbox__option" role="option" aria-selected="false" data-value="openrouter:grok-4.5" data-label="openrouter:grok-4.5 — OpenRouter (no key)"><span class="listbox__name">openrouter:grok-4.5</span><span class="listbox__badges"><span class="badge badge--warning">No key</span></span><svg class="ic listbox__check"><use href="#i-check"/></svg></div>
+                    <div class="listbox__option" role="option" aria-selected="false" data-value="openrouter:kimi-k3" data-label="openrouter:kimi-k3 — OpenRouter (no key)"><span class="listbox__name">openrouter:kimi-k3</span><span class="listbox__badges"><span class="badge badge--warning">No key</span></span><svg class="ic listbox__check"><use href="#i-check"/></svg></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <button class="btn btn--ghost-danger" data-dialog-open="dialog-official">Switch to Official Grok</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tunnel -->
+      <section class="card col-4" aria-labelledby="h-tunnel">
+        <div class="card__head">
+          <span class="card__label" id="h-tunnel">Phone access</span>
+          <span class="badge badge--success"><svg class="ic"><use href="#i-check"/></svg>Live</span>
+        </div>
+        <div class="card__body stack" style="gap:12px">
+          <div class="tunnel-url">
+            <svg class="ic" style="color:var(--muted);width:15px;height:15px;flex:none"><use href="#i-globe"/></svg>
+            <span class="url">openbot-proud-sloth.trycloudflare.com</span>
+          </div>
+          <button class="btn btn--secondary-sm" data-copy="https://openbot-proud-sloth.trycloudflare.com"><svg class="ic"><use href="#i-copy"/></svg>Copy URL</button>
+
+          <pre class="qr-pre" aria-label="QR code for the public URL">██████████████  ██  ██████████████
+██          ██  ██  ██          ██
+██  ██████  ██  ██  ██  ██████  ██
+██  ██████  ██  ██  ██  ██████  ██
+██  ██████  ██  ██  ██  ██████  ██
+██          ██  ██  ██          ██
+██████████████  ██  ██  ██  ██  ██
+                  ██    ██
+██████████  ██  ██████    ██  ████
+██    ████  ██    ██  ██████  ██
+██  ██  ██      ████  ██    ██████
+██    ████  ██  ██  ██████  ██  ██
+██████████  ██  ██  ██      ██  ██</pre>
+
+          <div class="notice notice--warn"><svg class="ic"><use href="#i-triangle"/></svg><span class="text">Anyone with this URL can open this console. Keys stay on the Computer.</span></div>
+
+          <div class="row gap-2">
+            <button class="btn btn--secondary-sm"><svg class="ic"><use href="#i-refresh"/></svg>Refresh URL</button>
+            <button class="btn btn--ghost-danger" data-dialog-open="dialog-stop-tunnel">Stop</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Health strip -->
+      <section class="card col-12" aria-labelledby="h-health">
+        <div class="card__head">
+          <span class="card__label" id="h-health">Health</span>
+          <button class="icon-btn" aria-label="Refresh health"><svg class="ic"><use href="#i-refresh"/></svg></button>
+        </div>
+        <div class="card__body">
+          <div class="health-grid">
+            <div class="health-cell">
+              <span class="health-cell__top"><span class="health-dot health-dot--ok"></span>Host process</span>
+              <span class="health-cell__val">running · pid 4821</span>
+            </div>
+            <div class="health-cell">
+              <span class="health-cell__top"><span class="health-dot health-dot--ok"></span>Port 9280</span>
+              <span class="health-cell__val">ours · pid 1207</span>
+            </div>
+            <div class="health-cell">
+              <span class="health-cell__top"><span class="health-dot health-dot--ok"></span>Wrap</span>
+              <span class="health-cell__val">openbot</span>
+            </div>
+            <div class="health-cell">
+              <span class="health-cell__top"><span class="health-dot health-dot--ok"></span>Alignment</span>
+              <span class="health-cell__val">ok</span>
+            </div>
+            <div class="health-cell">
+              <span class="health-cell__top"><span class="health-dot health-dot--ok"></span>Service</span>
+              <span class="health-cell__val">ok · 12ms</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Recent requests -->
+      <section class="card col-12" aria-labelledby="h-recent">
+        <div class="card__head">
+          <span class="card__label" id="h-recent">Recent requests</span>
+          <a href="logs.html" class="row gap-1" style="font-size:12px;font-weight:500">View all <svg class="ic" style="width:13px;height:13px"><use href="#i-arrow-right"/></svg></a>
+        </div>
+        <div class="card__body--flush mini-list">
+          <div class="mini-row"><span class="time">14:02:11</span><span class="model">glm-5.3</span><span class="status-pill status-pill--ok">200</span><span class="lat">412ms</span></div>
+          <div class="mini-row"><span class="time">14:01:47</span><span class="model">glm-5.3-flash</span><span class="status-pill status-pill--ok">200</span><span class="lat">388ms</span></div>
+          <div class="mini-row"><span class="time">13:58:30</span><span class="model">glm-5.3</span><span class="status-pill status-pill--err">429</span><span class="lat">91ms</span></div>
+          <div class="mini-row"><span class="time">13:52:05</span><span class="model">deepseek-v4-pro</span><span class="status-pill status-pill--ok">200</span><span class="lat">1.2s</span></div>
+          <div class="mini-row"><span class="time">13:44:19</span><span class="model">glm-5.3</span><span class="status-pill status-pill--ok">200</span><span class="lat">460ms</span></div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ============ Skeleton view ============ -->
+  <div class="skeleton-view" aria-hidden="true">
+    <div class="grid grid--12">
+      <div class="card card--pad col-8" style="display:flex;flex-direction:column;gap:14px">
+        <div class="skel skel--line" style="width:70px"></div>
+        <div class="skel skel--line" style="width:180px;height:20px"></div>
+        <div class="skel skel--line" style="width:320px"></div>
+        <div class="row gap-1"><div class="skel" style="width:60px;height:22px"></div><div class="skel" style="width:60px;height:22px"></div><div class="skel" style="width:60px;height:22px"></div><div class="skel" style="width:60px;height:22px"></div></div>
+        <div class="skel skel--line" style="width:400px"></div>
+        <div class="skel skel--line" style="width:220px;height:32px"></div>
+      </div>
+      <div class="card col-4"><div class="card__head"><div class="skel skel--line-sm" style="width:80px"></div></div><div class="card__body stack" style="gap:12px"><div class="skel skel--line" style="width:100%"></div><div class="skel skel--line" style="width:60%"></div><div class="skel skel--block" style="height:120px"></div></div></div>
+      <div class="card col-12"><div class="card__head"><div class="skel skel--line-sm" style="width:60px"></div></div><div class="card__body" style="display:grid;grid-template-columns:repeat(5,1fr);gap:16px"><div class="skel" style="height:52px"></div><div class="skel" style="height:52px"></div><div class="skel" style="height:52px"></div><div class="skel" style="height:52px"></div><div class="skel" style="height:52px"></div></div></div>
+      <div class="card col-12" style="padding-bottom:8px"><div class="skel skel--row"></div><div class="skel skel--row"></div><div class="skel skel--row"></div><div class="skel skel--row"></div><div class="skel skel--row"></div></div>
+    </div>
+  </div>
+</main>
+
+<!-- Confirm: switch to Official -->
+<div class="overlay is-hidden" id="dialog-official" role="alertdialog" aria-modal="true" aria-labelledby="official-title" aria-describedby="official-desc" data-dismissable="false">
+  <div class="dialog">
+    <div class="dialog__head">
+      <span class="dialog__icon dialog__icon--warn"><svg class="ic"><use href="#i-shield-alert"/></svg></span>
+      <div>
+        <div class="dialog__title" id="official-title">Switch to Official Grok?</div>
+        <div class="dialog__desc" id="official-desc">Chat returns to the stock xAI model. Your catalog and keys are kept.</div>
+      </div>
+    </div>
+    <div class="consequence-list">
+      <div class="consequence"><svg class="ic"><use href="#i-chevron-right"/></svg>Chat returns to stock Grok on the next message.</div>
+      <div class="consequence"><svg class="ic"><use href="#i-chevron-right"/></svg>The Grok Bot host process restarts.</div>
+      <div class="consequence"><svg class="ic"><use href="#i-chevron-right"/></svg>Providers, models, and keys are kept for re-enabling.</div>
+      <div class="consequence"><svg class="ic"><use href="#i-chevron-right"/></svg>A running tunnel stays up.</div>
+    </div>
+    <div class="dialog__foot">
+      <button class="btn btn--ghost" data-dialog-close data-autofocus>Cancel</button>
+      <button class="btn btn--danger" data-confirm-toast="info|Switched to Official|Grok Bot will use stock xAI on the next message.">Switch to Official</button>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm: stop tunnel -->
+<div class="overlay is-hidden" id="dialog-stop-tunnel" role="alertdialog" aria-modal="true" aria-labelledby="stop-tunnel-title" data-dismissable="false">
+  <div class="dialog">
+    <div class="dialog__head">
+      <span class="dialog__icon dialog__icon--warn"><svg class="ic"><use href="#i-triangle"/></svg></span>
+      <div>
+        <div class="dialog__title" id="stop-tunnel-title">Stop the tunnel?</div>
+        <div class="dialog__desc">The public URL stops working immediately. Anyone using it loses access.</div>
+      </div>
+    </div>
+    <div class="dialog__foot">
+      <button class="btn btn--ghost" data-dialog-close data-autofocus>Cancel</button>
+      <button class="btn btn--danger" data-confirm-toast="info|Tunnel stopped|The console is reachable only from this Computer.">Stop tunnel</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-stack" aria-live="polite" aria-atomic="false"></div>
+
+<div class="proto-bar" id="proto-bar" role="toolbar" aria-label="Prototype controls">
+  <span class="proto-bar__label">Proto</span>
+  <button data-proto="theme" type="button">Theme</button>
+  <button data-proto="skeleton" type="button">Skeleton</button>
+  <button data-proto="saving" type="button">Saving pill</button>
+  <button data-proto="blocked" type="button">Blocked</button>
+  <button data-proto="toast" type="button">Toast</button>
+  <button data-proto="toast-err" type="button">Error</button>
+  <button data-proto="mode" type="button">Mode</button>
+</div>
+
+<nav class="bottom-tabs" aria-label="Primary">
+  <div class="bottom-tabs__inner">
+    <a class="bottom-tab is-active" href="index.html"><svg class="ic"><use href="#i-dashboard"/></svg>Dashboard</a>
+    <a class="bottom-tab" href="models.html"><svg class="ic"><use href="#i-boxes"/></svg>Models</a>
+    <a class="bottom-tab" href="logs.html"><svg class="ic"><use href="#i-scroll"/></svg>Logs</a>
+  </div>
+</nav>
+
+<script src="app.js"></script>
+</body>
+</html>

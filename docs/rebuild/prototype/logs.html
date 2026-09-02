@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Logs · OpenBot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+  .logs-empty { display: none; }
+  body.proto-empty .logs-populated { display: none; }
+  body.proto-empty .logs-empty { display: block; }
+</style>
+<script>
+(function(){try{var t=localStorage.getItem("openbot-theme");if(!t){t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();
+</script>
+</head>
+<body>
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-dashboard" viewBox="0 0 24 24"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></symbol>
+  <symbol id="i-boxes" viewBox="0 0 24 24"><path d="M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z"/><path d="m7 16.5-4.74-2.85"/><path d="m7 16.5 5-3"/><path d="M7 16.5v5.17"/><path d="M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z"/><path d="m17 16.5-5-3"/><path d="m17 16.5 4.74-2.85"/><path d="M17 16.5v5.17"/><path d="M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z"/><path d="M12 8 7.26 5.15"/><path d="m12 8 4.74-2.85"/><path d="M12 13.5V8"/></symbol>
+  <symbol id="i-message" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-scroll" viewBox="0 0 24 24"><path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 0 1-2 2Z"/><path d="M8 17a2 2 0 0 0-2-2H3"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="i-triangle" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-shield-alert" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
+  <symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></symbol>
+  <symbol id="i-loader" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></symbol>
+  <symbol id="i-file-json" viewBox="0 0 24 24"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M4 12a1 1 0 0 0-1 1v1a1 1 0 0 1-1 1 1 1 0 0 1 1 1v1a1 1 0 0 0 1 1"/><path d="M8 18a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1 1 1 0 0 1-1-1v-1a1 1 0 0 0-1-1"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
+</svg>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="shell">
+  <div class="topnav">
+    <a class="brand" href="index.html">
+      <span class="brand__mark"><svg class="ic"><use href="#i-chevron-right"/></svg></span>
+      OpenBot
+    </a>
+    <nav class="nav" aria-label="Primary">
+      <a class="nav__link" href="index.html"><svg class="ic"><use href="#i-dashboard"/></svg>Dashboard</a>
+      <a class="nav__link" href="models.html"><svg class="ic"><use href="#i-boxes"/></svg>Models</a>
+      <a class="nav__link is-active" href="logs.html" aria-current="page"><svg class="ic"><use href="#i-scroll"/></svg>Logs</a>
+    </nav>
+    <div class="topnav__right">
+      <span class="loopback-chip"><span class="dot-live"></span>127.0.0.1:9280<button class="icon-btn" data-copy="http://127.0.0.1:9280" aria-label="Copy loopback URL"><svg class="ic"><use href="#i-copy"/></svg></button></span>
+      <button class="icon-btn" data-theme-toggle aria-label="Switch theme"><svg class="ic ic-moon"><use href="#i-moon"/></svg><svg class="ic ic-sun" hidden><use href="#i-sun"/></svg></button>
+    </div>
+  </div>
+
+  <div class="status-strip">
+    <span class="mode-pill mode-pill--custom">Custom<span class="mode-pill__divider" aria-hidden="true"></span><span class="mode-pill__model">glm-5.3</span></span>
+    <div class="health-cluster">
+      <span class="health-item"><span class="health-dot health-dot--ok"></span><span class="word">Host</span><span class="val">running</span></span>
+      <span class="health-item"><span class="health-dot health-dot--ok"></span><span class="word">Port</span><span class="val">ours</span></span>
+      <span class="health-item"><span class="health-dot health-dot--ok"></span><span class="word">Wrap</span><span class="val">openbot</span></span>
+      <span class="health-item"><span class="health-dot health-dot--ok"></span><span class="word">Service</span><span class="val">ok</span></span>
+    </div>
+    <div class="status-strip__right">
+      <span class="saving-pill is-hidden"><svg class="ic spinner"><use href="#i-loader"/></svg>Saving…</span>
+      <span class="last-poll">polled 12s ago</span>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="main" tabindex="-1">
+
+  <div class="page">
+    <div class="page-title-row">
+      <h1>Logs</h1>
+      <span class="sub">What did the hop actually do?</span>
+    </div>
+
+    <div class="logs-populated">
+      <!-- Settings -->
+      <details class="card" open style="margin-bottom:16px">
+        <summary class="card__head" style="cursor:pointer;list-style:none">
+          <span class="card__label" style="display:inline-flex;align-items:center;gap:7px"><svg class="ic" style="width:13px;height:13px"><use href="#i-settings"/></svg>Recording settings</span>
+          <svg class="ic chevron" style="width:14px;height:14px;color:var(--muted)"><use href="#i-chevron-down"/></svg>
+        </summary>
+        <div class="card__body stack" style="gap:14px">
+          <div class="row row--between wrap gap-3">
+            <label class="switch">
+              <input type="checkbox" checked>
+              <span class="switch__track"><span class="switch__thumb"></span></span>
+              <span class="switch__label">Recording</span>
+            </label>
+            <div class="row gap-3" style="font-size:13px">
+              <span style="color:var(--muted)">Bodies:</span>
+              <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="bodies" checked style="accent-color:var(--primary)"> Errors only</label>
+              <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="bodies" style="accent-color:var(--primary)"> All</label>
+            </div>
+            <div class="row gap-2">
+              <span style="color:var(--muted);font-size:13px">Retention</span>
+              <input class="input" type="number" value="7" min="1" max="365" style="width:72px;height:30px" aria-label="Retention days">
+              <span style="color:var(--muted);font-size:13px">days</span>
+            </div>
+            <button class="btn btn--primary" data-confirm-toast="success|Settings saved|Recording is on — bodies kept on errors only, 7-day retention.">Save settings</button>
+          </div>
+          <div class="notice notice--info"><svg class="ic"><use href="#i-shield-check"/></svg><span class="text">Keys are always redacted server-side; bodies default off.</span></div>
+        </div>
+      </details>
+
+      <!-- Toolbar + table -->
+      <section class="card" aria-label="Request records">
+        <div class="card__head" style="flex-wrap:wrap;gap:10px">
+          <span style="position:relative;display:inline-flex;align-items:center">
+            <svg class="ic" style="position:absolute;left:9px;width:13px;height:13px;color:var(--muted);pointer-events:none"><use href="#i-search"/></svg>
+            <input class="input" style="padding-left:28px;width:220px;height:30px" placeholder="Search id, model, error…" aria-label="Search records">
+          </span>
+          <label class="switch" style="font-size:12px">
+            <input type="checkbox">
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+            <span class="switch__label">Errors only</span>
+          </label>
+          <div class="listbox" data-listbox>
+            <button type="button" class="listbox__trigger" style="height:30px" aria-haspopup="listbox" aria-expanded="false">
+              <span class="listbox__value">All models</span>
+              <svg class="ic listbox__chevron"><use href="#i-chevron-down"/></svg>
+            </button>
+            <div class="listbox__panel" hidden>
+              <div class="listbox__search" hidden>
+                <svg class="ic listbox__search-icon"><use href="#i-search"/></svg>
+                <input class="input" type="text" placeholder="Search models…" aria-label="Search models">
+              </div>
+              <div class="listbox__list" role="listbox" tabindex="-1" aria-label="Filter by model">
+                <div class="listbox__group">
+                  <div class="listbox__group-label">Models</div>
+                  <div class="listbox__option is-selected" role="option" aria-selected="true" data-value="" data-label="All models"><span class="listbox__name">All models</span><svg class="ic listbox__check"><use href="#i-check"/></svg></div>
+                  <div class="listbox__option" role="option" aria-selected="false" data-value="glm-5.3" data-label="glm-5.3"><span class="listbox__name">glm-5.3</span><svg class="ic listbox__check"><use href="#i-check"/></svg></div>
+                  <div class="listbox__option" role="option" aria-selected="false" data-value="glm-5.3-flash" data-label="glm-5.3-flash"><span class="listbox__name">glm-5.3-flash</span><svg class="ic listbox__check"><use href="#i-check"/></svg></div>
+                  <div class="listbox__option" role="option" aria-selected="false" data-value="deepseek-v4-pro" data-label="deepseek-v4-pro"><span class="listbox__name">deepseek-v4-pro</span><svg class="ic listbox__check"><use href="#i-check"/></svg></div>
+                  <div class="listbox__option" role="option" aria-selected="false" data-value="deepseek-v4-flash" data-label="deepseek-v4-flash"><span class="listbox__name">deepseek-v4-flash</span><svg class="ic listbox__check"><use href="#i-check"/></svg></div>
+                  <div class="listbox__option" role="option" aria-selected="false" data-value="openrouter:auto" data-label="openrouter:auto"><span class="listbox__name">openrouter:auto</span><svg class="ic listbox__check"><use href="#i-check"/></svg></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <span class="mono" style="font-size:12px;color:var(--muted)">15 records</span>
+          <span style="flex:1"></span>
+          <button class="icon-btn" aria-label="Refresh records"><svg class="ic"><use href="#i-refresh"/></svg></button>
+          <button class="btn btn--ghost-danger" data-dialog-open="dialog-clear"><svg class="ic"><use href="#i-trash"/></svg>Clear all</button>
+        </div>
+
+        <div class="card__body--flush table-wrap">
+          <table class="data">
+            <thead>
+              <tr><th>Time</th><th>Model</th><th>Status</th><th class="num">Latency</th><th class="num">Tokens</th><th>Stream</th><th>Error</th></tr>
+            </thead>
+            <tbody>
+              <tr class="is-clickable" data-drawer-open="drawer-log" data-id="req_9f3c2a" data-time="14:02:11" data-model="glm-5.3" data-status="200" data-latency="412ms"><td class="mono">14:02:11</td><td class="mono">glm-5.3</td><td><span class="status-pill status-pill--ok">200</span></td><td class="num mono">412ms</td><td class="num mono">1,552</td><td class="mono">yes</td><td>—</td></tr>
+              <tr class="is-clickable" data-drawer-open="drawer-log" data-id="req_9f3b41" data-time="14:01:47" data-model="glm-5.3-flash" data-status="200" data-latency="388ms"><td class="mono">14:01:47</td><td class="mono">glm-5.3-flash</td><td><span class="status-pill status-pill--ok">200</span></td><td class="num mono">388ms</td><td class="num mono">918</td><td class="mono">yes</td><td>—</td></tr>
+              <tr class="is-clickable" data-drawer-open="drawer-log" data-id="req_9f38e0" data-time="13:58:30" data-model="glm-5.3" data-status="429" data-latency="91ms"><td class="mono">13:58:30</td><td class="mono">glm-5.3</td><td><span class="status-pill status-pill--err">429</span></td><td class="num mono">91ms</td><td class="num mono">1,240</td><td class="mono">yes</td><td class="ellipsis" style="color:var(--danger)">rate_limit_exceeded — upstream 429</td></tr>
+              <tr class="is-clickable" data-drawer-open="drawer-log" data-id="req_9f2a77" data-time="13:52:05" data-model="deepseek-v4-pro" data-status="200" data-latency="1.2s"><td class="mono">13:52:05</td><td class="mono">deepseek-v4-pro</td><td><span class="status-pill status-pill--ok">200</span></td><td class="num mono">1.2s</td><td class="num mono">2,304</td><td class="mono">yes</td><td>—</td></tr>
+              <tr class="is-clickable" data-drawer-open="drawer-log" data-id="req_9f1c02" data-time="13:44:19" data-model="glm-5.3" data-status="200" data-latency="460ms"><td class="mono">13:44:19</td><td class="mono">glm-5.3</td><td><span class="status-pill status-pill--ok">200</span></td><td class="num mono">460ms</td><td class="num mono">1,207</td><td class="mono">yes</td><td>—</td></tr>
+              <tr class="is-clickable" data-drawer-open="drawer-log" data-id="req_9e0b11" data-time="13:30:02" data-model="deepseek-v4-flash" data-status="200" data-latency="305ms"><td class="mono">13:30:02</td><td class="mono">deepseek-v4-flash</td><td><span class="status-pill status-pill--ok">200</span></td><td class="num mono">305ms</td><td class="num mono">640</td><td class="mono">yes</td><td>—</td></tr>
+              <tr class="is-clickable" data-drawer-open="drawer-log" data-id="req_9df4a8" data-time="13:12:48" data-model="glm-5.3" data-status="200" data-latency="511ms"><td class="mono">13:12:48</td><td class="mono">glm-5.3</td><td><span class="status-pill status-pill--ok">200</span></td><td class="num mono">511ms</td><td class="num mono">1,877</td><td class="mono">no</td><td>—</td></tr>
+              <tr class="is-clickable" data-drawer-open="drawer-log" data-id="req_9dee15" data-time="12:55:11" data-model="openrouter:auto" data-status="401" data-latency="80ms"><td class="mono">12:55:11</td><td class="mono">openrouter:auto</td><td><span class="status-pill status-pill--err">401</span></td><td class="num mono">80ms</td><td class="num mono">—</td><td class="mono">no</td><td class="ellipsis" style="color:var(--danger)">invalid api key</td></tr>
+              <tr class="is-clickable" data-drawer-open="drawer-log" data-id="req_9dc887" data-time="12:40:36" data-model="glm-5.3" data-status="500" data-latency="12.4s"><td class="mono">12:40:36</td><td class="mono">glm-5.3</td><td><span class="status-pill status-pill--err">500</span></td><td class="num mono">12.4s</td><td class="num mono">—</td><td class="mono">yes</td><td class="ellipsis" style="color:var(--danger)">upstream 500: internal error</td></tr>
+              <tr class="is-clickable" data-drawer-open="drawer-log" data-id="req_9daa30" data-time="12:22:15" data-model="deepseek-v4-pro" data-status="502" data-latency="2.1s"><td class="mono">12:22:15</td><td class="mono">deepseek-v4-pro</td><td><span class="status-pill status-pill--err">502</span></td><td class="num mono">2.1s</td><td class="num mono">—</td><td class="mono">yes</td><td class="ellipsis" style="color:var(--danger)">upstream unreachable (502)</td></tr>
+              <tr class="is-clickable" data-drawer-open="drawer-log" data-id="req_9c9f02" data-time="11:58:03" data-model="glm-5.3" data-status="200" data-latency="399ms"><td class="mono">11:58:03</td><td class="mono">glm-5.3</td><td><span class="status-pill status-pill--ok">200</span></td><td class="num mono">399ms</td><td class="num mono">1,104</td><td class="mono">yes</td><td>—</td></tr>
+              <tr class="is-clickable" data-drawer-open="drawer-log" data-id="req_9c7a11" data-time="11:41:27" data-model="glm-5.3-flash" data-status="429" data-latency="77ms"><td class="mono">11:41:27</td><td class="mono">glm-5.3-flash</td><td><span class="status-pill status-pill--err">429</span></td><td class="num mono">77ms</td><td class="num mono">—</td><td class="mono">yes</td><td class="ellipsis" style="color:var(--danger)">rate_limit_exceeded — upstream 429</td></tr>
+              <tr class="is-clickable" data-drawer-open="drawer-log" data-id="req_9c5028" data-time="11:20:14" data-model="deepseek-v4-pro" data-status="200" data-latency="1.5s"><td class="mono">11:20:14</td><td class="mono">deepseek-v4-pro</td><td><span class="status-pill status-pill--ok">200</span></td><td class="num mono">1.5s</td><td class="num mono">3,211</td><td class="mono">yes</td><td>—</td></tr>
+              <tr class="is-clickable" data-drawer-open="drawer-log" data-id="req_9c30d6" data-time="10:55:40" data-model="glm-5.3" data-status="200" data-latency="442ms"><td class="mono">10:55:40</td><td class="mono">glm-5.3</td><td><span class="status-pill status-pill--ok">200</span></td><td class="num mono">442ms</td><td class="num mono">1,056</td><td class="mono">yes</td><td>—</td></tr>
+              <tr class="is-clickable" data-drawer-open="drawer-log" data-id="req_9c1f44" data-time="10:30:19" data-model="glm-5.3" data-status="200" data-latency="468ms"><td class="mono">10:30:19</td><td class="mono">glm-5.3</td><td><span class="status-pill status-pill--ok">200</span></td><td class="num mono">468ms</td><td class="num mono">1,233</td><td class="mono">yes</td><td>—</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <!-- Empty state (toggled via proto bar) -->
+    <div class="logs-empty">
+      <section class="card">
+        <div class="empty">
+          <span class="empty__tile"><svg class="ic"><use href="#i-scroll"/></svg></span>
+          <h3>Recording is off</h3>
+          <p>Turn on recording to capture future turns. Requests made before recording was enabled are not recoverable.</p>
+          <div class="actions"><button class="btn btn--primary">Turn on recording</button></div>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<!-- Detail drawer -->
+<div class="overlay overlay--drawer is-hidden" id="drawer-log" role="dialog" aria-modal="true" aria-labelledby="drawer-id">
+  <div class="drawer">
+    <div class="drawer__head">
+      <div class="drawer__title">
+        <span class="id" id="drawer-id">req_9f38e0</span>
+        <span class="sub" id="drawer-time">13:58:30 · 91ms</span>
+      </div>
+      <span class="status-pill status-pill--err" id="drawer-status-pill">429</span>
+      <button class="icon-btn" data-drawer-close aria-label="Close"><svg class="ic"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="drawer__body">
+      <div class="drawer-section">
+        <span class="section-label">Overview</span>
+        <div class="def-grid">
+          <span class="k">Provider</span><span class="v">GLM Coding Plan</span>
+          <span class="k">Model</span><span class="v mono" id="drawer-model">glm-5.3</span>
+          <span class="k">Started</span><span class="v mono">2026-09-02 13:58:30.211</span>
+          <span class="k">Completed</span><span class="v mono">2026-09-02 13:58:30.302</span>
+          <span class="k">Streaming</span><span class="v mono">true</span>
+          <span class="k">Inbound</span><span class="v mono">POST /v1/chat/completions</span>
+        </div>
+      </div>
+
+      <div class="drawer-section">
+        <span class="section-label">Error</span>
+        <div class="error-block">
+          <span>Rate limit exceeded — upstream returned 429</span>
+          <span class="mono">rate_limit_exceeded · retry-after: 2000ms</span>
+        </div>
+      </div>
+
+      <div class="drawer-section">
+        <span class="section-label">Token usage</span>
+        <div class="token-trio">
+          <div class="token-stat"><div class="k">Prompt</div><div class="v">1,240</div></div>
+          <div class="token-stat"><div class="k">Completion</div><div class="v">0</div></div>
+          <div class="token-stat"><div class="k">Total</div><div class="v">1,240</div></div>
+        </div>
+      </div>
+
+      <div class="drawer-section">
+        <span class="section-label">Upstream endpoint</span>
+        <div class="code-pane">https://open.bigmodel.cn/api/paas/v4/chat/completions</div>
+      </div>
+
+      <div class="drawer-section">
+        <span class="section-label">Request body <span style="color:var(--muted);text-transform:none;letter-spacing:0">· keys redacted</span></span>
+        <div class="code-pane">{ "model": "glm-5.3",
+  "messages": [ { "role": "user", "content": "Summarize this thread…" } ],
+  "max_tokens": 65536,
+  "stream": true,
+  "reasoning_effort": "high",
+  "authorization": "Bearer [redacted]" }</div>
+      </div>
+
+      <div class="drawer-section">
+        <span class="section-label">Response body <span style="color:var(--muted);text-transform:none;letter-spacing:0">· truncated</span></span>
+        <div class="code-pane">{ "error": { "message": "rate_limit_exceeded", "type": "rate_limit", "code": "429" } }</div>
+        <span style="font-size:12px;color:var(--muted)">Body truncated at 8,000 chars by retention settings.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm: clear logs -->
+<div class="overlay is-hidden" id="dialog-clear" role="alertdialog" aria-modal="true" aria-labelledby="clear-title" data-dismissable="false">
+  <div class="dialog">
+    <div class="dialog__head">
+      <span class="dialog__icon"><svg class="ic"><use href="#i-trash"/></svg></span>
+      <div>
+        <div class="dialog__title" id="clear-title">Clear all logs?</div>
+        <div class="dialog__desc">Every request record and captured body is deleted permanently.</div>
+      </div>
+    </div>
+    <div class="dialog__foot">
+      <button class="btn btn--ghost" data-dialog-close data-autofocus>Cancel</button>
+      <button class="btn btn--danger" data-confirm-toast="success|Logs cleared|All 15 records were deleted.">Clear all logs</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-stack" aria-live="polite" aria-atomic="false"></div>
+
+<div class="proto-bar" id="proto-bar" role="toolbar" aria-label="Prototype controls">
+  <span class="proto-bar__label">Proto</span>
+  <button data-proto="theme" type="button">Theme</button>
+  <button data-proto="empty" type="button">Empty</button>
+  <button data-proto="saving" type="button">Saving pill</button>
+  <button data-proto="toast" type="button">Toast</button>
+  <button data-proto="toast-err" type="button">Error</button>
+</div>
+
+<nav class="bottom-tabs" aria-label="Primary">
+  <div class="bottom-tabs__inner">
+    <a class="bottom-tab" href="index.html"><svg class="ic"><use href="#i-dashboard"/></svg>Dashboard</a>
+    <a class="bottom-tab" href="models.html"><svg class="ic"><use href="#i-boxes"/></svg>Models</a>
+    <a class="bottom-tab is-active" href="logs.html"><svg class="ic"><use href="#i-scroll"/></svg>Logs</a>
+  </div>
+</nav>
+
+<script src="app.js"></script>
+<script>
+// populate drawer fields from the clicked row before the shared open handler runs
+document.querySelectorAll("tr[data-drawer-open]").forEach(function (row) {
+  row.addEventListener("click", function () {
+    document.getElementById("drawer-id").textContent = row.getAttribute("data-id");
+    document.getElementById("drawer-time").textContent = row.getAttribute("data-time") + " · " + row.getAttribute("data-latency");
+    document.getElementById("drawer-model").textContent = row.getAttribute("data-model");
+    var pill = document.getElementById("drawer-status-pill");
+    var status = row.getAttribute("data-status");
+    pill.textContent = status;
+    pill.className = "status-pill " + (parseInt(status, 10) >= 400 ? "status-pill--err" : "status-pill--ok");
+  });
+});
+</script>
+</body>
+</html>

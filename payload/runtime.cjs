@@ -27,6 +27,7 @@ var mapToolCalls = openaiStream.mapToolCalls;
 var mapFinishReason = openaiStream.mapFinishReason;
 var iterateOpenAiResponse = openaiStream.iterateOpenAiResponse;
 var findVoiceTool = openaiStream.findVoiceTool;
+var assistantMessageContent = openaiStream.assistantMessageContent;
 
 function log(line) {
   try {
@@ -366,13 +367,10 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
         var raw = await readAll(res);
         throw new Error("openbot-runtime: hop HTTP " + status + " " + String(raw || "").slice(0, 300));
       }
-      var text = "";
       var u = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
       var hopId = "";
+      var yielded = [];
       for await (var part of iterateOpenAiResponse(res, voiceTool)) {
-        if (part && part.type === "text-delta" && part.textDelta) {
-          text += part.textDelta;
-        }
         if (part && part.type === "finish") {
           if (part.usage) u = part.usage;
           if (part.id) hopId = part.id;
@@ -382,14 +380,18 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
         } catch (err) {
           /* ignore */
         }
+        yielded.push(part);
         yield part;
       }
       okUsage(u);
+      var content = assistantMessageContent(yielded);
+      var assistant = { role: "assistant", content: content };
+      if (hopId) assistant.id = hopId;
       settledResponse = {
         id: hopId,
         modelId: agent.modelId,
         timestamp: new Date(),
-        messages: [{ role: "assistant", content: [{ type: "text", text: text }] }],
+        messages: [assistant],
       };
       if (!settled.r) {
         settled.r = true;

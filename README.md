@@ -84,7 +84,7 @@ Image, video, and audio are stored on the model for later. Chat still sends text
 
 The **Logs** pane is for stalled Grok Bot turns. Enable **Record requests** to capture records. Keys are never stored. Bodies stay off unless you keep them on errors or keep all bodies.
 
-Custom chat writes **Hop** rows (`POST /v1/chat/completions`) and **Host** rows (the AI SDK parts OpenBot yields). Official Grok writes **Official** rows: the real host stream (`tool-call-streaming-start`, deltas, `tool-call`, `response.messages`). Official chat still uses Grok; the tap does not hop. Turn on **Keep all bodies** to store those packets. Enabling recording while Official is on installs the tap and may restart the host once.
+Custom chat writes **Hop** rows (`POST /v1/chat/completions`) and **Host** rows (the AI SDK parts OpenBot yields to the harness: `tool-call-streaming-start`, deltas, `tool-call`, and `response.messages` with text and tool-call together). Official Grok writes **Official** rows: the real host stream (`tool-call-streaming-start`, deltas, `tool-call`, `response.messages`). Official chat still uses Grok; the tap does not hop. Turn on **Keep all bodies** to store those packets. Enabling recording while Official is on installs the tap and may restart the host once.
 
 Reinstall or reload OpenBot on the Computer so the loopback service picks up the change.
 

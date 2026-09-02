@@ -84,7 +84,7 @@ trycloudflare 地址会过期。更新、`openbot tunnel on`，或 Chat 上的 *
 
 **Logs** 用来排查卡住的 Grok Bot 回合。打开 **Record requests** 后才会写入记录。API Key 不会写入日志。除非你选择在出错时保留正文，或保留全部正文，否则只存元数据。
 
-自定义模型会各写一行 **Hop**（`POST /v1/chat/completions`）和 **Host**（OpenBot 交给 harness 的 AI SDK 片段）。官方 Grok 写 **Official** 行：真实 host 流（`tool-call-streaming-start`、delta、`tool-call`、`response.messages`）。官方聊天仍走 Grok，tap 不会 hop。打开 **Keep all bodies** 才会存这些报文。在 Official 下打开记录会装上 tap，host 可能重启一次。
+自定义模型会各写一行 **Hop**（`POST /v1/chat/completions`）和 **Host**（OpenBot 交给 harness 的 AI SDK 片段：`tool-call-streaming-start`、delta、`tool-call`，以及同时带文本和 tool-call 的 `response.messages`）。官方 Grok 写 **Official** 行：真实 host 流（`tool-call-streaming-start`、delta、`tool-call`、`response.messages`）。官方聊天仍走 Grok，tap 不会 hop。打开 **Keep all bodies** 才会存这些报文。在 Official 下打开记录会装上 tap，host 可能重启一次。
 
 在 Computer 上重新安装或 reload OpenBot 后，loopback 服务才会用到新代码。
 

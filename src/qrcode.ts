@@ -84,7 +84,7 @@ function bitsToBytes(bits: number[]): Uint8Array {
 }
 
 function encodeBytes(text: string, dataCodewords: number): Uint8Array | undefined {
-  const payload = Buffer.from(text, "utf8");
+  const payload = new TextEncoder().encode(text);
   const bits: number[] = [];
   const push = (value: number, len: number) => {
     for (let i = len - 1; i >= 0; i -= 1) {
@@ -289,17 +289,22 @@ export function qrMatrix(text: string): boolean[][] {
   return place(ver.size, code, 0, ver.align);
 }
 
+
+export function qrWithQuietZone(matrix: boolean[][], quiet = 4): boolean[][] {
+  if (quiet < 0) {
+    throw new Error("OpenBot: QR quiet zone must be non-negative");
+  }
+  const inner = matrix[0]?.length ?? 0;
+  const size = inner + quiet * 2;
+  return Array.from({ length: size }, (_, r) =>
+    Array.from({ length: size }, (_, c) => Boolean(matrix[r - quiet]?.[c - quiet])),
+  );
+}
+
 export function renderQrAscii(text: string): string {
   const matrix = qrMatrix(text);
-  const quiet = 2;
-  const size = (matrix[0]?.length ?? 0) + quiet * 2;
-  const padded: boolean[][] = Array.from({ length: size }, (_, r) =>
-    Array.from({ length: size }, (_, c) => {
-      const rr = r - quiet;
-      const cc = c - quiet;
-      return Boolean(matrix[rr]?.[cc]);
-    }),
-  );
+  const padded = qrWithQuietZone(matrix, 2);
+  const size = padded[0]?.length ?? 0;
   const lines: string[] = [];
   for (let r = 0; r < padded.length; r += 2) {
     let line = "";

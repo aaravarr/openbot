@@ -1,7 +1,5 @@
 "use strict";
 
-var { stripHostInjectedText } = require("./openai-messages.cjs");
-
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -121,13 +119,6 @@ function asToolCallArray(message) {
   return [];
 }
 
-function schemaProperties(parameters) {
-  var p = parameters;
-  if (isRecord(p) && isRecord(p.jsonSchema)) p = p.jsonSchema;
-  if (!isRecord(p) || !isRecord(p.properties)) return {};
-  return p.properties;
-}
-
 function findVoiceTool(tools) {
   if (!Array.isArray(tools)) return null;
   for (var i = 0; i < tools.length; i++) {
@@ -141,49 +132,9 @@ function findVoiceTool(tools) {
   return null;
 }
 
-function voiceArgsFromText(text, parameters) {
-  var props = schemaProperties(parameters);
-  if (props.message && !props.content) {
-    return { message: text };
-  }
-  var args = { content: text };
-  if (props.type) args.type = "text";
-  return args;
-}
-
-function isScratchReasoningText(text) {
-  var s = String(text || "").trim();
-  if (!s || s.charAt(0) !== "{") return false;
-  try {
-    var j = JSON.parse(s);
-    return isRecord(j) && (j.type === "reasoning" || typeof j.reasoning === "string");
-  } catch (err) {
-    return false;
-  }
-}
-
-function alreadyHasVoice(mapped, voiceName) {
-  for (var i = 0; i < mapped.length; i++) {
-    if (mapped[i] && mapped[i].toolName === voiceName) return true;
-  }
-  return false;
-}
-
-/** Host voice is a tool. Reuse leftover model text only when there are no other calls. */
-function mapAssistantTextToVoice(text, mapped, voiceTool) {
-  if (!voiceTool || !voiceTool.name) return mapped;
-  if (Array.isArray(mapped) && mapped.length) return mapped;
-  var body = stripHostInjectedText(String(text || "")).trim();
-  if (!body) return mapped;
-  if (isScratchReasoningText(body)) return mapped;
-  if (alreadyHasVoice(mapped, voiceTool.name)) return mapped;
-  var voice = {
-    type: "tool-call",
-    toolCallId: "call_" + String(mapped.length),
-    toolName: voiceTool.name,
-    args: voiceArgsFromText(body, voiceTool.parameters),
-  };
-  return [voice].concat(mapped);
+/** Leftover assistant text is not mapped onto SendToUser. */
+function mapAssistantTextToVoice(_text, mapped, _voiceTool) {
+  return Array.isArray(mapped) ? mapped : [];
 }
 
 function argsTextOf(fn) {
@@ -257,7 +208,7 @@ function jsonToHostParts(json, voiceTool) {
   var parts = [];
   if (reasoning) parts.push({ type: "reasoning", textDelta: reasoning });
   if (text) parts.push({ type: "text-delta", textDelta: text });
-  var mapped = mapAssistantTextToVoice(text, mapToolCalls(calls), voiceTool);
+  var mapped = mapToolCalls(calls);
   for (var i = 0; i < mapped.length; i++) {
     var prelude = hostToolPrelude(mapped[i]);
     parts.push(prelude[0]);
@@ -361,7 +312,7 @@ function applyOpenAiEvent(state, data) {
 }
 
 function finishSse(state, voiceTool) {
-  var mapped = mapAssistantTextToVoice(state && state.text, mapToolCalls(toolCallList(state.calls)), voiceTool);
+  var mapped = mapToolCalls(toolCallList(state.calls));
   var out = [];
   for (var i = 0; i < mapped.length; i++) {
     var tc = mapped[i];

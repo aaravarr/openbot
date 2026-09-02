@@ -1270,7 +1270,7 @@ OpenBot must pass these strings through. `toOpenAIMessages` (`payload/openai-mes
 
 ## Appendix B — Distinct injectors counted
 
-**62** catalog subsections in §3 that can mutate the model-visible stream or its wrapping chrome (3.1–3.50 including 3.8a, 3.13a, 3.43a, 3.44a/b, plus 3.45–3.47 and system/compaction as stream-adjacent). **3.45 is ABSENT on the Grok Bot executor stack** (string exists, not wired). **3.51–3.53** are non-inject or Cursor-only.
+**55** catalog entries in §3.1–3.50 (numbered 3.1–3.50 plus lettered splits 3.8a, 3.13a, 3.43a, 3.44a, 3.44b). Of those, **3.9 eager-editing is ABSENT** on this host’s model-info flags and **3.45 continuation is ABSENT** from the Grok Bot `getExecutor` stack. **3.51–3.53** are non-inject or Cursor-only. Stream-adjacent: 3.46 output-token reminder, 3.47 summarizer, 3.48 system prompt.
 
 Families searched and **ABSENT or unused** on this host: `SAND_FIRST_PARTY_ONBOARDING_BOT_KICKSTART_PROMPT` (defined, `kickstartPromptFor` ignores it), progress-update middleware stub, project SendMessage visibility reminder, Composer `wrapUserQuery` background-task path, eager-editing reminder (model-info flags false), continuation injector on the Grok Bot stack.
 

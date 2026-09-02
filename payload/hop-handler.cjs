@@ -6,6 +6,7 @@ var https = require("https");
 var { URL } = require("url");
 var path = require("path");
 var { toOpenAIMessages } = require("./openai-messages.cjs");
+var { applyOpenBotVersionHeader } = require("./version.cjs");
 var requestLog = require("./request-log.cjs");
 
 var TIMEOUT_MS = Number(process.env.OPENBOT_HOP_TIMEOUT || "1800000");
@@ -196,6 +197,7 @@ function openUpstream(urlStr, body, key) {
     "Accept-Encoding": "identity",
   };
   if (key) headers.Authorization = "Bearer " + key;
+  applyOpenBotVersionHeader(headers);
   var req = lib.request({
     protocol: u.protocol,
     hostname: u.hostname,

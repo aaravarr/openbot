@@ -67,6 +67,7 @@ async function freePort(): Promise<number> {
 async function startHop(input: {
   plan: unknown;
   secrets: unknown;
+  env?: Record<string, string>;
 }): Promise<{ port: number; child: ChildProcess }> {
   const dir = mkdtempSync(path.join(os.tmpdir(), "openbot-hop-"));
   const planPath = path.join(dir, "plan.json");
@@ -77,6 +78,7 @@ async function startHop(input: {
   const child = spawn(process.execPath, [hopServer], {
     env: {
       ...process.env,
+      ...input.env,
       OPENBOT_HOP_HOST: "127.0.0.1",
       OPENBOT_HOP_PORT: String(port),
       OPENBOT_SAND_DATA: dir,
@@ -104,12 +106,19 @@ async function captureUpstream(): Promise<{
   port: number;
   getAuth: () => string;
   getBody: () => Record<string, unknown> | undefined;
+  getVersion: () => string;
+  getPath: () => string;
 }> {
   let auth = "";
+  let version = "";
+  let urlPath = "";
   let body: Record<string, unknown> | undefined;
   const { server, port } = await listen((req, res) => {
     const header = req.headers.authorization;
     auth = typeof header === "string" ? header : "";
+    const versionHeader = req.headers["x-openbot-version"];
+    version = typeof versionHeader === "string" ? versionHeader : "";
+    urlPath = req.url || "";
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
@@ -122,7 +131,14 @@ async function captureUpstream(): Promise<{
       );
     });
   });
-  return { server, port, getAuth: () => auth, getBody: () => body };
+  return {
+    server,
+    port,
+    getAuth: () => auth,
+    getBody: () => body,
+    getVersion: () => version,
+    getPath: () => urlPath,
+  };
 }
 
 test("hop strips client Authorization and injects the secret store key", async () => {
@@ -276,7 +292,6 @@ test("hop leaves GLM thinking unset when old catalog none means default", async 
     upstream.server.close();
   }
 });
-
 
 test("hop sends GLM thinking disabled when Off is chosen after default exists", async () => {
   const upstream = await captureUpstream();
@@ -449,6 +464,39 @@ test("hop posts host reminder and hidden-prompt text unchanged", async () => {
     assert.equal(messages[1]?.content, reminderOnly);
     assert.equal(messages[2]?.content, redrive);
     assert.equal(messages[3]?.content, nudge);
+  } finally {
+    hop.child.kill("SIGTERM");
+    upstream.server.close();
+  }
+});
+
+test("hop sends x-openbot-version from OPENBOT_COMMIT", async () => {
+  const upstream = await captureUpstream();
+  const hop = await startHop({
+    env: { OPENBOT_COMMIT: "cafed00d" },
+    plan: {
+      kind: "custom",
+      catalog: {
+        providers: [
+          {
+            id: "deepseek",
+            name: "DeepSeek",
+            origin: `http://127.0.0.1:${String(upstream.port)}/v1`,
+            maxTokensDefault: 65536,
+            mapFile: "provider-maps.cjs",
+          },
+        ],
+        models: [{ id: "deepseek:v4", providerId: "deepseek", slug: "deepseek-v4-flash", parameters: [] }],
+        bindings: [],
+      },
+    },
+    secrets: { providers: { deepseek: "sk-deepseek" } },
+  });
+  try {
+    const out = await post(hop.port, { model: "deepseek-v4-flash", messages: [] }, { Authorization: "Bearer openbot-runtime" });
+    assert.equal(out.status, 200);
+    assert.equal(upstream.getVersion(), "cafed00d");
+    assert.equal(upstream.getPath(), "/v1/chat/completions");
   } finally {
     hop.child.kill("SIGTERM");
     upstream.server.close();

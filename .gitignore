@@ -29,6 +29,9 @@ sand-data/
 host-main.cjs
 host-main.cjs.*
 
+# Install stamp (written on the Computer; never commit)
+payload/version.json
+
 # Dumps of Grok Bot / Electron bundles (not product source)
 /main.cjs
 app.asar

@@ -291,17 +291,29 @@ export function applyUiCommand(input: {
   if (command.kind === "upsert-provider") {
     const providerId = parseProviderId(slugify(command.name));
     const origin = parseUpstreamOrigin(command.origin);
-    const slug = parseModelSlug(command.modelSlug);
-    const modelId = parseModelId(`${providerId}:${command.modelSlug}`);
+    const provider: Provider = {
+      id: providerId,
+      name: command.name,
+      origin,
+      maxTokensDefault: HIGH_AGENT_MAX_TOKENS,
+      mapFile: "provider-maps.cjs",
+    };
+    const withProvider = upsertProviderRow(catalog, provider);
+    const slugRaw = command.modelSlug.trim();
+    if (slugRaw === "") {
+      // A provider may be saved with zero models (the setup wizard lets the user
+      // fetch the provider's model list after activation). Persist the provider +
+      // secret and switch to custom without a model or wildcard binding.
+      return {
+        desired: customBoxFromCatalog({ paths, catalog: withProvider, expose }),
+        secret: { providerId, bytes: parseSecretBytes(command.secret) },
+      };
+    }
+    const slug = parseModelSlug(slugRaw);
+    const modelId = parseModelId(`${providerId}:${slugRaw}`);
     const existing = catalog.models.find((row) => row.id === modelId);
     const next = upsertModelRow(
-      upsertProviderRow(catalog, {
-        id: providerId,
-        name: command.name,
-        origin,
-        maxTokensDefault: HIGH_AGENT_MAX_TOKENS,
-        mapFile: "provider-maps.cjs",
-      }),
+      withProvider,
       modelFromLimits({
         id: modelId,
         providerId,

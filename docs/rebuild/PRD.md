@@ -178,12 +178,17 @@ that quotes the post-save human message (FR-45); **refusals** render as structur
 
 **Setup wizard (`#/setup`)** — 3 steps, same `upsert-provider` save at the end:
 1. **Provider** — preset cards or Custom (FR-8).
-2. **Credentials & model** — prefilled name/origin/model id (editable), blind API key entry
-   (FR-21); an optional **Fetch models** action (Source A, requires a key first) opens the
-   **Import models dialog** to pick which models to add with Source B auto-fill instead of typing
-   by hand (FR-50, FR-53, FR-54).
+2. **Credentials & model** — prefilled name/origin/model id (editable, **optional**), blind API key
+   entry (FR-21). The model id may be left empty — a provider can be saved with zero models. A
+   **"Save provider & fetch models"** action (Source A) upserts the provider + key (a mid-wizard
+   save), fetches its `/v1/models`, and opens the **Import models dialog** to pick which models to
+   add with Source B auto-fill instead of typing by hand (FR-50, FR-53, FR-54). Imported models
+   become the wizard's model selection. Abandoning the wizard after this mid-save leaves the
+   provider in the catalog (accepted — power-user tool).
 3. **Review & activate** — summary, explicit "Wrap host and activate" button, and the consequence
-   line: "Grok Bot will restart and use this model on the next message." (FR-45, FR-46).
+   line: "Grok Bot will restart and use this model on the next message." With no model yet, Review
+   shows a non-blocking notice "No model yet — you can fetch models from the Models page after
+   activation" and activation proceeds (provider in custom mode with zero models) — FR-45, FR-46.
 Redirect here automatically from any page when the catalog is empty and mode is official.
 
 ### 3.3 Logs (`#/logs`)
@@ -228,7 +233,11 @@ Redirect here automatically from any page when the catalog is empty and mode is 
   only the chosen rows are appended to the provider's model table. Rows already in the catalog are
   shown **disabled with an "Already added" tag**. When an id matches a Source B catalog entry, the
   row carries a "catalog" badge and the model form pre-fills context window, max output, modalities,
-  and reasoning support on import (each auto-filled field is marked). Unmatched models still import,
+  and reasoning support on import (each auto-filled field is marked). The field-fill mapping rule:
+  context/output tokens use the catalog value when present, else the Source A fetch value, else the
+  backend default; modalities use the catalog's non-empty list, else the fetch list; reasoning uses
+  the catalog's `reasoning` flag — `true` → default allow-list `default·none·high`, `false` →
+  `default` only (no selectable reasoning) — else the fetch's levels. Unmatched models still import,
   with manual fields. *Owner: Models + Setup wizard.*
 - **FR-54** [UI] **Fetch button states.** `idle → loading → dialog | partial-failure | empty |
   error`. Success opens the Import models dialog with the fetched list. Partial-failure opens the
@@ -257,11 +266,13 @@ No FR is unassigned; none is assigned to two primary owners.
 ## 4. Core user flows
 
 1. **First-time setup (official → custom).** Dashboard empty-state CTA → `#/setup` → pick preset
-   (prefill + hint) → enter/adjust name, base URL, model id, blind key → review ("Grok Bot will
-   restart and use X on the next message") → **Activate** (explicit save). *Feedback:* saving pill →
-   success toast quoting active model; host bounce noted if wrap bytes changed. *Failure:* refusal
-   banner with remedy (e.g. foreign listener on :9280); wizard retains input. *Verify:* send a
-   message in Grok Bot and confirm the model in Logs.
+   (prefill + hint) → enter/adjust name, base URL, model id (**optional**), blind key → optionally
+   "Save provider & fetch models" (mid-wizard save + import) → review ("Grok Bot will restart and
+   use X on the next message", or the no-model notice) → **Activate** (explicit save). *Feedback:*
+   saving pill → success toast quoting the active model (or "Provider activated." with no model);
+   host bounce noted if wrap bytes changed. *Failure:* refusal banner with remedy (e.g. foreign
+   listener on :9280); wizard retains input. *Verify:* send a message in Grok Bot and confirm the
+   model in Logs.
 2. **Switch active model.** Dashboard quick switcher → pick model. *Decision point:* provider has
    no key → detour to its key field with explanation ("the hop would fail with no key") → key entry
    → save → then the switch proceeds. *Feedback:* toast "Grok Bot will use X (level) on the next

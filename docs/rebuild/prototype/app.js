@@ -547,7 +547,7 @@
       '<td class="mono" style="color:var(--muted);font-size:11px">' + (reasoning || "default·none·low·medium·high") + '</td>' +
       '<td><span class="param-chip" style="cursor:default">default</span></td>' +
       '<td>' + (modalities || "text") + '</td>' +
-      '<td style="text-align:right"><button class="btn btn--secondary-sm">Use</button> <button class="icon-btn" data-dialog-open="dialog-model" aria-label="Edit model"><svg class="ic"><use href="#i-pencil"/></svg></button></td>'
+      '<td style="text-align:right"><button class="btn btn--ghost-sm">Use</button> <button class="icon-btn" data-dialog-open="dialog-model" aria-label="Edit model"><svg class="ic"><use href="#i-pencil"/></svg></button></td>'
     );
   }
 
@@ -561,7 +561,7 @@
     box.innerHTML =
       '<div class="notice notice--info" style="margin-bottom:8px"><svg class="ic"><use href="#i-info"/></svg>' +
       '<span class="text">' + chosen.length + ' model' + (chosen.length === 1 ? "" : "s") +
-      ' selected — added to the catalog when you activate.</span></div>' +
+      ' selected — added to this provider.</span></div>' +
       '<div class="row gap-1 wrap">' + chips + '</div>';
   }
 
@@ -585,11 +585,6 @@
         });
       }
       if (IMPORT.isWizard) {
-        const first = chosen[0];
-        const modelEl = document.getElementById("f-model");
-        const badgeEl = document.getElementById("f-model-catalog");
-        if (modelEl && first) modelEl.value = first.id;
-        if (badgeEl) badgeEl.hidden = !(first && first.matched);
         renderWizardImportSummary(chosen);
       }
       const head = "Imported " + chosen.length + " model" + (chosen.length === 1 ? "" : "s");

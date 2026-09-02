@@ -170,7 +170,9 @@ attribute. Every clickable element has `cursor: pointer`.
 | **Ink solid** (strong non-save: Send, Start tunnel) | 32 / 14 / `--r-md` / 13·600 | bg `--ink`, text `--canvas` | 90% opacity | 85% opacity | spinner |
 | **Danger solid** (inside confirm dialogs only) | 32 / 14 / `--r-md` / 13·600 | bg `--danger-solid`, text #fff | `--danger-solid-hover` | darker | spinner |
 | **Ghost** | 32 / 10 / `--r-md` / 13·500 | transparent, text `--body` | bg `--surface-3`, text `--ink` | — | — |
+| **Ghost small** (table/header action groups) | 28 / 10 / `--r-sm` / 12·500 | transparent, text `--body`, 1 px `--hairline` | bg `--surface-3`, text `--ink` | — | — |
 | **Ghost danger** (destructive *entry points*) | 32 / 10 / `--r-md` / 13·500 | transparent, text `--danger` | bg `--danger-tint` | — | — |
+| **Ghost danger small** | 28 / 10 / `--r-sm` / 12·500 | transparent, text `--danger`, 1 px `--hairline` | bg `--danger-tint` | — | — |
 | **Icon button** | 28×28 / — / `--r-sm` / 16 px icon | transparent, icon `--muted` | bg `--surface-3`, icon `--ink` | — | spin |
 
 Rules: one `--primary` button per view. Destructive actions are never inline solid red — the
@@ -315,7 +317,7 @@ platform-dependent.
   14·600). Center-left: 3 links (Dashboard, Models, Logs), 13·500, icon 14 + label,
   h 48 hit area; active link `--ink` + 2 px bottom `--primary` indicator; inactive `--muted`,
   hover `--ink` on `--surface-3` pill. Right: theme toggle icon button, then loopback chip
-  (`127.0.0.1:9280` mono 11 + copy icon button).
+  (`127.0.0.1:9280` mono 11 + compact ghost copy icon button, 20×20, hover `--surface-3`).
 - **Status strip**: h 36, border-b `--hairline`, bg `--canvas`; left: mode pill; center: 4
   health items (Host / Port 9280 / Wrap / Service) dot+word, 24 px gaps; right: "Saving…" pill
   (visible only during a save queue; spinner + `--warning` text) and last-poll time.
@@ -360,8 +362,9 @@ platform-dependent.
 
 ### 3.17 Model fetch UI (Source A / Source B)
 
-- **Fetch models button** (`.btn--secondary`, DownloadCloud 14 px) on the provider detail header and
-  in the setup wizard's credentials step. States:
+- **Fetch models button** (DownloadCloud 14 px, compact ghost `--hairline` border — not a heavy
+  button) on the provider detail header, and in the setup wizard's credentials step where it reads
+  **"Save provider & fetch models"** (it upserts the provider + key before fetching). States:
   - **idle** — normal secondary button, label "Fetch models".
   - **loading** — button disabled, label swaps to a Loader2 spinner + "Fetching…"; width locked;
     no other control blocks.
@@ -484,15 +487,15 @@ Master–detail: left rail 300 px provider list; right detail pane.
   right: key badge mini (Key/No key) + ChevronRight. Selected: bg `--surface-3` + 2 px left
   `--primary`. Rail footer: secondary "Add provider" → `#/setup`.
 - **Detail header**: provider name 16·600, origin mono 12, badges (Key saved / No API key),
-  actions: secondary "Fetch models" (§3.17), ghost "Edit", ghost "Replace key", ghost-danger
-  "Remove".
+  actions in a compact ghost button group (28 px, 8 px gap): ghost-small "Fetch models" (§3.17),
+  ghost-small "Edit", ghost-small "Replace key" / "Add key", ghost-danger-small "Remove".
   - Edit dialog: name + origin (+ optional key rotate), orange "Save changes".
   - Replace key dialog: blind field + eye, explainer "write-only — the current key is never
     shown", orange "Save key". Empty-after-trim rejected inline.
   - Remove confirm: cascade copy; **last provider** gets the strongest copy ("…returns the box
     to Official Grok; the plan file is deleted. Keys stay on disk."— never claims "key deleted").
 - **Model table**: columns Model (mono slug), Context, Max output, Reasoning (chips),
-  Active level, Modalities ("metadata only" tooltip), Actions (secondary-small "Use" / icon
+  Active level, Modalities ("metadata only" tooltip), Actions (ghost-small "Use" / icon
   Edit). Active row: "Active" badge instead of Use. Footer: ghost "+ Add model" → model dialog
   (slug, context, max output, reasoning chip multi-toggle with `default` pinned, modalities
   checkboxes, 10 000 000 cap helper, orange "Save model").
@@ -513,15 +516,18 @@ activate), current = `--ink` + number in `--primary`-ring circle, done = Check `
 1. **Provider**: 3×3 preset card grid (OpenAI, DeepSeek, Zhipu GLM, Kimi, Qwen, OpenRouter,
    Groq, xAI, Custom): name 13·600 + mono origin 11; selected = 2 px `--primary` outline +
    accent-tint; hint line under grid swaps per preset.
-2. **Credentials & model**: prefilled name / base URL / model id (mono inputs 36 px), blind API
-   key + eye, per-preset helper ("Create a key at platform.deepseek.com — stored locally, never
-   displayed again"). An optional secondary **"Fetch models"** (§3.17, requires a key first) opens
-   the **Import models dialog** to pick which models to add with Source B auto-fill instead of
-   typing. Inline validation on Continue.
-3. **Review & activate**: definition list summary (key shown as "••••• — saved on activate"),
-   warning notice: *"Grok Bot will restart and use glm-5.3 on the next message."* Primary large
-   orange "Wrap host and activate" → spinner + global Saving pill → success toast. Refusal →
-   blocking-style banner inside the wizard with the remedy; input retained.
+2. **Credentials & model**: prefilled name / base URL / model id (mono inputs 36 px, **model id
+   optional**), blind API key + eye, per-preset helper ("Create a key at platform.deepseek.com —
+   stored locally, never displayed again"). A **"Save provider & fetch models"** action (§3.17)
+   upserts the provider + key, then opens the **Import models dialog** to pick which models to add
+   with Source B auto-fill instead of typing; imported models are summarized in step 2 and carried
+   into Review. Inline validation on Continue (model id not required).
+3. **Review & activate**: definition list summary (key shown as "••••• — saved on activate", model
+   listed or "— (none)"), warning notice *"Grok Bot will restart and use {model} on the next
+   message."* when a model is selected — otherwise an info notice *"No model yet — you can fetch
+   models from the Models page after activation."* Primary large orange "Wrap host and activate" →
+   spinner + global Saving pill → success toast. Refusal → blocking-style banner inside the wizard
+   with the remedy; input retained.
 - Back ghost between steps; Cancel link top-left returns to `#/`; step state survives navigation
   within the wizard (session storage).
 

@@ -100,6 +100,28 @@ test("upsert-provider keeps an existing origin in the catalog", () => {
   assert.equal(used?.modelId, "openai:gpt-4.1");
 });
 
+test("upsert-provider with an empty model slug saves a zero-model provider", () => {
+  const parsed = parseUiProviderSave(
+    {
+      kind: "upsert-provider",
+      name: "OpenAI",
+      origin: "https://api.openai.com/v1",
+      modelSlug: "",
+      secret: "sk-openai",
+    },
+    paths(),
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") {
+    return;
+  }
+  assert.equal(parsed.desired.catalog.providers.length, 1);
+  assert.equal(parsed.desired.catalog.providers[0]?.id, "openai");
+  assert.equal(parsed.desired.catalog.models.length, 0);
+  assert.equal(parsed.desired.catalog.bindings.length, 0);
+  assert.equal(parsed.secret?.bytes, "sk-openai");
+});
+
 test("upsert-provider stores context, output, reasoning levels, and modalities", () => {
   const parsed = parseUiProviderSave(
     {

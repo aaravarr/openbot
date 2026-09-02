@@ -119,10 +119,10 @@
           <div class="field"><label for="f-origin">Base URL</label><input class="input input--lg input--mono" id="f-origin" value="https://open.bigmodel.cn/api/paas/v4"></div>
           <div class="field">
             <label for="f-model">Model id <span class="badge badge--info" id="f-model-catalog" hidden><svg class="ic" style="width:11px;height:11px"><use href="#i-database"/></svg>catalog</span></label>
-            <input class="input input--lg input--mono" id="f-model" value="glm-5.3">
+            <input class="input input--lg input--mono" id="f-model" value="glm-5.3" placeholder="Optional — leave empty to fetch or add later">
             <div class="row row--between" style="margin-top:4px">
-              <span class="helper">Or fetch the provider's model list instead of typing.</span>
-              <button class="btn btn--secondary-sm" type="button" data-fetch-models data-provider="glm" data-provider-name="Zhipu GLM" data-wizard><svg class="ic"><use href="#i-download"/></svg>Fetch models</button>
+              <span class="helper">Optional — or save &amp; fetch the provider's list instead of typing.</span>
+              <button class="btn btn--secondary-sm" type="button" data-fetch-models data-provider="glm" data-provider-name="Zhipu GLM" data-wizard><svg class="ic"><use href="#i-download"/></svg>Save provider &amp; fetch models</button>
             </div>
             <div data-wizard-fetch-result hidden style="margin-top:4px;border:1px solid var(--hairline);border-radius:8px;padding:10px"></div>
           </div>

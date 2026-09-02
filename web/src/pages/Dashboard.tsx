@@ -243,6 +243,20 @@ export function Dashboard() {
                 </Button>
               </div>
             </div>
+          ) : custom ? (
+            <div className="hero-mode">
+              <div className="mode-row">
+                <span className="hero-model-id">No model active</span>
+              </div>
+              <p className="hero-sub" style={{ color: "var(--body)" }}>
+                This provider has no models yet — fetch them from the Models page.
+              </p>
+              <div className="row gap-2">
+                <Button variant="secondary" onClick={() => navigate({ kind: "models" })}>
+                  Manage models
+                </Button>
+              </div>
+            </div>
           ) : (
             <div className="hero-mode">
               <div className="mode-row">

@@ -44,6 +44,7 @@ export type UiCommand =
     }
   | { readonly kind: "use-model"; readonly modelId: string; readonly reasoning?: unknown }
   | { readonly kind: "remove-provider"; readonly providerId: string }
+  | { readonly kind: "remove-model"; readonly modelId: string }
   | { readonly kind: "set-secret"; readonly providerId: string; readonly secret: string }
   | {
       readonly kind: "update-provider";
@@ -133,6 +134,12 @@ export function parseUiCommand(input: unknown): UiCommand {
     }
     return { kind: "remove-provider", providerId: input.providerId };
   }
+  if (input.kind === "remove-model") {
+    if (typeof input.modelId !== "string") {
+      throw new Error("OpenBot: remove-model needs modelId");
+    }
+    return { kind: "remove-model", modelId: input.modelId };
+  }
   if (input.kind === "set-secret") {
     if (typeof input.providerId !== "string" || typeof input.secret !== "string") {
       throw new Error("OpenBot: set-secret needs providerId and secret");
@@ -217,6 +224,10 @@ function modelFromLimits(input: {
     activeReasoning: input.limits.activeReasoning ?? existing?.activeReasoning ?? "default",
     parameters: existing?.parameters ?? [],
   });
+}
+
+function remainingFallback(models: readonly Model[], providerId: Model["providerId"]): Model | undefined {
+  return models.find((row) => row.providerId === providerId) ?? models[0];
 }
 
 export type UiSave = {
@@ -366,6 +377,35 @@ export function applyUiCommand(input: {
     });
     const next = upsertModelRow(catalog, nextModel);
     return { desired: customBoxFromCatalog({ paths, catalog: withWildcard(next, modelId), expose }) };
+  }
+  if (command.kind === "remove-model") {
+    const modelId = parseModelId(command.modelId);
+    const deleted = catalog.models.find((row) => row.id === modelId);
+    if (!deleted) {
+      throw new Error("OpenBot: unknown model");
+    }
+    const models = catalog.models.filter((row) => row.id !== modelId);
+    const withoutDeleted = catalog.bindings.filter((row) => row.modelId !== modelId);
+    const wildcardGone = catalog.bindings.some(
+      (row) => row.conversation.kind === "wildcard" && row.modelId === modelId,
+    );
+    let bindings = withoutDeleted;
+    if (wildcardGone) {
+      const fallback = remainingFallback(models, deleted.providerId);
+      if (fallback) {
+        bindings = [
+          { conversation: { kind: "wildcard" }, modelId: fallback.id },
+          ...withoutDeleted.filter((row) => row.conversation.kind !== "wildcard"),
+        ];
+      }
+    }
+    return {
+      desired: customBoxFromCatalog({
+        paths,
+        catalog: { providers: catalog.providers, models, bindings },
+        expose,
+      }),
+    };
   }
   const providerId = parseProviderId(command.providerId);
   const providers = catalog.providers.filter((row) => row.id !== providerId);

@@ -130,6 +130,7 @@ export type Command =
     } & ModelLimitsPayload)
   | { kind: "use-model"; modelId: string; reasoning?: string }
   | { kind: "remove-provider"; providerId: string }
+  | { kind: "remove-model"; modelId: string }
   | { kind: "set-secret"; providerId: string; secret: string }
   | { kind: "update-provider"; providerId: string; name: string; origin: string; secret?: string }
   | { kind: "set-expose"; expose: "cloudflare" | "off" };

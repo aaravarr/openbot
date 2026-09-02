@@ -50,17 +50,25 @@ function usedMessage(result: SaveResult): string {
   return result.wrapBytesChanged ? `${base} Grok Bot was restarted to apply the wrap.` : base;
 }
 
+function fallbackAfterDelete(all: Model[], deleted: Model): Model | undefined {
+  const remaining = all.filter((row) => row.id !== deleted.id);
+  return remaining.find((row) => row.providerId === deleted.providerId) ?? remaining[0];
+}
+
 export function Models({ providerId }: { providerId?: string }) {
   const state = useBoxState();
-  const { save } = useApp();
+  const { save, pushToast } = useApp();
   const providers = state.providers;
 
   const [selectedId, setSelectedId] = useState<string | null>(providerId ?? providers[0]?.id ?? null);
   const [editProvider, setEditProvider] = useState(false);
   const [replaceKey, setReplaceKey] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [confirmRemoveModel, setConfirmRemoveModel] = useState<Model | null>(null);
   const [modelDialog, setModelDialog] = useState<{ open: boolean; model: Model | null }>({ open: false, model: null });
   const [busy, setBusy] = useState<string | null>(null);
+  const [refreshingIds, setRefreshingIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [refreshingAll, setRefreshingAll] = useState(false);
 
   // Source A fetch state
   const [fetching, setFetching] = useState(false);
@@ -140,6 +148,15 @@ export function Models({ providerId }: { providerId?: string }) {
     }
   };
 
+  const markRefreshing = (id: string, on: boolean) => {
+    setRefreshingIds((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
   const useModel = async (model: Model) => {
     if (!hasKey(state, model.providerId)) {
       setReplaceKey(true);
@@ -168,6 +185,69 @@ export function Models({ providerId }: { providerId?: string }) {
     }
   };
 
+  const refreshFromCatalog = async (model: Model): Promise<boolean> => {
+    markRefreshing(model.id, true);
+    let lookedUp = false;
+    try {
+      const lookup = await getModelCatalog(model.slug);
+      lookedUp = true;
+      const meta = lookup.lookup?.found ? lookup.lookup.model : undefined;
+      if (!lookup.lookup?.found || !meta) {
+        pushToast("info", "No catalog match", `${model.slug} is not in the public model catalog. Limits were left unchanged.`);
+        return false;
+      }
+      const fields = modelImportFields(
+        {
+          id: model.slug,
+          name: null,
+          contextLength: model.contextTokens,
+          maxOutputTokens: model.maxOutputTokens,
+          modalities: [...model.modalities],
+          reasoningLevels: [...model.reasoningLevels],
+        },
+        meta,
+      );
+      const levels = fields.reasoningLevels;
+      const keepActive = levels === undefined || levels.includes(model.activeReasoning) ? model.activeReasoning : undefined;
+      await save(
+        {
+          kind: "upsert-model",
+          providerId: model.providerId,
+          ...fields,
+          ...(keepActive !== undefined ? { activeReasoning: keepActive } : {}),
+        },
+        {
+          successTitle: "Model refreshed",
+          successMessage: `${model.slug} limits were updated from the catalog.`,
+        },
+      );
+      return true;
+    } catch (err) {
+      if (!lookedUp) {
+        pushToast(
+          "error",
+          "Catalog lookup failed",
+          err instanceof Error ? err.message : "Could not reach the model catalog.",
+        );
+      }
+      return false;
+    } finally {
+      markRefreshing(model.id, false);
+    }
+  };
+
+  const refreshAllFromCatalog = async () => {
+    if (!models.length) return;
+    setRefreshingAll(true);
+    try {
+      for (const model of models) {
+        await refreshFromCatalog(model);
+      }
+    } finally {
+      setRefreshingAll(false);
+    }
+  };
+
   const removeProvider = async () => {
     setConfirmRemove(false);
     if (!selected) return;
@@ -175,6 +255,22 @@ export function Models({ providerId }: { providerId?: string }) {
     await run("remove", { kind: "remove-provider", providerId: selected.id }, {
       title: "Provider removed",
       message: last ? "Last provider removed. Chat is official Grok." : undefined,
+    });
+  };
+
+  const removeModel = async () => {
+    const model = confirmRemoveModel;
+    setConfirmRemoveModel(null);
+    if (!model) return;
+    const fallback = fallbackAfterDelete(state.models, model);
+    const wasActive = model.id === state.activeModelId;
+    await run("remove-model", { kind: "remove-model", modelId: model.id }, {
+      title: "Model removed",
+      message: wasActive
+        ? fallback
+          ? `Chat moves to ${fallback.slug} on the next message.`
+          : "No model is active. Fetch or add a model to use custom chat."
+        : `${model.slug} was removed from this provider.`,
     });
   };
 
@@ -230,6 +326,20 @@ export function Models({ providerId }: { providerId?: string }) {
       list.push(`The wildcard binding moves to ${survivor.slug}.`);
     }
     list.push("Its API key stays on disk (no delete path exists).");
+    return list;
+  })();
+
+  const removeModelConsequences = (() => {
+    if (!confirmRemoveModel) return [];
+    const list = [`${confirmRemoveModel.slug} is removed from this provider.`];
+    if (confirmRemoveModel.id === state.activeModelId) {
+      const fallback = fallbackAfterDelete(state.models, confirmRemoveModel);
+      if (fallback) {
+        list.push(`Chat moves to ${fallback.slug}.`);
+      } else {
+        list.push("No model will be active.");
+      }
+    }
     return list;
   })();
 
@@ -302,6 +412,17 @@ export function Models({ providerId }: { providerId?: string }) {
                 <Button variant="ghost-sm" icon={Download} loading={fetching} loadingLabel="Fetching…" onClick={() => void doFetch(selected)}>
                   Fetch models
                 </Button>
+                {models.length ? (
+                  <Button
+                    variant="ghost-sm"
+                    icon={RefreshCw}
+                    loading={refreshingAll}
+                    loadingLabel="Refreshing…"
+                    onClick={() => void refreshAllFromCatalog()}
+                  >
+                    Refresh all from catalog
+                  </Button>
+                ) : null}
                 <Button variant="ghost-sm" icon={Pencil} onClick={() => setEditProvider(true)}>
                   Edit
                 </Button>
@@ -341,6 +462,7 @@ export function Models({ providerId }: { providerId?: string }) {
                 <tbody>
                   {models.map((m) => {
                     const isActive = m.id === state.activeModelId;
+                    const rowBusy = refreshingIds.has(m.id);
                     return (
                       <tr key={m.id}>
                         <td className="cell-primary" data-label="Model">
@@ -357,14 +479,28 @@ export function Models({ providerId }: { providerId?: string }) {
                         </td>
                         <td data-label="Modalities">{m.modalities.join(" · ")}</td>
                         <td className="cell-actions" data-label="Actions">
-                          {isActive ? (
-                            <Badge tone="accent">Active</Badge>
-                          ) : (
-                            <Button variant="ghost-sm" onClick={() => void useModel(m)}>
-                              Use
-                            </Button>
-                          )}{" "}
-                          <IconButton label="Edit model" icon={Pencil} onClick={() => setModelDialog({ open: true, model: m })} />
+                          <span className="model-row-actions">
+                            {isActive ? (
+                              <Badge tone="accent">Active</Badge>
+                            ) : (
+                              <Button variant="ghost-sm" onClick={() => void useModel(m)}>
+                                Use
+                              </Button>
+                            )}
+                            <IconButton
+                              label="Refresh from catalog"
+                              icon={RefreshCw}
+                              loading={rowBusy}
+                              onClick={() => void refreshFromCatalog(m)}
+                            />
+                            <IconButton label="Edit model" icon={Pencil} onClick={() => setModelDialog({ open: true, model: m })} />
+                            <IconButton
+                              label={`Remove ${m.slug}`}
+                              icon={Trash2}
+                              className="icon-btn--danger"
+                              onClick={() => setConfirmRemoveModel(m)}
+                            />
+                          </span>
                         </td>
                       </tr>
                     );
@@ -456,6 +592,19 @@ export function Models({ providerId }: { providerId?: string }) {
         consequences={removeConsequences}
         confirmLabel="Remove provider"
         busy={busy === "remove"}
+        icon={Trash2}
+        iconTone="danger"
+      />
+
+      <ConfirmDialog
+        open={confirmRemoveModel !== null}
+        onClose={() => setConfirmRemoveModel(null)}
+        onConfirm={removeModel}
+        title={`Remove ${confirmRemoveModel?.slug ?? "model"}?`}
+        description={`${confirmRemoveModel?.slug ?? "This model"} will be removed from this provider.`}
+        consequences={removeModelConsequences}
+        confirmLabel="Remove model"
+        busy={busy === "remove-model"}
         icon={Trash2}
         iconTone="danger"
       />

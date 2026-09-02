@@ -411,3 +411,130 @@ test("update-provider writes a secret when one is sent", () => {
   assert.equal("secret" in parsed.desired, false);
 });
 
+test("remove-model needs modelId", () => {
+  assert.throws(
+    () => parseUiProviderSave({ kind: "remove-model" }, paths(), zhipuCatalog()),
+    /OpenBot: remove-model needs modelId/,
+  );
+});
+
+test("remove-model throws for an unknown model", () => {
+  assert.throws(
+    () => parseUiProviderSave({ kind: "remove-model", modelId: "zhipu:missing" }, paths(), zhipuCatalog()),
+    /OpenBot: unknown model/,
+  );
+});
+
+function zhipuTwoModelCatalog(): Catalog {
+  const providerId = parseProviderId("zhipu");
+  const flash = parseModelId("zhipu:glm-5.3-flash");
+  const full = parseModelId("zhipu:glm-5.3");
+  return {
+    providers: zhipuCatalog().providers,
+    models: [
+      makeModel({ id: flash, providerId, slug: parseModelSlug("glm-5.3-flash") }),
+      makeModel({ id: full, providerId, slug: parseModelSlug("glm-5.3") }),
+    ],
+    bindings: [{ conversation: { kind: "wildcard" }, modelId: flash }],
+  };
+}
+
+test("remove-model drops one slug and keeps the provider", () => {
+  const parsed = parseUiProviderSave(
+    { kind: "remove-model", modelId: "zhipu:glm-5.3" },
+    paths(),
+    zhipuTwoModelCatalog(),
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") {
+    return;
+  }
+  assert.equal(parsed.desired.catalog.providers.length, 1);
+  assert.equal(parsed.desired.catalog.providers[0]?.id, "zhipu");
+  assert.equal(parsed.desired.catalog.models.length, 1);
+  assert.equal(parsed.desired.catalog.models[0]?.id, "zhipu:glm-5.3-flash");
+  assert.equal(parsed.desired.catalog.bindings[0]?.modelId, "zhipu:glm-5.3-flash");
+  assert.equal(parsed.secret, undefined);
+  assert.equal(parsed.catalogWrite, undefined);
+  const binding = parsed.desired.catalog.bindings[0];
+  assert.ok(binding);
+  assert.equal("apiKey" in binding, false);
+  assert.equal("secret" in parsed.desired, false);
+});
+
+test("remove last model of the last provider stays custom with an empty list", () => {
+  const parsed = parseUiProviderSave(
+    { kind: "remove-model", modelId: "zhipu:glm-5.3-flash" },
+    paths(),
+    zhipuCatalog(),
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") {
+    return;
+  }
+  assert.equal(parsed.desired.catalog.providers.length, 1);
+  assert.equal(parsed.desired.catalog.providers[0]?.id, "zhipu");
+  assert.equal(parsed.desired.catalog.models.length, 0);
+  assert.equal(parsed.desired.catalog.bindings.length, 0);
+  assert.equal(parsed.catalogWrite, undefined);
+  assert.equal(parsed.secret, undefined);
+});
+
+test("remove active model rebinds wildcard to another model on the same provider", () => {
+  const parsed = parseUiProviderSave(
+    { kind: "remove-model", modelId: "zhipu:glm-5.3-flash" },
+    paths(),
+    zhipuTwoModelCatalog(),
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") {
+    return;
+  }
+  assert.equal(parsed.desired.catalog.bindings[0]?.modelId, "zhipu:glm-5.3");
+  assert.equal(parsed.desired.catalog.models.length, 1);
+});
+
+test("remove active model rebinds to another provider when none remain here", () => {
+  const parsed = parseUiProviderSave(
+    { kind: "remove-model", modelId: "zhipu:glm-5.3-flash" },
+    paths(),
+    twoProviderCatalog(),
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") {
+    return;
+  }
+  assert.equal(parsed.desired.catalog.providers.length, 2);
+  assert.equal(parsed.desired.catalog.models.length, 1);
+  assert.equal(parsed.desired.catalog.models[0]?.id, "openai:gpt-4.1");
+  assert.equal(parsed.desired.catalog.bindings[0]?.modelId, "openai:gpt-4.1");
+});
+
+test("remove a non-active model keeps the wildcard", () => {
+  const parsed = parseUiProviderSave(
+    { kind: "remove-model", modelId: "openai:gpt-4.1" },
+    paths(),
+    twoProviderCatalog(),
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") {
+    return;
+  }
+  assert.equal(parsed.desired.catalog.providers.length, 2);
+  assert.equal(parsed.desired.catalog.models.length, 1);
+  assert.equal(parsed.desired.catalog.bindings[0]?.modelId, "zhipu:glm-5.3-flash");
+});
+
+test("remove last model of one provider keeps that provider with zero models", () => {
+  const parsed = parseUiProviderSave(
+    { kind: "remove-model", modelId: "openai:gpt-4.1" },
+    paths(),
+    twoProviderCatalog(),
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") {
+    return;
+  }
+  assert.ok(parsed.desired.catalog.providers.some((row) => row.id === "openai"));
+  assert.equal(parsed.desired.catalog.models.some((row) => row.providerId === "openai"), false);
+});

@@ -51,12 +51,29 @@ export function Button({
 type IconButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   label: string;
   icon: LucideIcon;
+  loading?: boolean;
 };
 
-export function IconButton({ label, icon: Icon, type = "button", ...rest }: IconButtonProps) {
+export function IconButton({
+  label,
+  icon: Icon,
+  type = "button",
+  loading = false,
+  className,
+  disabled,
+  ...rest
+}: IconButtonProps) {
+  const cls = ["icon-btn", className].filter(Boolean).join(" ");
   return (
-    <button type={type} className="icon-btn" aria-label={label} title={label} {...rest}>
-      <Icon aria-hidden="true" />
+    <button
+      type={type}
+      {...rest}
+      className={cls}
+      aria-label={label}
+      title={label}
+      disabled={disabled || loading}
+    >
+      {loading ? <Spinner size={16} /> : <Icon aria-hidden="true" />}
     </button>
   );
 }

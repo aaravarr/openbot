@@ -182,8 +182,10 @@ export type FetchedModel = {
   name: string | null;
   contextLength: number | null;
   maxOutputTokens: number | null;
-  modalities: string[] | null;
-  reasoningLevels: string[] | null;
+  /** Backend always sends an array; empty = unknown (PRD §8.1). */
+  modalities: string[];
+  /** Backend always sends an array; empty = use defaults (PRD §8.1). */
+  reasoningLevels: string[];
 };
 
 export type FetchModelsResult = {
@@ -213,24 +215,24 @@ export type CatalogSource = {
   name: string;
   url: string;
   modelCount: number;
-  lastFetched: string;
+  lastFetched: string | null;
 };
 
 export type CatalogLookupModel = {
   id: string;
-  name?: string;
-  contextLength?: number;
-  maxOutputTokens?: number;
-  modalities?: string[];
-  reasoning?: boolean;
-  pricing?: { input: number; output: number; currency: string };
+  name: string | null;
+  contextLength: number | null;
+  maxOutputTokens: number | null;
+  modalities: string[];
+  reasoning: boolean;
+  pricing: { input: number | null; output: number | null; currency: string } | null;
 };
 
 export type ModelCatalog = {
   status: "ready" | "loading" | "failed";
   lastFetched: string | null;
-  totalModels?: number;
-  sources?: CatalogSource[];
+  totalModels: number;
+  sources: CatalogSource[];
   error?: { kind: string; message: string };
   lookup?: { found: boolean; model?: CatalogLookupModel };
 };

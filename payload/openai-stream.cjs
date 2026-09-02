@@ -169,9 +169,10 @@ function alreadyHasVoice(mapped, voiceName) {
   return false;
 }
 
-/** Host voice is a tool. Reuse the model's text; never invent an acknowledgement. */
+/** Host voice is a tool. Reuse leftover model text only when there are no other calls. */
 function mapAssistantTextToVoice(text, mapped, voiceTool) {
   if (!voiceTool || !voiceTool.name) return mapped;
+  if (Array.isArray(mapped) && mapped.length) return mapped;
   var body = stripHostInjectedText(String(text || "")).trim();
   if (!body) return mapped;
   if (isScratchReasoningText(body)) return mapped;

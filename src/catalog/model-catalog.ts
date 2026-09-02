@@ -136,12 +136,105 @@ function hasReasoning(item: Record<string, unknown>): boolean {
   if (parameters?.some((param) => typeof param === "string" && REASONING_PARAMETERS.has(param.toLowerCase()))) {
     return true;
   }
+  // openrouter exposes a structured `reasoning` object (mandatory/default_enabled)
+  // and models.dev exposes a bare boolean `reasoning`.
+  const reasoningField = item.reasoning;
+  if (reasoningField === true) {
+    return true;
+  }
+  if (isRecord(reasoningField)) {
+    if (reasoningField.mandatory === true || reasoningField.default_enabled === true || reasoningField.supported === true) {
+      return true;
+    }
+    if (Array.isArray(reasoningField.supported_efforts) && reasoningField.supported_efforts.length > 0) {
+      return true;
+    }
+  }
   const id = typeof item.id === "string" ? item.id.toLowerCase() : "";
   const name = typeof item.name === "string" ? item.name.toLowerCase() : "";
   return REASONING_ID_MARKERS.some((marker) => id.includes(marker) || name.includes(marker));
 }
 
-function normalizeCatalogEntry(item: unknown): CatalogModel | undefined {
+/** Strip the provider namespace, leaving the bare model id (`z-ai/glm-5.3-flash` -> `glm-5.3-flash`). */
+function bareModelId(id: string): string {
+  const slash = id.lastIndexOf("/");
+  return slash === -1 ? id : id.slice(slash + 1);
+}
+
+/** Count populated fields so alias resolution can prefer the richest record. */
+function populatedFields(model: CatalogModel): number {
+  let count = 0;
+  if (model.name !== null) count += 1;
+  if (model.contextLength !== null) count += 1;
+  if (model.maxOutputTokens !== null) count += 1;
+  if (model.modalities.length > 0) count += 1;
+  if (model.reasoning) count += 1;
+  if (model.pricing !== null) count += 1;
+  return count;
+}
+
+function preferNonNull<T>(existing: T | null, incoming: T | null, incomingWins: boolean): T | null {
+  if (existing !== null && incoming !== null) {
+    return incomingWins ? incoming : existing;
+  }
+  return existing !== null ? existing : incoming;
+}
+
+function mergePricing(
+  existing: CatalogPricing | null,
+  incoming: CatalogPricing | null,
+  incomingWins: boolean,
+): CatalogPricing | null {
+  if (existing === null) {
+    return incoming;
+  }
+  if (incoming === null) {
+    return existing;
+  }
+  const input = preferNonNull(existing.input, incoming.input, incomingWins);
+  const output = preferNonNull(existing.output, incoming.output, incomingWins);
+  if (input === null && output === null) {
+    return null;
+  }
+  return {
+    input,
+    output,
+    currency: incomingWins ? incoming.currency : existing.currency,
+  };
+}
+
+/**
+ * Field-level merge so a husk from one source never erases a populated field
+ * from the other: a non-null (or non-empty) value wins over null/empty, and on
+ * a true conflict the incoming record wins when it is the models.dev source.
+ */
+function mergeCatalogModel(existing: CatalogModel, incoming: CatalogModel, incomingWins: boolean): CatalogModel {
+  const name = preferNonNull(existing.name, incoming.name, incomingWins);
+  const contextLength = preferNonNull(existing.contextLength, incoming.contextLength, incomingWins);
+  const maxOutputTokens = preferNonNull(existing.maxOutputTokens, incoming.maxOutputTokens, incomingWins);
+  const modalities =
+    preferNonNull(
+      existing.modalities.length > 0 ? existing.modalities : null,
+      incoming.modalities.length > 0 ? incoming.modalities : null,
+      incomingWins,
+    ) ?? [];
+  return {
+    id: existing.id,
+    name,
+    contextLength,
+    maxOutputTokens,
+    modalities,
+    reasoning: existing.reasoning || incoming.reasoning,
+    pricing: mergePricing(existing.pricing, incoming.pricing, incomingWins),
+  };
+}
+
+/**
+ * openrouter `/api/v1/models` entry: a flat object with `context_length`,
+ * `top_provider.max_completion_tokens`, `architecture.input_modalities`,
+ * `supported_parameters` and `pricing`.
+ */
+function normalizeOpenRouterEntry(item: unknown): CatalogModel | undefined {
   if (!isRecord(item)) {
     return undefined;
   }
@@ -165,16 +258,50 @@ function normalizeCatalogEntry(item: unknown): CatalogModel | undefined {
   };
 }
 
-function dedupeEntries(items: unknown[]): CatalogModel[] {
+/**
+ * models.dev `/api.json` entry: nested under `<provider>.models.<modelId>` with
+ * `limit: { context, output }`, `modalities: { input, output }`, `reasoning`
+ * (boolean) and `cost: { input, output }`. The entry's own `id` equals the model
+ * key, so it is read directly.
+ */
+function normalizeModelsDevEntry(item: unknown): CatalogModel | undefined {
+  if (!isRecord(item)) {
+    return undefined;
+  }
+  if (typeof item.id !== "string" || !item.id.trim()) {
+    return undefined;
+  }
+  const limit = nestedRecord(item, "limit");
+  const modalities = nestedRecord(item, "modalities");
+  return {
+    id: item.id.trim(),
+    name: stringOrNull(item.name),
+    contextLength: firstPositiveInt(limit?.context, item.context_length, item.contextLength),
+    maxOutputTokens: firstPositiveInt(limit?.output, item.max_output_tokens, item.maxOutputTokens),
+    modalities: filterModalities(firstArray(modalities?.input, item.input_modalities, item.modalities)),
+    reasoning: item.reasoning === true || hasReasoning(item),
+    pricing: normalizePricing(item.cost ?? item.pricing),
+  };
+}
+
+function dedupeEntries(
+  items: unknown[],
+  normalize: (item: unknown) => CatalogModel | undefined,
+): CatalogModel[] {
   const out: CatalogModel[] = [];
-  const seen = new Set<string>();
+  const index = new Map<string, number>();
   for (const item of items) {
-    const model = normalizeCatalogEntry(item);
-    if (model === undefined || seen.has(model.id)) {
+    const model = normalize(item);
+    if (model === undefined) {
       continue;
     }
-    seen.add(model.id);
-    out.push(model);
+    const existing = index.get(model.id);
+    if (existing === undefined) {
+      index.set(model.id, out.length);
+      out.push(model);
+    } else {
+      out[existing] = mergeCatalogModel(out[existing]!, model, false);
+    }
   }
   return out;
 }
@@ -182,7 +309,7 @@ function dedupeEntries(items: unknown[]): CatalogModel[] {
 function normalizeSourceModels(source: CatalogSourceName, parsed: unknown): CatalogModel[] {
   if (source === "openrouter") {
     const data = isRecord(parsed) ? parsed.data : undefined;
-    return Array.isArray(data) ? dedupeEntries(data) : [];
+    return Array.isArray(data) ? dedupeEntries(data, normalizeOpenRouterEntry) : [];
   }
   // models.dev/api.json is an object keyed by provider id.
   if (!isRecord(parsed)) {
@@ -195,7 +322,7 @@ function normalizeSourceModels(source: CatalogSourceName, parsed: unknown): Cata
       rows.push(...Object.values(models));
     }
   }
-  return dedupeEntries(rows);
+  return dedupeEntries(rows, normalizeModelsDevEntry);
 }
 
 function parseCatalogModel(value: unknown): CatalogModel | undefined {
@@ -265,6 +392,27 @@ export function createCatalogManager(deps: {
   const sources: { name: string; url: string; modelCount: number; lastFetched: string | null }[] =
     MODEL_CATALOG_SOURCES.map((source) => ({ name: source.name, url: source.url, modelCount: 0, lastFetched: null }));
 
+  // Derived alias index: bare model id -> richest catalog record, so lookups by
+  // either the namespaced id (`z-ai/glm-5.3-flash`) or the bare id
+  // (`glm-5.3-flash`) both resolve. Rebuilt from `lookup` after every load/fetch.
+  let bareIndex = new Map<string, CatalogModel>();
+
+  function rebuildBareIndex(): void {
+    const next = new Map<string, CatalogModel>();
+    for (const model of lookup.values()) {
+      const bare = bareModelId(model.id);
+      const current = next.get(bare);
+      if (
+        current === undefined ||
+        populatedFields(model) > populatedFields(current) ||
+        (populatedFields(model) === populatedFields(current) && model.id < current.id)
+      ) {
+        next.set(bare, model);
+      }
+    }
+    bareIndex = next;
+  }
+
   function currentStatus(): "ready" | "loading" | "failed" {
     if (activeFetch !== null) {
       return "loading";
@@ -319,6 +467,7 @@ export function createCatalogManager(deps: {
           }
         }
       }
+      rebuildBareIndex();
       hasData = true;
       return true;
     } catch {
@@ -337,8 +486,10 @@ export function createCatalogManager(deps: {
       if (outcome !== undefined && outcome.ok) {
         anySuccess = true;
         const count = outcome.models.length;
+        const incomingWins = MODEL_CATALOG_SOURCES[i]!.name === "models.dev";
         for (const model of outcome.models) {
-          lookup.set(model.id, model);
+          const existing = lookup.get(model.id);
+          lookup.set(model.id, existing === undefined ? model : mergeCatalogModel(existing, model, incomingWins));
         }
         sources[i]!.modelCount = count;
         sources[i]!.lastFetched = stamp;
@@ -346,6 +497,7 @@ export function createCatalogManager(deps: {
         failures.push(outcome?.error ?? "fetch failed");
       }
     }
+    rebuildBareIndex();
     if (anySuccess) {
       lastFetched = stamp;
       lastError = null;
@@ -382,7 +534,7 @@ export function createCatalogManager(deps: {
     },
     snapshot(modelId?: string): CatalogSnapshot {
       const status = currentStatus();
-      const model = modelId !== undefined ? lookup.get(modelId) : undefined;
+      const model = modelId !== undefined ? (lookup.get(modelId) ?? bareIndex.get(bareModelId(modelId))) : undefined;
       const lookupValue: CatalogLookup | undefined =
         modelId !== undefined ? (model !== undefined ? { found: true, model } : { found: false }) : undefined;
       return {

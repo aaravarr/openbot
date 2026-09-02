@@ -237,3 +237,175 @@ test("a failed refresh keeps the previous cache and reports ready", async () => 
   assert.equal(snapshot.lastFetched, "t0");
   assert.equal(snapshot.totalModels, 1);
 });
+
+test("catalog normalizes a models.dev-only entry (real shape)", async () => {
+  const fs = memFs();
+  const fetchFn: FetchLike = async (url) => {
+    if (url.includes("openrouter")) {
+      return jsonResponse(200, { data: [] });
+    }
+    return jsonResponse(200, {
+      vancine: {
+        models: {
+          "glm-5.3-flash": {
+            id: "glm-5.3-flash",
+            name: "GLM-5.3-Flash",
+            reasoning: true,
+            modalities: { input: ["text", "image", "video", "pdf"], output: ["text"] },
+            limit: { context: 1000000, output: 131072 },
+            cost: { input: 0.06, output: 0.2, cache_read: 0.012 },
+          },
+        },
+      },
+    });
+  };
+  const manager = createCatalogManager({ fs, cachePath, fetchFn, now: clock() });
+  await manager.start();
+
+  const result = manager.snapshot("glm-5.3-flash").lookup;
+  assert.ok(result);
+  assert.equal(result.found, true);
+  if (result.found) {
+    assert.equal(result.model.id, "glm-5.3-flash");
+    assert.equal(result.model.name, "GLM-5.3-Flash");
+    assert.equal(result.model.contextLength, 1000000);
+    assert.equal(result.model.maxOutputTokens, 131072);
+    assert.deepEqual(result.model.modalities, ["text", "image", "video"]);
+    assert.equal(result.model.reasoning, true);
+    assert.equal(result.model.pricing?.input, 0.06);
+    assert.equal(result.model.pricing?.output, 0.2);
+    assert.equal(result.model.pricing?.currency, "USD");
+  }
+});
+
+test("catalog normalizes an openrouter-only entry and resolves its bare id", async () => {
+  const fs = memFs();
+  const fetchFn: FetchLike = async (url) => {
+    if (url.includes("openrouter")) {
+      return jsonResponse(200, {
+        data: [
+          {
+            id: "z-ai/glm-5.3-flash",
+            name: "Z.ai: GLM 5.3 Flash",
+            context_length: 1310720,
+            architecture: { input_modalities: ["text", "image", "video"], output_modalities: ["text"] },
+            top_provider: { context_length: 1048576, max_completion_tokens: 131072 },
+            pricing: { prompt: "0.000000075", completion: "0.00000025" },
+            supported_parameters: ["temperature", "reasoning", "reasoning_effort"],
+          },
+        ],
+      });
+    }
+    return jsonResponse(200, {});
+  };
+  const manager = createCatalogManager({ fs, cachePath, fetchFn, now: clock() });
+  await manager.start();
+
+  for (const modelId of ["z-ai/glm-5.3-flash", "glm-5.3-flash"]) {
+    const result = manager.snapshot(modelId).lookup;
+    assert.ok(result);
+    assert.equal(result.found, true, `lookup by "${modelId}" should hit`);
+    if (result.found) {
+      assert.equal(result.model.contextLength, 1310720);
+      assert.equal(result.model.maxOutputTokens, 131072);
+      assert.deepEqual(result.model.modalities, ["text", "image", "video"]);
+      assert.equal(result.model.reasoning, true);
+      assert.equal(result.model.pricing?.input, 0.000000075);
+      assert.equal(result.model.pricing?.output, 0.00000025);
+    }
+  }
+});
+
+test("catalog merges a model present in both sources, models.dev winning conflicts", async () => {
+  const fs = memFs();
+  const fetchFn: FetchLike = async (url) => {
+    if (url.includes("openrouter")) {
+      return jsonResponse(200, {
+        data: [
+          {
+            id: "z-ai/glm-5.3-flash",
+            name: "Z.ai: GLM 5.3 Flash",
+            context_length: 1310720,
+            architecture: { input_modalities: ["text", "image", "video"] },
+            top_provider: { max_completion_tokens: 131072 },
+            pricing: { prompt: "0.000000075", completion: "0.00000025" },
+            supported_parameters: ["reasoning"],
+          },
+        ],
+      });
+    }
+    return jsonResponse(200, {
+      openrouter: {
+        models: {
+          "z-ai/glm-5.3-flash": {
+            id: "z-ai/glm-5.3-flash",
+            name: "GLM-5.3-Flash",
+            reasoning: true,
+            modalities: { input: ["text", "image", "video"], output: ["text"] },
+            limit: { context: 1000000, output: 131072 },
+            cost: { input: 0.06, output: 0.2 },
+          },
+        },
+      },
+    });
+  };
+  const manager = createCatalogManager({ fs, cachePath, fetchFn, now: clock() });
+  await manager.start();
+
+  const result = manager.snapshot("z-ai/glm-5.3-flash").lookup;
+  assert.ok(result);
+  assert.equal(result.found, true);
+  if (result.found) {
+    assert.equal(result.model.name, "GLM-5.3-Flash"); // models.dev wins the name conflict
+    assert.equal(result.model.contextLength, 1000000); // models.dev wins the context conflict
+    assert.equal(result.model.maxOutputTokens, 131072);
+    assert.deepEqual(result.model.modalities, ["text", "image", "video"]);
+    assert.equal(result.model.reasoning, true);
+    assert.equal(result.model.pricing?.input, 0.06); // models.dev cost wins over openrouter pricing
+    assert.equal(result.model.pricing?.output, 0.2);
+  }
+});
+
+test("catalog keeps openrouter fields when models.dev yields an empty husk", async () => {
+  const fs = memFs();
+  const fetchFn: FetchLike = async (url) => {
+    if (url.includes("openrouter")) {
+      return jsonResponse(200, {
+        data: [
+          {
+            id: "z-ai/glm-5.3-flash",
+            name: "Z.ai: GLM 5.3 Flash",
+            context_length: 1310720,
+            architecture: { input_modalities: ["text", "image", "video"] },
+            top_provider: { max_completion_tokens: 131072 },
+            pricing: { prompt: "0.000000075", completion: "0.00000025" },
+            supported_parameters: ["reasoning"],
+          },
+        ],
+      });
+    }
+    // A mirror entry missing limit/modalities/cost/reasoning (the pre-fix husk).
+    return jsonResponse(200, {
+      openrouter: {
+        models: {
+          "z-ai/glm-5.3-flash": { id: "z-ai/glm-5.3-flash", name: "GLM-5.3-Flash" },
+        },
+      },
+    });
+  };
+  const manager = createCatalogManager({ fs, cachePath, fetchFn, now: clock() });
+  await manager.start();
+
+  const result = manager.snapshot("z-ai/glm-5.3-flash").lookup;
+  assert.ok(result);
+  assert.equal(result.found, true);
+  if (result.found) {
+    assert.equal(result.model.contextLength, 1310720);
+    assert.equal(result.model.maxOutputTokens, 131072);
+    assert.deepEqual(result.model.modalities, ["text", "image", "video"]);
+    assert.equal(result.model.reasoning, true);
+    assert.equal(result.model.pricing?.input, 0.000000075);
+    assert.equal(result.model.pricing?.output, 0.00000025);
+    assert.equal(result.model.name, "GLM-5.3-Flash"); // models.dev name still wins the non-null conflict
+  }
+});

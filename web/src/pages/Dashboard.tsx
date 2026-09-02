@@ -10,18 +10,7 @@ import {
 } from "lucide-react";
 import { hasKey, listLogs, modelById, providerById } from "../api/client";
 import type { LogRecord, Model, SaveResult } from "../api/types";
-import { LogChannelPair } from "../components/LogChannel";
-import { asLogChannels, formatLatency, formatTime, formatTokens, labelReasoning } from "../lib/format";
-import {
-  pairChannels,
-  pairKey,
-  pairLatency,
-  pairLogRows,
-  pairModel,
-  pairOpenId,
-  pairStartedAt,
-  pairStatus,
-} from "../lib/pair-logs";
+import { channelLabel, formatLatency, formatTime, formatTokens, labelReasoning } from "../lib/format";
 import { deriveHealth } from "../lib/health";
 import { navigate } from "../lib/router";
 import { publicTunnelUrl } from "../lib/tunnel-url";
@@ -63,11 +52,10 @@ export function Dashboard() {
   const health = deriveHealth(state, service);
   const empty = state.providers.length === 0;
   const tunnelHref = tunnel.kind === "cloudflare-quick" ? publicTunnelUrl(tunnel.url) : "";
-  const recentPairs = useMemo(() => pairLogRows(recent).slice(0, 5), [recent]);
 
   useEffect(() => {
     let alive = true;
-    listLogs({ pageSize: 12 })
+    listLogs({ pageSize: 5 })
       .then((list) => {
         if (alive) setRecent(list.items);
       })
@@ -405,24 +393,14 @@ export function Dashboard() {
             </a>
           </div>
           <div className="card__body--flush mini-list">
-            {recentPairs.length ? (
-              recentPairs.map((pair) => (
-                <div
-                  className="mini-row"
-                  key={pairKey(pair)}
-                  role="link"
-                  tabIndex={0}
-                  style={{ cursor: "pointer" }}
-                  onClick={() => navigate({ kind: "logs", logId: pairOpenId(pair) })}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") navigate({ kind: "logs", logId: pairOpenId(pair) });
-                  }}
-                >
-                  <span className="time">{formatTime(pairStartedAt(pair))}</span>
-                  <span className="model">{pairModel(pair) ?? "—"}</span>
-                  <LogChannelPair channels={asLogChannels(pairChannels(pair))} />
-                  <StatusPill status={pairStatus(pair)} />
-                  <span className="lat">{formatLatency(pairLatency(pair))}</span>
+            {recent.length ? (
+              recent.map((r) => (
+                <div className="mini-row" key={r.id}>
+                  <span className="time">{formatTime(r.startedAt)}</span>
+                  <span className="model">{r.model ?? "—"}</span>
+                  <span className="log-channel">{channelLabel(r.channel)}</span>
+                  <StatusPill status={r.status} />
+                  <span className="lat">{formatLatency(r.latencyMs)}</span>
                 </div>
               ))
             ) : (

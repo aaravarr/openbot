@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
 import test from "node:test";
 import { type AbsPath } from "../domain/types.ts";
 import { boxPathsFrom } from "./paths.ts";
-import { type FsDeps, type ProcDeps, parseOwnedPid } from "./procs.ts";
+import { nodeFs, nodeProcs, type FsDeps, type ProcDeps, parseOwnedPid } from "./procs.ts";
 import {
   exposeFilePresent,
   parseQuickTunnelUrl,
@@ -228,4 +229,32 @@ test("cloudflare-quick replaces a dead cached URL and truncates the old log", as
   const log = ctx.deps.fs.read(ctx.deps.paths.tunnelLog) ?? "";
   assert.equal(log.includes("openbot-old.trycloudflare.com"), false);
   assert.match(log, /openbot-new\.trycloudflare\.com/);
+});
+
+test("a missing cloudflared binary surfaces an error state without crashing the process", async () => {
+  const dir = mkdtempSync("/tmp/openbot-tunnel-");
+  try {
+    const paths = boxPathsFrom({ repoRoot: "/tmp/openbot-test-repo", sandData: dir });
+    // Real filesystem and process deps so the actual spawn() runs and fails with
+    // ENOENT against the absent binary — exactly the production crash path.
+    const deps: TunnelDeps = { paths, fs: nodeFs(), procs: nodeProcs() };
+    // A download that "succeeds" without writing the binary leaves cloudflared
+    // missing, forcing the spawn path to hit the absent file.
+    const net = {
+      async download(_url: string, _dest: AbsPath) {
+        /* no-op: the binary stays missing */
+      },
+    };
+    const observed = await reconcileExpose({ kind: "cloudflare-quick" }, deps, net);
+    assert.equal(observed.kind, "error");
+    if (observed.kind !== "error") {
+      return;
+    }
+    assert.match(observed.message, /cloudflared not found at/);
+    assert.match(observed.message, /bin\/cloudflared/);
+    // No pid was written, so a later /api/state reports the tunnel as off.
+    assert.equal(deps.fs.read(deps.paths.tunnelPid), undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

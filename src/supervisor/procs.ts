@@ -209,14 +209,23 @@ export function nodeProcs(): ProcDeps {
     },
     start(input) {
       const logFd = fs.openSync(input.log, "a");
-      const child = spawn(input.command ?? process.execPath, [...input.argv], {
+      const command = input.command ?? process.execPath;
+      const child = spawn(command, [...input.argv], {
         detached: true,
         stdio: ["ignore", logFd, logFd],
         env: { ...process.env, ...input.env },
       });
       fs.closeSync(logFd);
+      // A failed spawn (missing binary → ENOENT, bad permissions → EACCES, …)
+      // arrives as an asynchronous 'error' event on the child. Without a
+      // listener that event is unhandled and terminates the whole service, so
+      // attach one here. The synchronous pid check below reports the failure to
+      // the caller; the listener only prevents the async event from crashing us.
+      child.on("error", () => {
+        /* reported synchronously below */
+      });
       if (child.pid === undefined) {
-        throw new Error("OpenBot: spawn returned no pid");
+        throw new Error(`OpenBot: could not spawn ${command}`);
       }
       child.unref();
       const pid = parseOwnedPid(child.pid);

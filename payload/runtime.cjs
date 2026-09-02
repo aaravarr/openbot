@@ -16,6 +16,7 @@ var HIGH_AGENT_MAX_TOKENS = 65536;
 var mapToolCalls = openaiStream.mapToolCalls;
 var mapFinishReason = openaiStream.mapFinishReason;
 var iterateOpenAiResponse = openaiStream.iterateOpenAiResponse;
+var findVoiceTool = openaiStream.findVoiceTool;
 
 function log(line) {
   try {
@@ -235,6 +236,7 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
       };
       var openaiTools = unwrapJsonSchemaTools(tools);
       if (openaiTools) body.tools = openaiTools;
+      var voiceTool = findVoiceTool(tools) || findVoiceTool(openaiTools);
       log("stream messages=" + body.messages.length + " tools=" + ((body.tools && body.tools.length) || 0));
       var res = await hopRequest(body);
       var status = res.statusCode || 0;
@@ -245,7 +247,7 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
       var text = "";
       var u = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
       var hopId = "";
-      for await (var part of iterateOpenAiResponse(res)) {
+      for await (var part of iterateOpenAiResponse(res, voiceTool)) {
         if (part && part.type === "text-delta" && part.textDelta) {
           text += part.textDelta;
         }

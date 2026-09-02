@@ -168,38 +168,122 @@ function applyMaps(body, ctx) {
   }
 }
 
+function headerContentType(headers) {
+  if (!headers) return "";
+  return String(headers["content-type"] || headers["Content-Type"] || "");
+}
+
+function looksLikeEventStream(headers, wantStream) {
+  var ctype = headerContentType(headers);
+  if (/text\/event-stream/i.test(ctype)) return true;
+  if (wantStream && !/application\/json/i.test(ctype)) return true;
+  return false;
+}
+
+function hopAccept(wantStream) {
+  return wantStream ? "text/event-stream, application/json" : "application/json";
+}
+
+function openUpstream(urlStr, body, key) {
+  var u = new URL(urlStr);
+  var lib = u.protocol === "https:" ? https : http;
+  var payload = Buffer.from(JSON.stringify(body), "utf8");
+  var wantStream = body && body.stream === true;
+  var headers = {
+    "Content-Type": "application/json",
+    "Content-Length": String(payload.length),
+    "Accept": hopAccept(wantStream),
+    "Accept-Encoding": "identity",
+  };
+  if (key) headers.Authorization = "Bearer " + key;
+  var req = lib.request({
+    protocol: u.protocol,
+    hostname: u.hostname,
+    port: u.port || (u.protocol === "https:" ? 443 : 80),
+    path: u.pathname + u.search,
+    method: "POST",
+    headers: headers,
+  });
+  req.write(payload);
+  return req;
+}
+
+function collectResponse(res) {
+  return new Promise(function (resolve, reject) {
+    var chunks = [];
+    res.on("data", function (c) { chunks.push(c); });
+    res.on("end", function () {
+      resolve({ status: res.statusCode || 502, headers: res.headers, raw: Buffer.concat(chunks) });
+    });
+    res.on("error", reject);
+  });
+}
+
 function postUpstream(urlStr, body, key) {
   return new Promise(function (resolve, reject) {
-    var u = new URL(urlStr);
-    var lib = u.protocol === "https:" ? https : http;
-    var payload = Buffer.from(JSON.stringify(body), "utf8");
-    var headers = {
-      "Content-Type": "application/json",
-      "Content-Length": String(payload.length),
-      "Accept": "application/json",
-      "Accept-Encoding": "identity",
-    };
-    if (key) headers.Authorization = "Bearer " + key;
-    var req = lib.request({
-      protocol: u.protocol,
-      hostname: u.hostname,
-      port: u.port || (u.protocol === "https:" ? 443 : 80),
-      path: u.pathname + u.search,
-      method: "POST",
-      headers: headers,
-    }, function (res) {
-      var chunks = [];
-      res.on("data", function (c) { chunks.push(c); });
-      res.on("end", function () {
-        resolve({ status: res.statusCode || 502, headers: res.headers, raw: Buffer.concat(chunks) });
-      });
-    });
+    var req = openUpstream(urlStr, body, key);
     req.setTimeout(TIMEOUT_MS, function () {
       req.destroy();
       reject(new Error("openbot-hop: upstream timeout"));
     });
     req.on("error", reject);
-    req.write(payload);
+    req.on("response", function (res) {
+      collectResponse(res).then(resolve, reject);
+    });
+    req.end();
+  });
+}
+
+function pipeOrBufferUpstream(urlStr, body, key, clientRes) {
+  return new Promise(function (resolve, reject) {
+    var req = openUpstream(urlStr, body, key);
+    var settled = false;
+    function fail(err) {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    }
+    function ok(value) {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    }
+    req.setTimeout(TIMEOUT_MS, function () {
+      req.destroy();
+      fail(new Error("openbot-hop: upstream timeout"));
+    });
+    req.on("error", fail);
+    clientRes.on("close", function () {
+      if (!clientRes.writableEnded) req.destroy();
+    });
+    req.on("response", function (res) {
+      if (!looksLikeEventStream(res.headers, true)) {
+        collectResponse(res).then(function (out) {
+          if (!clientRes.headersSent) {
+            send(clientRes, out.status, out.raw, headerContentType(out.headers) || "application/json");
+          }
+          ok(out);
+        }, fail);
+        return;
+      }
+      var ctype = headerContentType(res.headers) || "text/event-stream";
+      clientRes.writeHead(res.statusCode || 200, {
+        "Content-Type": ctype,
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+      });
+      if (typeof clientRes.flushHeaders === "function") clientRes.flushHeaders();
+      var chunks = [];
+      res.on("data", function (c) {
+        chunks.push(c);
+        if (!clientRes.writableEnded) clientRes.write(c);
+      });
+      res.on("end", function () {
+        if (!clientRes.writableEnded) clientRes.end();
+        ok({ status: res.statusCode || 200, headers: res.headers, raw: Buffer.concat(chunks) });
+      });
+      res.on("error", fail);
+    });
     req.end();
   });
 }
@@ -342,12 +426,21 @@ async function handleCompletions(req, res) {
     }
     var upstream = completionsUrl(route.provider.origin);
     fields.upstreamEndpoint = upstream;
-    var out = await postUpstream(upstream, body, key);
-    record({
-      status: out.status,
-      responseRaw: Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw),
-    });
-    send(res, out.status, out.raw, (out.headers && (out.headers["content-type"] || out.headers["Content-Type"])) || "application/json");
+    var out;
+    if (body.stream === true) {
+      out = await pipeOrBufferUpstream(upstream, body, key, res);
+      record({
+        status: out.status,
+        responseRaw: Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw),
+      });
+    } else {
+      out = await postUpstream(upstream, body, key);
+      record({
+        status: out.status,
+        responseRaw: Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw),
+      });
+      send(res, out.status, out.raw, headerContentType(out.headers) || "application/json");
+    }
   } catch (err) {
     var failed = { error: { message: "hop failed" } };
     record({
@@ -398,3 +491,4 @@ exports.completionsUrl = completionsUrl;
 exports.hopParameters = hopParameters;
 exports.hopReasoning = hopReasoning;
 exports.applyMaxTokens = applyMaxTokens;
+exports.looksLikeEventStream = looksLikeEventStream;

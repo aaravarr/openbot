@@ -4,6 +4,7 @@ import {
   defaultMaxTokens,
   mapFinishReason,
   mapToolCalls,
+  messageContentText,
   unwrapJsonSchemaTools,
 } from "./translate.ts";
 import { HIGH_AGENT_MAX_TOKENS } from "../domain/types.ts";
@@ -43,6 +44,18 @@ test("mapFinishReason maps tool_calls to host tool-calls and honors stop", () =>
   assert.equal(mapFinishReason("tool_calls"), "tool-calls");
   assert.equal(mapFinishReason("stop"), "stop");
   assert.equal(mapFinishReason("length"), "length");
+});
+
+test("mapFinishReason keeps the host in the tool loop when tool_calls arrive with stop", () => {
+  assert.equal(mapFinishReason("stop", 1), "tool-calls");
+  assert.equal(mapFinishReason(undefined, 2), "tool-calls");
+  assert.equal(mapFinishReason("length", 1), "length");
+});
+
+test("messageContentText joins OpenAI text parts", () => {
+  assert.equal(messageContentText("plain"), "plain");
+  assert.equal(messageContentText([{ type: "text", text: "a" }, { type: "text", text: "b" }]), "ab");
+  assert.equal(messageContentText(null), "");
 });
 
 test("default max tokens is 65536, not 8192", () => {

@@ -186,6 +186,7 @@ function extractBodyError(payload) {
   if (typeof payload === "string") {
     var parsed = tryParseJson(payload);
     if (parsed !== undefined) return extractBodyError(parsed);
+    if (payload.indexOf("data:") !== -1) return extractSseError(payload);
     var text = payload.trim();
     return text ? text.slice(0, ERROR_CHARS) : undefined;
   }

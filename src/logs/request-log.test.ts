@@ -251,6 +251,24 @@ test("enabled record writes metadata without bodies by default on success", () =
   });
 });
 
+test("successful SSE chat.completion.chunk is not stored as an error", () => {
+  withSand(() => {
+    log.saveSettings({ loggingEnabled: true, logBodies: true, logBodiesOnError: true });
+    log.recordHop({
+      id: "req-sse-ok",
+      status: 200,
+      stream: true,
+      model: "deepseek-v4-flash-vision-exp",
+      requestBody: { model: "deepseek-v4-flash-vision-exp", stream: true, messages: [] },
+      responseBody: "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n",
+    });
+    const row = log.listRequests().items[0];
+    assert.equal(row?.ok, true);
+    assert.equal(row?.status, 200);
+    assert.equal(row?.error, undefined);
+  });
+});
+
 test("upstream-shaped 400 JSON keeps ok false and the error string", () => {
   withSand((dir) => {
     log.saveSettings({ loggingEnabled: true, logBodies: false, logBodiesOnError: true });

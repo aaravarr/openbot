@@ -119,6 +119,23 @@ test("jsonToHostParts does not wrap scratch reasoning JSON as SendToUser", () =>
   assert.equal(parts.some((p) => p.type === "tool-call"), false);
 });
 
+test("jsonToHostParts does not add SendToUser beside the model's other tools", () => {
+  const parts = stream.jsonToHostParts({
+    choices: [{
+      finish_reason: "tool_calls",
+      message: {
+        content: "我先看看查用户帖子和阅读量的工具和参数有啥。",
+        tool_calls: [
+          { id: "c1", function: { name: "GetDynamicTools", arguments: "{\"namespace\":\"user-X\",\"toolName\":\"get_users_posts\"}" } },
+        ],
+      },
+    }],
+  }, hostVoice);
+  assert.equal(parts.some((p) => p.type === "tool-call" && p.toolName === "SendToUser"), false);
+  assert.equal(parts.some((p) => p.type === "tool-call" && p.toolName === "GetDynamicTools"), true);
+  assert.equal(parts.find((p) => p.type === "finish")?.finishReason, "tool-calls");
+});
+
 test("jsonToHostParts does not map host reminder leftover as SendToUser", () => {
   const parts = stream.jsonToHostParts({
     choices: [{
@@ -150,6 +167,29 @@ test("SSE deltas assemble tool arguments and finish as tool-calls", () => {
   const tail = stream.finishSse(state);
   assert.equal(tail[0]?.type, "tool-call");
   assert.equal(tail[0]?.toolName, "get_users_me");
+  assert.equal(tail[1]?.finishReason, "tool-calls");
+});
+
+test("finishSse keeps GetDynamicTools and does not invent SendToUser beside it", () => {
+  const state = stream.newSseState();
+  stream.applyOpenAiEvent(state, JSON.stringify({
+    choices: [{ delta: { content: "我先看看查工具参数。" } }],
+  }));
+  stream.applyOpenAiEvent(state, JSON.stringify({
+    choices: [{
+      delta: {
+        tool_calls: [{
+          index: 0,
+          id: "call_x",
+          function: { name: "GetDynamicTools", arguments: "{\"namespace\":\"user-X\"}" },
+        }],
+      },
+      finish_reason: "tool_calls",
+    }],
+  }));
+  const tail = stream.finishSse(state, hostVoice);
+  assert.equal(tail.some((p) => p.type === "tool-call" && p.toolName === "SendToUser"), false);
+  assert.equal(tail[0]?.toolName, "GetDynamicTools");
   assert.equal(tail[1]?.finishReason, "tool-calls");
 });
 

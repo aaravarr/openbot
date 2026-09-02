@@ -3,6 +3,14 @@ import type { DotState } from "../components/ui";
 
 export type HealthItem = { word: string; value: string; state: DotState; label: string; fault?: string };
 
+const HEALTH_RANK: Record<DotState, number> = { fault: 3, warn: 2, ok: 1, off: 0 };
+
+/** Worst health item for the condensed mobile status strip (fault > warn > ok). */
+export function worstHealth(items: HealthItem[]): HealthItem | undefined {
+  if (!items.length) return undefined;
+  return items.reduce((worst, h) => (HEALTH_RANK[h.state] > HEALTH_RANK[worst.state] ? h : worst));
+}
+
 export function deriveHealth(state: BoxState, service: { ok: boolean; latencyMs?: number }): HealthItem[] {
   const host = state.snapshot.host;
   const port = state.snapshot.hopListen;

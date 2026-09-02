@@ -106,17 +106,18 @@ test("jsonToHostParts reads array content instead of dropping it", () => {
   assert.equal(parts[0]?.textDelta, "hello");
 });
 
-test("jsonToHostParts maps leftover assistant text onto host SendToUser shape", () => {
+test("jsonToHostParts does not map leftover assistant text onto SendToUser", () => {
+  const leftover = "Got it — you're connected, and here's your account and balance.";
   const parts = stream.jsonToHostParts({
     choices: [{
       finish_reason: "stop",
-      message: { content: "Got it — you're connected, and here's your account and balance." },
+      message: { content: leftover },
     }],
   }, hostVoice);
-  const voice = parts.find((p) => p.type === "tool-call" && p.toolName === "SendToUser");
-  assert.equal(voice?.args?.content, "Got it — you're connected, and here's your account and balance.");
-  assert.equal(voice?.args?.type, "text");
-  assert.equal(parts.find((p) => p.type === "finish")?.finishReason, "tool-calls");
+  assert.equal(parts.some((p) => p.type === "tool-call"), false);
+  assert.equal(parts[0]?.type, "text-delta");
+  assert.equal(parts[0]?.textDelta, leftover);
+  assert.equal(parts.find((p) => p.type === "finish")?.finishReason, "stop");
 });
 
 test("jsonToHostParts does not invent SendToUser text when the model wrote nothing", () => {
@@ -271,7 +272,7 @@ test("finishSse keeps GetDynamicTools and does not invent SendToUser beside it",
   assert.equal(tail[1]?.finishReason, "tool-calls");
 });
 
-test("finishSse maps leftover SSE text onto host SendToUser", () => {
+test("finishSse does not map leftover SSE text onto SendToUser", () => {
   const state = stream.newSseState();
   stream.applyOpenAiEvent(state, JSON.stringify({
     choices: [{ delta: { content: "Got it — you're connected." } }],
@@ -280,10 +281,9 @@ test("finishSse maps leftover SSE text onto host SendToUser", () => {
     choices: [{ finish_reason: "stop" }],
   }));
   const tail = stream.finishSse(state, hostVoice);
-  assert.equal(tail[0]?.type, "tool-call-streaming-start");
-  const voice = tail.find((p) => p.type === "tool-call" && p.toolName === "SendToUser");
-  assert.equal(voice?.args?.content, "Got it — you're connected.");
-  assert.equal(tail.at(-1)?.finishReason, "tool-calls");
+  assert.equal(tail.some((p) => p.type === "tool-call"), false);
+  assert.equal(tail[0]?.type, "finish");
+  assert.equal(tail[0]?.finishReason, "stop");
 });
 
 test("finishSse does not invent a second SendToUser when the model already called it", () => {
@@ -304,6 +304,15 @@ test("finishSse does not invent a second SendToUser when the model already calle
   const voices = tail.filter((p) => p.type === "tool-call" && p.toolName === "SendToUser");
   assert.equal(voices.length, 1);
   assert.equal(voices[0]?.args?.content, "hi");
+});
+
+test("mapAssistantTextToVoice leaves leftover text as leftover", () => {
+  const mapped = stream.mapAssistantTextToVoice(
+    "I've fetched your mentions and delivered a summary.",
+    [],
+    hostVoice,
+  );
+  assert.deepEqual(mapped, []);
 });
 
 test("iterateOpenAiResponse yields text-delta before the SSE stream ends", async () => {
@@ -374,14 +383,14 @@ test("assistantMessageContent keeps text and tool-call parts together", () => {
   assert.deepEqual(content[1]?.args, { namespace: "user-X" });
 });
 
-test("assistantMessageContent keeps leftover text beside synthesized SendToUser", () => {
+test("assistantMessageContent keeps text beside a model SendToUser", () => {
   const content = stream.assistantMessageContent([
     { type: "text-delta", textDelta: "Got it — you're connected." },
     {
       type: "tool-call",
-      toolCallId: "call_0",
+      toolCallId: "c1",
       toolName: "SendToUser",
-      args: { content: "Got it — you're connected.", type: "text" },
+      args: { content: "hi", type: "text" },
     },
     { type: "finish", finishReason: "tool-calls" },
   ]);
@@ -483,7 +492,7 @@ test("hopFullStream posts stream true and maps a JSON fallback", async () => {
   });
 });
 
-test("hopFullStream maps leftover stop text onto host SendToUser", async () => {
+test("hopFullStream leaves leftover stop text as text, not SendToUser", async () => {
   const leftover = "Got it — you're connected, and here's your account and balance.";
   await withHopServer({
     choices: [{
@@ -500,14 +509,13 @@ test("hopFullStream maps leftover stop text onto host SendToUser", async () => {
     );
     const parts: HostPart[] = [];
     for await (const part of result.fullStream) parts.push(part);
-    const voice = parts.find((p) => p.type === "tool-call" && p.toolName === "SendToUser");
-    assert.equal(voice?.args?.content, leftover);
-    assert.equal(voice?.args?.type, "text");
-    assert.equal(parts.find((p) => p.type === "finish")?.finishReason, "tool-calls");
+    assert.equal(parts.some((p) => p.type === "tool-call"), false);
+    assert.equal(parts.some((p) => p.type === "text-delta" && p.textDelta === leftover), true);
+    assert.equal(parts.find((p) => p.type === "finish")?.finishReason, "stop");
     const response = await result.response;
     const content = response.messages[0]?.content;
     assert.equal(content?.some((p) => p.type === "text" && p.text === leftover), true);
-    assert.equal(content?.some((p) => p.type === "tool-call" && p.toolName === "SendToUser"), true);
+    assert.equal(content?.some((p) => p.type === "tool-call"), false);
   });
 });
 

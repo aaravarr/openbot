@@ -67,6 +67,7 @@ async function freePort(): Promise<number> {
 async function startHop(input: {
   plan: unknown;
   secrets: unknown;
+  env?: Record<string, string>;
 }): Promise<{ port: number; child: ChildProcess }> {
   const dir = mkdtempSync(path.join(os.tmpdir(), "openbot-hop-"));
   const planPath = path.join(dir, "plan.json");
@@ -77,6 +78,7 @@ async function startHop(input: {
   const child = spawn(process.execPath, [hopServer], {
     env: {
       ...process.env,
+      ...input.env,
       OPENBOT_HOP_HOST: "127.0.0.1",
       OPENBOT_HOP_PORT: String(port),
       OPENBOT_SAND_DATA: dir,
@@ -104,12 +106,23 @@ async function captureUpstream(): Promise<{
   port: number;
   getAuth: () => string;
   getBody: () => Record<string, unknown> | undefined;
+  getVersion: () => string;
+  getUserAgent: () => string;
+  getPath: () => string;
 }> {
   let auth = "";
+  let version = "";
+  let userAgent = "";
+  let urlPath = "";
   let body: Record<string, unknown> | undefined;
   const { server, port } = await listen((req, res) => {
     const header = req.headers.authorization;
     auth = typeof header === "string" ? header : "";
+    const versionHeader = req.headers["x-openbot-version"];
+    version = typeof versionHeader === "string" ? versionHeader : "";
+    const ua = req.headers["user-agent"];
+    userAgent = typeof ua === "string" ? ua : "";
+    urlPath = req.url || "";
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
@@ -122,7 +135,15 @@ async function captureUpstream(): Promise<{
       );
     });
   });
-  return { server, port, getAuth: () => auth, getBody: () => body };
+  return {
+    server,
+    port,
+    getAuth: () => auth,
+    getBody: () => body,
+    getVersion: () => version,
+    getUserAgent: () => userAgent,
+    getPath: () => urlPath,
+  };
 }
 
 test("hop strips client Authorization and injects the secret store key", async () => {
@@ -277,7 +298,6 @@ test("hop leaves GLM thinking unset when old catalog none means default", async 
   }
 });
 
-
 test("hop sends GLM thinking disabled when Off is chosen after default exists", async () => {
   const upstream = await captureUpstream();
   const hop = await startHop({
@@ -398,3 +418,130 @@ test("hop fills tool_call_id on tool messages before the upstream", async () => 
   }
 });
 
+test("hop posts host reminder and hidden-prompt text unchanged", async () => {
+  const query =
+    "<timestamp>Wednesday, Sep 2, 2026, 3:35 PM (UTC+8)</timestamp>\n<user_query>\n[t1u]\n你看看\n\n<system_reminder>\nYou opened this turn by calling tools without first acknowledging the user\n</system_reminder>\n</user_query>";
+  const reminderOnly =
+    "<system_reminder>\nYou opened this turn by calling tools without first acknowledging the user, so they are watching silence\n</system_reminder>";
+  const redrive =
+    "<timestamp>Wednesday, Sep 2, 2026, 3:37 PM (UTC+8)</timestamp>\n<user_query>\n[SAND_HIDDEN_PROMPT][ack-redrive-1f661e5f-9e4c-4e49-863a-180a41fae668]\n[System recovery] The user sent one or more messages\n</user_query>";
+  const nudge =
+    "[SAND_HIDDEN_PROMPT] Your previous turn left the user without the result they are waiting on — you never called SendToUser. Invoke SendToUser now with the result.";
+  const upstream = await captureUpstream();
+  const hop = await startHop({
+    plan: {
+      kind: "custom",
+      catalog: {
+        providers: [
+          {
+            id: "deepseek",
+            name: "DeepSeek",
+            origin: `http://127.0.0.1:${String(upstream.port)}/v1`,
+            maxTokensDefault: 65536,
+            mapFile: "provider-maps.cjs",
+          },
+        ],
+        models: [{ id: "deepseek:v4", providerId: "deepseek", slug: "deepseek-v4-flash", parameters: [] }],
+        bindings: [],
+      },
+    },
+    secrets: { providers: { deepseek: "sk-deepseek" } },
+  });
+  try {
+    const out = await post(
+      hop.port,
+      {
+        model: "deepseek-v4-flash",
+        messages: [
+          { role: "user", content: query },
+          { role: "user", content: reminderOnly },
+          { role: "user", content: redrive },
+          { role: "user", content: nudge },
+        ],
+      },
+      { Authorization: "Bearer openbot-runtime" },
+    );
+    assert.equal(out.status, 200);
+    const body = upstream.getBody();
+    const messages = body?.messages as { role: string; content: string }[];
+    assert.equal(messages.length, 4);
+    assert.equal(messages[0]?.content, query);
+    assert.equal(messages[1]?.content, reminderOnly);
+    assert.equal(messages[2]?.content, redrive);
+    assert.equal(messages[3]?.content, nudge);
+  } finally {
+    hop.child.kill("SIGTERM");
+    upstream.server.close();
+  }
+});
+
+test("hop sends x-openbot-version from OPENBOT_COMMIT", async () => {
+  const upstream = await captureUpstream();
+  const hop = await startHop({
+    env: { OPENBOT_COMMIT: "cafed00d" },
+    plan: {
+      kind: "custom",
+      catalog: {
+        providers: [
+          {
+            id: "deepseek",
+            name: "DeepSeek",
+            origin: `http://127.0.0.1:${String(upstream.port)}/v1`,
+            maxTokensDefault: 65536,
+            mapFile: "provider-maps.cjs",
+          },
+        ],
+        models: [{ id: "deepseek:v4", providerId: "deepseek", slug: "deepseek-v4-flash", parameters: [] }],
+        bindings: [],
+      },
+    },
+    secrets: { providers: { deepseek: "sk-deepseek" } },
+  });
+  try {
+    const out = await post(hop.port, { model: "deepseek-v4-flash", messages: [] }, { Authorization: "Bearer openbot-runtime" });
+    assert.equal(out.status, 200);
+    assert.equal(upstream.getVersion(), "cafed00d");
+    assert.equal(upstream.getUserAgent(), "");
+    assert.equal(upstream.getPath(), "/v1/chat/completions");
+  } finally {
+    hop.child.kill("SIGTERM");
+    upstream.server.close();
+  }
+});
+
+test("hop copies inbound User-Agent and does not invent one", async () => {
+  const upstream = await captureUpstream();
+  const hop = await startHop({
+    env: { OPENBOT_COMMIT: "cafed00d" },
+    plan: {
+      kind: "custom",
+      catalog: {
+        providers: [
+          {
+            id: "deepseek",
+            name: "DeepSeek",
+            origin: `http://127.0.0.1:${String(upstream.port)}/v1`,
+            maxTokensDefault: 65536,
+            mapFile: "provider-maps.cjs",
+          },
+        ],
+        models: [{ id: "deepseek:v4", providerId: "deepseek", slug: "deepseek-v4-flash", parameters: [] }],
+        bindings: [],
+      },
+    },
+    secrets: { providers: { deepseek: "sk-deepseek" } },
+  });
+  try {
+    const out = await post(
+      hop.port,
+      { model: "deepseek-v4-flash", messages: [] },
+      { Authorization: "Bearer openbot-runtime", "User-Agent": "GrokBot/0.30" },
+    );
+    assert.equal(out.status, 200);
+    assert.equal(upstream.getVersion(), "cafed00d");
+    assert.equal(upstream.getUserAgent(), "GrokBot/0.30");
+  } finally {
+    hop.child.kill("SIGTERM");
+    upstream.server.close();
+  }
+});

@@ -5,7 +5,8 @@ set -euo pipefail
 HOST="${OPENBOT_HOST_MAIN:-/home/box/sand-host/host-main.cjs}"
 DATA="${OPENBOT_SAND_DATA:-/home/box/sand-data}"
 DEST="${OPENBOT_DEST:-$DATA/openbot}"
-REPO_TARBALL="${OPENBOT_TARBALL:-https://codeload.github.com/aaravarr/openbot/tar.gz/refs/heads/main}"
+DEFAULT_TARBALL="https://codeload.github.com/aaravarr/openbot/tar.gz/refs/heads/main"
+REPO_TARBALL="${OPENBOT_TARBALL:-$DEFAULT_TARBALL}"
 NODE_DIST="${OPENBOT_NODE_DIST:-https://nodejs.org/dist/v22.18.0}"
 NODE_VERSION="v22.18.0"
 
@@ -53,6 +54,60 @@ ensure_node() {
   export PATH="${dest}/bin:${PATH}"
 }
 
+# Computer tarball installs have no .git. Stamp payload/version.json so hop can
+# send x-openbot-version. Prefer OPENBOT_COMMIT, then git in OPENBOT_SRC, then
+# the GitHub SHA for the default main tarball. A lookup miss stamps unknown.
+resolve_install_commit() {
+  if [[ -n "${OPENBOT_COMMIT:-}" ]]; then
+    printf '%s' "${OPENBOT_COMMIT}"
+    return
+  fi
+  if [[ -n "${OPENBOT_SRC:-}" ]] && command -v git >/dev/null 2>&1; then
+    local src_sha
+    src_sha="$(git -C "${OPENBOT_SRC}" rev-parse HEAD 2>/dev/null || true)"
+    if [[ "${src_sha}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+      printf '%s' "${src_sha}"
+      return
+    fi
+  fi
+  if [[ "${REPO_TARBALL}" == "${DEFAULT_TARBALL}" ]] && command -v node >/dev/null 2>&1; then
+    local api_sha
+    api_sha="$(
+      curl -fsSL \
+        -H "Accept: application/vnd.github+json" \
+        -H "User-Agent: openbot-install" \
+        "https://api.github.com/repos/aaravarr/openbot/commits/main" \
+        | node -e '
+          let s = "";
+          process.stdin.on("data", (d) => { s += d; });
+          process.stdin.on("end", () => {
+            try {
+              const row = JSON.parse(s);
+              if (row && typeof row.sha === "string") process.stdout.write(row.sha);
+            } catch (err) {}
+          });
+        '
+    )" || true
+    if [[ "${api_sha}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+      printf '%s' "${api_sha}"
+      return
+    fi
+  fi
+  printf '%s' "unknown"
+}
+
+stamp_payload_version() {
+  local dest="$1"
+  local commit="$2"
+  mkdir -p "${dest}/payload"
+  node -e '
+    const fs = require("fs");
+    const dest = process.argv[1];
+    const commit = process.argv[2] || "unknown";
+    fs.writeFileSync(dest, JSON.stringify({ commit }) + "\n");
+  ' "${dest}/payload/version.json" "${commit}"
+}
+
 ensure_node
 
 if ! command -v node >/dev/null; then
@@ -68,17 +123,25 @@ fi
 
 mkdir -p "$DATA"
 
+COMMIT="$(resolve_install_commit)"
+
 if [[ -n "${OPENBOT_SRC:-}" ]]; then
   rm -rf "$DEST"
   mkdir -p "$DEST"
   cp -R "$OPENBOT_SRC"/. "$DEST"
 else
   TMP="$(mktemp -d)"
-  curl -fsSL "$REPO_TARBALL" | tar -xz -C "$TMP"
+  TARBALL="$REPO_TARBALL"
+  if [[ "$COMMIT" != "unknown" && "$REPO_TARBALL" == "$DEFAULT_TARBALL" ]]; then
+    TARBALL="https://codeload.github.com/aaravarr/openbot/tar.gz/${COMMIT}"
+  fi
+  curl -fsSL "$TARBALL" | tar -xz -C "$TMP"
   rm -rf "$DEST"
   mv "$TMP"/openbot-* "$DEST"
   rmdir "$TMP" 2>/dev/null || true
 fi
+
+stamp_payload_version "$DEST" "$COMMIT"
 
 cd "$DEST"
 exec node --experimental-strip-types src/cli.ts install --host-main "$HOST" --sand-data "$DATA"

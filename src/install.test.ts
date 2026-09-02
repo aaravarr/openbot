@@ -60,6 +60,9 @@ test("install.sh fetches Node 22 when the box node is too old", () => {
   assert.match(body, /node22/);
   assert.match(body, /node-\$\{NODE_VERSION\}-\$\{file\}/);
   assert.match(body, /linux-x64/);
+  assert.match(body, /stamp_payload_version/);
+  assert.match(body, /payload\/version\.json/);
+  assert.match(body, /OPENBOT_COMMIT/);
 });
 
 test("install.sh copies the tree, leaves the host stock, and starts the UI", async () => {
@@ -83,6 +86,7 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
       OPENBOT_SAND_DATA: sandData,
       OPENBOT_SRC: src,
       OPENBOT_DEST: path.join(sandData, "openbot"),
+      OPENBOT_COMMIT: "cafed00d",
       OPENBOT_TUNNEL: "off",
     },
   });
@@ -95,6 +99,10 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     assert.equal(result.stdout.includes("wrapBytesChanged"), false);
     assert.equal(readFileSync(hostMain, "utf8").includes(OPENBOT_MARKER), false);
     assert.equal(readFileSync(hostMain, "utf8").includes("function createProtoSessionProvider(client)"), true);
+    const stamped = JSON.parse(readFileSync(path.join(sandData, "openbot", "payload", "version.json"), "utf8")) as {
+      commit: string;
+    };
+    assert.equal(stamped.commit, "cafed00d");
     const html = await get(`${UI}/`);
     assert.equal(html.status, 200);
     assert.match(html.body, /OpenBot/);

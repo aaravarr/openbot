@@ -99,43 +99,57 @@ test("toOpenAIMessages never inserts a system_reminder of its own", () => {
   assert.equal((out[0]?.content ?? "").includes("Acknowledge them RIGHT NOW"), false);
 });
 
-test("toOpenAIMessages peels host system_reminder and keeps the user query", () => {
-  const out = toOpenAIMessages([
-    {
-      role: "user",
-      content:
-        "<timestamp>Wednesday, Sep 2, 2026, 3:35 PM (UTC+8)</timestamp>\n<user_query>\n[t1u]\n你看看\n\n<system_reminder>\nYou opened this turn by calling tools without first acknowledging the user\n</system_reminder>\n</user_query>",
-    },
-  ]);
+test("toOpenAIMessages keeps host system_reminder text verbatim", () => {
+  const content =
+    "<timestamp>Wednesday, Sep 2, 2026, 3:35 PM (UTC+8)</timestamp>\n<user_query>\n[t1u]\n你看看\n\n<system_reminder>\nYou opened this turn by calling tools without first acknowledging the user\n</system_reminder>\n</user_query>";
+  const out = toOpenAIMessages([{ role: "user", content }]);
   assert.equal(out.length, 1);
-  assert.match(out[0]?.content ?? "", /你看看/);
-  assert.equal((out[0]?.content ?? "").includes("system_reminder"), false);
-  assert.equal((out[0]?.content ?? "").includes("Acknowledge them RIGHT NOW"), false);
+  assert.equal(out[0]?.role, "user");
+  assert.equal(out[0]?.content, content);
 });
 
-test("toOpenAIMessages drops a user turn that is only a host reminder", () => {
+test("toOpenAIMessages keeps a user turn that is only a host reminder", () => {
+  const reminder =
+    "<system_reminder>\nYou opened this turn by calling tools without first acknowledging the user, so they are watching silence\n</system_reminder>";
   const out = toOpenAIMessages([
     { role: "assistant", content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "Read", arguments: "{}" } }] },
     { role: "tool", tool_call_id: "c1", content: "ok" },
-    {
-      role: "user",
-      content:
-        "<system_reminder>\nYou opened this turn by calling tools without first acknowledging the user, so they are watching silence\n</system_reminder>",
-    },
+    { role: "user", content: reminder },
   ]);
-  assert.equal(out.some((row) => row.role === "user"), false);
+  assert.equal(out.length, 3);
+  assert.equal(out[2]?.role, "user");
+  assert.equal(out[2]?.content, reminder);
   assert.equal(out[1]?.role, "tool");
 });
 
-test("toOpenAIMessages drops host ack-redrive recovery prompts", () => {
+test("toOpenAIMessages keeps host ack-redrive recovery prompts", () => {
+  const keepMe = "keep me";
+  const redrive =
+    "<timestamp>Wednesday, Sep 2, 2026, 3:37 PM (UTC+8)</timestamp>\n<user_query>\n[SAND_HIDDEN_PROMPT][ack-redrive-1f661e5f-9e4c-4e49-863a-180a41fae668]\n[System recovery] The user sent one or more messages\n</user_query>";
   const out = toOpenAIMessages([
-    { role: "user", content: "keep me" },
-    {
-      role: "user",
-      content:
-        "<timestamp>Wednesday, Sep 2, 2026, 3:37 PM (UTC+8)</timestamp>\n<user_query>\n[SAND_HIDDEN_PROMPT][ack-redrive-1f661e5f-9e4c-4e49-863a-180a41fae668]\n[System recovery] The user sent one or more messages\n</user_query>",
-    },
+    { role: "user", content: keepMe },
+    { role: "user", content: redrive },
+  ]);
+  assert.equal(out.length, 2);
+  assert.equal(out[0]?.content, keepMe);
+  assert.equal(out[1]?.content, redrive);
+});
+
+test("toOpenAIMessages keeps a SAND_HIDDEN_PROMPT delivery nudge verbatim", () => {
+  const nudge =
+    "[SAND_HIDDEN_PROMPT] Your previous turn left the user without the result they're waiting on — you never called SendToUser. Invoke SendToUser now with the result.";
+  const out = toOpenAIMessages([{ role: "user", content: nudge }]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0]?.role, "user");
+  assert.equal(out[0]?.content, nudge);
+});
+
+test("toOpenAIMessages keeps host reminder text inside array text parts", () => {
+  const text =
+    "<system_reminder>\nAcknowledge them RIGHT NOW\n</system_reminder>";
+  const out = toOpenAIMessages([
+    { role: "user", content: [{ type: "text", text }] },
   ]);
   assert.equal(out.length, 1);
-  assert.equal(out[0]?.content, "keep me");
+  assert.equal(out[0]?.content, text);
 });

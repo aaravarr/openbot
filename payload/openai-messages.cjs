@@ -100,24 +100,6 @@ function asOpenAiToolCall(part, index) {
   };
 }
 
-/** Peel host-injected reminder chrome. Never insert replacement text. */
-function stripHostInjectedText(raw) {
-  var s = String(raw == null ? "" : raw);
-  s = s.replace(/<system_reminder>[\s\S]*?<\/system_reminder>/g, "");
-  s = s.replace(/\[SAND_HIDDEN_PROMPT\][\s\S]*/g, "");
-  return s;
-}
-
-function isBlankAfterHostChrome(text) {
-  var s = stripHostInjectedText(text);
-  s = s.replace(/<timestamp>[\s\S]*?<\/timestamp>/g, "");
-  s = s.replace(/<user_query>([\s\S]*?)<\/user_query>/g, function (_all, inner) {
-    return String(inner || "").trim();
-  });
-  s = s.replace(/<\/?user_query>/g, "");
-  return s.trim() === "";
-}
-
 function contentToText(content) {
   if (content == null) {
     return "";
@@ -189,9 +171,6 @@ function convertParts(role, message, index) {
 
   var out = [];
   var text = texts.join("\n");
-  if (role === "user" || role === "system") {
-    text = stripHostInjectedText(text);
-  }
   var existingCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
   var toolCalls = calls.length ? calls : existingCalls;
 
@@ -209,9 +188,7 @@ function convertParts(role, message, index) {
     }
     out.push(row);
   } else if (role !== "tool" && (text || results.length === 0)) {
-    if (!(role === "user" && isBlankAfterHostChrome(text))) {
-      out.push({ role: role, content: text });
-    }
+    out.push({ role: role, content: text });
   }
 
   for (var r = 0; r < results.length; r++) {
@@ -227,19 +204,15 @@ function convertParts(role, message, index) {
     out.push(toolRow);
   }
 
-  if (out.length === 0 && role !== "user") {
-    out.push({ role: role === "tool" ? "tool" : "user", content: text });
+  if (out.length === 0) {
+    out.push({ role: role === "tool" ? "tool" : role || "user", content: text });
   }
   return out;
 }
 
 function convertOne(message, index) {
   if (!isRecord(message)) {
-    var raw = String(message || "");
-    if (isBlankAfterHostChrome(raw)) {
-      return [];
-    }
-    return [{ role: "user", content: stripHostInjectedText(raw) }];
+    return [{ role: "user", content: String(message || "") }];
   }
   var role = message.role;
   if (role === "function") {
@@ -263,13 +236,6 @@ function convertOne(message, index) {
   }
 
   var text = contentToText(message.content);
-  if (role === "user" || role === "system") {
-    text = stripHostInjectedText(text);
-  }
-  if (role === "user" && isBlankAfterHostChrome(text)) {
-    return [];
-  }
-
   var row = { role: role, content: text };
   if (role === "tool") {
     var id = toolCallIdOf(message);
@@ -325,11 +291,7 @@ function repairToolCallIds(messages) {
 
 function toOpenAIMessages(msgs) {
   if (!Array.isArray(msgs)) {
-    var one = String(msgs || "");
-    if (isBlankAfterHostChrome(one)) {
-      return [{ role: "user", content: "" }];
-    }
-    return [{ role: "user", content: stripHostInjectedText(one) }];
+    return [{ role: "user", content: String(msgs || "") }];
   }
   var out = [];
   for (var i = 0; i < msgs.length; i++) {
@@ -345,5 +307,3 @@ function toOpenAIMessages(msgs) {
 exports.toOpenAIMessages = toOpenAIMessages;
 exports.repairToolCallIds = repairToolCallIds;
 exports.toolCallIdOf = toolCallIdOf;
-exports.stripHostInjectedText = stripHostInjectedText;
-exports.isBlankAfterHostChrome = isBlankAfterHostChrome;

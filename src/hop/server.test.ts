@@ -398,3 +398,59 @@ test("hop fills tool_call_id on tool messages before the upstream", async () => 
   }
 });
 
+test("hop posts host reminder and hidden-prompt text unchanged", async () => {
+  const query =
+    "<timestamp>Wednesday, Sep 2, 2026, 3:35 PM (UTC+8)</timestamp>\n<user_query>\n[t1u]\n你看看\n\n<system_reminder>\nYou opened this turn by calling tools without first acknowledging the user\n</system_reminder>\n</user_query>";
+  const reminderOnly =
+    "<system_reminder>\nYou opened this turn by calling tools without first acknowledging the user, so they are watching silence\n</system_reminder>";
+  const redrive =
+    "<timestamp>Wednesday, Sep 2, 2026, 3:37 PM (UTC+8)</timestamp>\n<user_query>\n[SAND_HIDDEN_PROMPT][ack-redrive-1f661e5f-9e4c-4e49-863a-180a41fae668]\n[System recovery] The user sent one or more messages\n</user_query>";
+  const nudge =
+    "[SAND_HIDDEN_PROMPT] Your previous turn left the user without the result they are waiting on — you never called SendToUser. Invoke SendToUser now with the result.";
+  const upstream = await captureUpstream();
+  const hop = await startHop({
+    plan: {
+      kind: "custom",
+      catalog: {
+        providers: [
+          {
+            id: "deepseek",
+            name: "DeepSeek",
+            origin: `http://127.0.0.1:${String(upstream.port)}/v1`,
+            maxTokensDefault: 65536,
+            mapFile: "provider-maps.cjs",
+          },
+        ],
+        models: [{ id: "deepseek:v4", providerId: "deepseek", slug: "deepseek-v4-flash", parameters: [] }],
+        bindings: [],
+      },
+    },
+    secrets: { providers: { deepseek: "sk-deepseek" } },
+  });
+  try {
+    const out = await post(
+      hop.port,
+      {
+        model: "deepseek-v4-flash",
+        messages: [
+          { role: "user", content: query },
+          { role: "user", content: reminderOnly },
+          { role: "user", content: redrive },
+          { role: "user", content: nudge },
+        ],
+      },
+      { Authorization: "Bearer openbot-runtime" },
+    );
+    assert.equal(out.status, 200);
+    const body = upstream.getBody();
+    const messages = body?.messages as { role: string; content: string }[];
+    assert.equal(messages.length, 4);
+    assert.equal(messages[0]?.content, query);
+    assert.equal(messages[1]?.content, reminderOnly);
+    assert.equal(messages[2]?.content, redrive);
+    assert.equal(messages[3]?.content, nudge);
+  } finally {
+    hop.child.kill("SIGTERM");
+    upstream.server.close();
+  }
+});

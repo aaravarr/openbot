@@ -187,13 +187,16 @@ test("jsonToHostParts emits start then delta then complete tool-call", () => {
 });
 
 test("jsonToHostParts does not map host reminder leftover as SendToUser", () => {
+  const leftover = "<system_reminder>\nAcknowledge them RIGHT NOW\n</system_reminder>";
   const parts = stream.jsonToHostParts({
     choices: [{
       finish_reason: "stop",
-      message: { content: "<system_reminder>\nAcknowledge them RIGHT NOW\n</system_reminder>" },
+      message: { content: leftover },
     }],
   }, hostVoice);
   assert.equal(parts.some((p) => p.type === "tool-call"), false);
+  assert.equal(parts.some((p) => p.type === "text-delta" && p.textDelta === leftover), true);
+  assert.equal(parts.find((p) => p.type === "finish")?.finishReason, "stop");
 });
 
 test("SSE deltas assemble tool arguments and finish as tool-calls", () => {
@@ -516,6 +519,44 @@ test("hopFullStream leaves leftover stop text as text, not SendToUser", async ()
     const content = response.messages[0]?.content;
     assert.equal(content?.some((p) => p.type === "text" && p.text === leftover), true);
     assert.equal(content?.some((p) => p.type === "tool-call"), false);
+  });
+});
+
+test("hopFullStream posts host reminder and hidden-prompt text unchanged", async () => {
+  const query =
+    "<timestamp>Wednesday, Sep 2, 2026, 3:35 PM (UTC+8)</timestamp>\n<user_query>\n[t1u]\n你看看\n\n<system_reminder>\nYou opened this turn by calling tools without first acknowledging the user\n</system_reminder>\n</user_query>";
+  const reminderOnly =
+    "<system_reminder>\nYou opened this turn by calling tools without first acknowledging the user, so they are watching silence\n</system_reminder>";
+  const redrive =
+    "<timestamp>Wednesday, Sep 2, 2026, 3:37 PM (UTC+8)</timestamp>\n<user_query>\n[SAND_HIDDEN_PROMPT][ack-redrive-1f661e5f-9e4c-4e49-863a-180a41fae668]\n[System recovery] The user sent one or more messages\n</user_query>";
+  const nudge =
+    "[SAND_HIDDEN_PROMPT] Your previous turn left the user without the result they're waiting on — you never called SendToUser. Invoke SendToUser now with the result.";
+  await withHopServer({
+    choices: [{
+      finish_reason: "stop",
+      message: { content: "ok" },
+    }],
+  }, async (runtime, seen) => {
+    const { fullStream } = runtime.hopFullStream(
+      {
+        getMessages: () => [
+          { role: "user", content: query },
+          { role: "user", content: reminderOnly },
+          { role: "user", content: redrive },
+          { role: "user", content: nudge },
+        ],
+      },
+      { modelId: "glm-5.3-flash", maxOutputTokens: 4096 },
+    );
+    const parts: HostPart[] = [];
+    for await (const part of fullStream) parts.push(part);
+    const posted = seen[0]?.messages as Array<{ role: string; content: string }> | undefined;
+    assert.equal(posted?.length, 4);
+    assert.equal(posted?.[0]?.content, query);
+    assert.equal(posted?.[1]?.content, reminderOnly);
+    assert.equal(posted?.[2]?.content, redrive);
+    assert.equal(posted?.[3]?.content, nudge);
+    assert.equal(parts.some((p) => p.type === "tool-call"), false);
   });
 });
 

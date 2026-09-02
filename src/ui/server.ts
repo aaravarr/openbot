@@ -2,7 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { LOOPBACK, SERVICE_PORT, type Catalog, type Snapshot, type TunnelObserved } from "../domain/types.ts";
 import { officialBox } from "../parse/argv.ts";
 import { fetchModelsForProvider } from "../catalog/provider-models.ts";
@@ -370,55 +370,90 @@ function safeUiPath(urlPath: string): string | undefined {
   return resolved;
 }
 
-const server = http.createServer((req, res) => {
-  void (async () => {
-    try {
-      const url = new URL(req.url ?? "/", `http://${host}:${String(port)}`);
-      if (url.pathname.startsWith("/api/")) {
-        await handleApi(req, res, url);
-        return;
-      }
-      if (await hop.handleHopRequest(req, res)) {
-        return;
-      }
-      const file = safeUiPath(url.pathname);
-      if (file === undefined) {
-        send(res, 403, "forbidden", "text/plain; charset=utf-8");
-        return;
-      }
-      let body: Buffer;
-      try {
-        const stat = fs.statSync(file);
-        if (!stat.isFile()) {
-          send(res, 404, "not found", "text/plain; charset=utf-8");
-          return;
-        }
-        body = fs.readFileSync(file);
-      } catch (err) {
-        const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
-        if (code === "ENOENT") {
-          send(res, 404, "not found", "text/plain; charset=utf-8");
-          return;
-        }
-        throw err;
-      }
-      const ext = path.extname(file);
-      const type = TYPES[ext] ?? "application/octet-stream";
-      send(res, 200, body, type);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "error";
-      if (!res.headersSent) {
-        sendJson(res, 500, { error: message });
-      }
+export async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  try {
+    const url = new URL(req.url ?? "/", `http://${host}:${String(port)}`);
+    if (url.pathname.startsWith("/api/")) {
+      await handleApi(req, res, url);
+      return;
     }
-  })();
+    if (await hop.handleHopRequest(req, res)) {
+      return;
+    }
+    const file = safeUiPath(url.pathname);
+    if (file === undefined) {
+      send(res, 403, "forbidden", "text/plain; charset=utf-8");
+      return;
+    }
+    let body: Buffer;
+    try {
+      const stat = fs.statSync(file);
+      if (!stat.isFile()) {
+        send(res, 404, "not found", "text/plain; charset=utf-8");
+        return;
+      }
+      body = fs.readFileSync(file);
+    } catch (err) {
+      const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
+      if (code === "ENOENT") {
+        send(res, 404, "not found", "text/plain; charset=utf-8");
+        return;
+      }
+      throw err;
+    }
+    const ext = path.extname(file);
+    const type = TYPES[ext] ?? "application/octet-stream";
+    send(res, 200, body, type);
+  } catch (err) {
+    // A handler (sync or async) threw: return a structured 500 rather than
+    // letting the rejection escape into an uncaught exception.
+    const message = err instanceof Error ? err.message : "internal error";
+    if (!res.headersSent) {
+      sendJson(res, 500, { error: { kind: "internal", message } });
+    }
+  }
+}
+
+const server = http.createServer((req, res) => {
+  void handleRequest(req, res);
 });
 
-server.listen(port, host, () => {
-  const box = paths();
-  fs.mkdirSync(box.sandData, { recursive: true });
-  fs.writeFileSync(box.uiPid, `${String(process.pid)}\n`);
-  // Non-blocking: load the public catalog cache from disk, then re-fetch in the background.
-  void modelCatalog().start();
-  process.stdout.write(`openbot listening on http://${host}:${String(port)}\n`);
-});
+/**
+ * Last-resort process guards. This is a single-user local tool: staying up
+ * beats dying, so an unexpected exception or rejection is logged (with stack)
+ * and the process keeps serving. These are a final safety net only — they are
+ * NOT a substitute for local error handling; every child_process spawn and
+ * async handler must still surface its own failures.
+ */
+export function registerProcessFallbacks(
+  log: (line: string) => void = (line) => process.stderr.write(line),
+): void {
+  process.on("uncaughtException", (err) => {
+    log(`OpenBot: uncaught exception (process kept alive): ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
+  });
+  process.on("unhandledRejection", (reason) => {
+    log(
+      `OpenBot: unhandled rejection (process kept alive): ${
+        reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)
+      }\n`,
+    );
+  });
+}
+
+function startServer(): void {
+  registerProcessFallbacks();
+  server.listen(port, host, () => {
+    const box = paths();
+    fs.mkdirSync(box.sandData, { recursive: true });
+    fs.writeFileSync(box.uiPid, `${String(process.pid)}\n`);
+    // Non-blocking: load the public catalog cache from disk, then re-fetch in the background.
+    void modelCatalog().start();
+    process.stdout.write(`openbot listening on http://${host}:${String(port)}\n`);
+  });
+}
+
+// Start only when this file is the entry point; importing it (e.g. from tests)
+// must not open a listener or install the process guards.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  startServer();
+}

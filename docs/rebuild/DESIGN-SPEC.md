@@ -170,9 +170,9 @@ attribute. Every clickable element has `cursor: pointer`.
 | **Ink solid** (strong non-save: Send, Start tunnel) | 32 / 14 / `--r-md` / 13·600 | bg `--ink`, text `--canvas` | 90% opacity | 85% opacity | spinner |
 | **Danger solid** (inside confirm dialogs only) | 32 / 14 / `--r-md` / 13·600 | bg `--danger-solid`, text #fff | `--danger-solid-hover` | darker | spinner |
 | **Ghost** | 32 / 10 / `--r-md` / 13·500 | transparent, text `--body` | bg `--surface-3`, text `--ink` | — | — |
-| **Ghost small** (table/header action groups) | 28 / 10 / `--r-sm` / 12·500 | transparent, text `--body`, 1 px `--hairline` | bg `--surface-3`, text `--ink` | — | — |
+| **Ghost small** (table/header action groups) | 28 / 8 / `--r-sm` / 11·500 + 12 px icon | transparent, text `--body`, 1 px `--hairline` | bg `--surface-3`, text `--ink` | — | — |
 | **Ghost danger** (destructive *entry points*) | 32 / 10 / `--r-md` / 13·500 | transparent, text `--danger` | bg `--danger-tint` | — | — |
-| **Ghost danger small** | 28 / 10 / `--r-sm` / 12·500 | transparent, text `--danger`, 1 px `--hairline` | bg `--danger-tint` | — | — |
+| **Ghost danger small** | 28 / 8 / `--r-sm` / 11·500 + 12 px icon | transparent, text `--danger`, 1 px `--hairline` | bg `--danger-tint` | — | — |
 | **Icon button** | 28×28 / — / `--r-sm` / 16 px icon | transparent, icon `--muted` | bg `--surface-3`, icon `--ink` | — | spin |
 
 Rules: one `--primary` button per view. Destructive actions are never inline solid red — the

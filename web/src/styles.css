@@ -382,14 +382,16 @@ code, kbd, .mono { font-family: var(--font-mono); }
 .btn--ghost { background: transparent; color: var(--body); font-weight: 500; }
 .btn--ghost:hover:not(:disabled) { background: var(--surface-3); color: var(--ink); }
 
-.btn--ghost-sm { height: 28px; padding: 0 10px; font-size: var(--text-sm); font-weight: 500; background: transparent; color: var(--body); border-color: var(--hairline); }
+.btn--ghost-sm { height: 28px; padding: 0 8px; font-size: var(--text-xs); font-weight: 500; background: transparent; color: var(--body); border-color: var(--hairline); }
 .btn--ghost-sm:hover:not(:disabled) { background: var(--surface-3); color: var(--ink); border-color: var(--hairline-strong); }
+.btn--ghost-sm svg { width: 12px; height: 12px; }
 
 .btn--ghost-danger { background: transparent; color: var(--danger); font-weight: 500; }
 .btn--ghost-danger:hover:not(:disabled) { background: var(--danger-tint); }
 
-.btn--ghost-danger-sm { height: 28px; padding: 0 10px; font-size: var(--text-sm); font-weight: 500; background: transparent; color: var(--danger); border-color: var(--hairline); }
+.btn--ghost-danger-sm { height: 28px; padding: 0 8px; font-size: var(--text-xs); font-weight: 500; background: transparent; color: var(--danger); border-color: var(--hairline); }
 .btn--ghost-danger-sm:hover:not(:disabled) { background: var(--danger-tint); color: var(--danger-strong); }
+.btn--ghost-danger-sm svg { width: 12px; height: 12px; }
 
 .btn .spinner { width: 13px; height: 13px; }
 .spinner { display: inline-block; flex: none; animation: spin 1s linear infinite; }
@@ -995,19 +997,59 @@ tr.is-open .row-indicator { border-left-color: var(--primary); }
   .health-grid { grid-template-columns: repeat(3, 1fr); }
   .master-detail { grid-template-columns: 260px 1fr; }
 }
-@media (max-width: 860px) {
+
+/* Mobile (≤768px): top nav collapses to the bottom tab bar, single-column
+   layout, dialogs/drawers become near-fullscreen bottom sheets. */
+@media (max-width: 768px) {
   .master-detail { grid-template-columns: 1fr; }
   .health-grid { grid-template-columns: 1fr 1fr; }
   .preset-grid { grid-template-columns: 1fr 1fr; }
   .nav { display: none; }
-  .bottom-tabs { display: block; }
-  .main { padding-bottom: 72px; }
+  .bottom-tabs { display: block; height: 60px; }
   .status-strip { overflow-x: auto; }
   .loopback-chip { display: none; }
+
+  /* Tighten the content column and leave room for the fixed bottom tabs. */
+  .main { padding: var(--sp-3) var(--sp-3) 88px; }
+  .page-title-row { flex-wrap: wrap; row-gap: var(--sp-2); }
+  .def-grid { grid-template-columns: 108px 1fr; }
+  .token-trio { flex-direction: column; }
+
+  /* Tables scroll within their card, never the page (no horizontal page scroll). */
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* Dialog / drawer → near-fullscreen bottom sheet. */
+  .overlay { align-items: flex-end; padding: 0; }
+  .overlay--drawer { align-items: stretch; }
+  .dialog {
+    width: 100%; max-width: 100%;
+    max-height: 92vh; overflow-y: auto;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+  }
+  .dialog--wide { width: 100%; }
+  .dialog--import {
+    width: 100%; max-width: 100%; max-height: 94vh;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    overflow: hidden;
+  }
+  .drawer { width: 100%; max-width: 100%; }
+
+  /* Touch targets for primary / dialog actions (dense inline actions stay
+     compact per the desktop density spec). */
+  .dialog__foot { flex-wrap: wrap; }
+  .dialog__foot .btn { height: 44px; flex: 1; }
+  .import-foot { flex-wrap: wrap; }
+  .import-foot .btn { height: 44px; }
+  .btn--primary-lg { height: 44px; }
+
+  /* Listbox panels must never overflow the viewport. */
+  .listbox__panel { min-width: 0; width: min(320px, calc(100vw - 24px)); }
+
+  /* Toasts sit above the bottom tabs. */
+  .toast-stack { top: auto; bottom: 76px; right: var(--sp-3); width: calc(100vw - 24px); max-width: 420px; }
 }
+
 @media (max-width: 520px) {
   .preset-grid { grid-template-columns: 1fr; }
   .health-grid { grid-template-columns: 1fr; }
-  .toast-stack { width: auto; }
-  .token-trio { flex-direction: column; }
 }

@@ -46,21 +46,12 @@ function openBotVersion() {
   return stamped;
 }
 
-function openBotUserAgent() {
-  return "openbot/" + openBotVersion();
-}
-
 function applyOpenBotVersionHeader(headers) {
   if (!headers || typeof headers !== "object") return headers;
-  var version = openBotVersion();
-  headers[HEADER] = version;
-  if (!headers["User-Agent"] && !headers["user-agent"]) {
-    headers["User-Agent"] = "openbot/" + version;
-  }
+  headers[HEADER] = openBotVersion();
   return headers;
 }
 
 exports.HEADER = HEADER;
 exports.openBotVersion = openBotVersion;
-exports.openBotUserAgent = openBotUserAgent;
 exports.applyOpenBotVersionHeader = applyOpenBotVersionHeader;

@@ -17,7 +17,7 @@ This document is a dump for injection tuning. Completeness beats narrative.
 | Binary client fallback stamp | `0.33.0-pre.2` (`SAND_CLIENT_APP_VERSION` env overrides; OpenBot docs call this surface **0.30**) |
 | Official host analyzed | `/home/box/sand-data/host-main.cjs.pre-openbot` (27,607,506 bytes; SHA-256 prefix `99d263f61322a77a`) |
 | Live `/home/box/sand-host/host-main.cjs` | Same SAND identifiers; prefixed with `/* openbot-stock-wrap */` only. **Not used as source of truth.** |
-| Dump | Read-only. First pass 2026-09-02T17:52Z; string-recovery pass 2026-09-02T18:07Z. Host not patched. `sand-host` not killed. `node host-main.cjs` not started. |
+| Dump | Read-only. First pass 2026-09-02T17:52Z; string-recovery pass 2026-09-02T18:07Z; injector-gap pass 2026-09-02T18:30Z. Host not patched. `sand-host` not killed. `node host-main.cjs` not started. |
 | Also searched | `/home/box/sand-host/**` except `node_modules`; `sand-eval-runner.cjs`; `agent-isolation/*-worker.cjs`; `box-scripts/` |
 
 `sand-eval-runner.cjs` contains copies of `<system_reminder>`, `[SAND_HIDDEN_PROMPT]`, `<user_query>`, `<timestamp>`. It is the eval runner, not the live chat path. Isolation workers contain `system_reminder` as serialized conversation data, not injectors. `box-scripts/` does not inject into the model stream.
@@ -58,6 +58,7 @@ session.getExecutor()
 | Automation fire | `true`, `isSilenceAllowed: true` | `"automation"` | silence allowed |
 | Background wakes (channel, event, revival, peer) | `true` | varies | sometimes `ensureHiddenTurnReply` |
 | Upgrade / box / MCP / listener resume | `true` | `"handoff-resume"` or resumed source | none |
+| Form / secret / draft / reaction / virtual-card resume (`resumeWithHiddenPrompt`) | `true` | `"handoff-resume"` | none |
 | Voice-call runtime | `true` | `"voice-call"` | none |
 | Automation subagent | `true`, `isSilenceAllowed: true` | inherited | n/a |
 
@@ -715,6 +716,67 @@ Footer (non-parent-mediated): carry out saved prompt; SendToUser if worth surfac
 
 Ack/start-of-turn/send-message middlewares **not** installed (`isSilenceAllowed`).
 
+### 3.33a Automation subagent wrapper — `buildAutomationSubagentPrompt`
+
+| Field | Value |
+| --- | --- |
+| Symbol | `buildAutomationSubagentPrompt` |
+| Role | `user` (the **subagent** stream, not the parent) |
+| Hidden | Same hidden/trusted markers as the inner 3.33 `wakePrompt` |
+| Loop position | `runner.runAutomationAsSubagent` when `runAsSubagent === true` (non-group). Parent transcript is **not** copied. |
+
+Full template (lines joined with `\n`):
+
+```text
+${wakePrompt}
+
+You are running this automation as a fresh subagent.
+The parent agent's shared durable memories are available in your system context.
+Parent transcript pointer: ${parentTranscriptPointer}
+Use that pointer only if the task truly needs earlier conversational detail; the parent transcript has deliberately not been copied into this prompt.
+```
+
+Then **either** parent-mediated:
+
+```text
+Stay quiet by default: do not acknowledge this run or send progress updates. You cannot mutate the visible transcript, so instructions above to communicate directly must be fulfilled through WakeParent. Old saved instructions may name SendMessage or SendToUser; both names are deprecated and unavailable in this run. Treat either as a semantic request for outward or user-visible communication: do not try to discover or call it, and call WakeParent with the complete payload or handoff instead. WakeParent is the only route that starts or revives the parent so it can communicate outside this run. If the saved instruction itself requires user-visible communication—for example, pinging, reminding, telling, notifying, asking, or saying something to the user—you MUST call WakeParent, even when the work succeeded. A normal final assistant response does not wake the parent and does not itself reach the user. Also call WakeParent when the parent must communicate with another agent, make a decision, or take over a blocker, and include the complete outcome and what the parent should communicate or do because the call immediately ends your turn. For background work whose result can wait until the parent's next natural safe boundary, do not call WakeParent. End with a concise, complete final assistant response in plain text; it is persisted silently as the automation result for the parent to receive at that boundary, and earlier assistant text is not included.
+```
+
+**or** non-parent-mediated:
+
+```text
+Use SendToUser for one-way user-visible updates when something is worth surfacing, while preserving the automation's silence contract when there is nothing to report. Always end with a concise, complete final assistant response in plain text, even if you used SendToUser. Only that final assistant response is relayed durably to the parent agent as the automation result; earlier assistant text and SendToUser updates are not included.
+```
+
+**Does not fire:** parent (non-subagent) automation wakes — those use 3.33 alone.
+
+Related system-prompt essays (`SAND_AUTOMATION_SUBAGENT_PROMPT_SECTION`, `SAND_PARENT_MEDIATED_AUTOMATION_SUBAGENT_*`) are **system** role, not this user wrapper.
+
+### 3.33b Spend-guard nudge reminder (appended to `[routine]` wake)
+
+| Field | Value |
+| --- | --- |
+| Symbol | `renderSpendGuardNudgeReminder` |
+| Role | `user` (spliced onto the 3.33 `wakePrompt` with `\n\n` before `runner.run`) |
+| Hidden | **Yes** — rides the automation wake (`hidden: true`) |
+| Installed | Background automation trigger, non-group, `spendGuard.apply` decision `"nudge"` |
+
+Full text:
+
+```text
+<system_reminder>
+The user ${hasn't opened this chat since <timestamp> | has never opened this chat} — ${unreadCount} of your messages are unread and your routines have run ${firesSinceViewedCount} times since then. They may be spending money on work nobody is reading.
+The app has already asked them directly whether to keep your routines running, and applies their answer itself. Do NOT ask again yourself and do NOT edit any automation.json; just acknowledge their choice if it comes back as their reply.
+If they neither answer nor return by ${now + 3d}, the app will pause ALL of this agent's routines and tell them so.
+</system_reminder>
+```
+
+**Fires when all hold:** `!isGroup`; `isBackgroundAutomationTrigger`; spend-guard decision is `nudge` (user idle ≥ `SPEND_GUARD_IDLE_TTL_MS` = 3 days, and unread ≥ 15 **or** routine fires since last view ≥ 20, and not snoozed/opted-out). Also **issues a user-visible widget card** (`buildSpendGuardNudgeWidget`); that card is transcript chrome, not this inject.
+
+**Does not fire when:** group session; user-active / snoozed / opted-out / awaiting-ack / pause (pause **drops** the fire with `user_away_paused` instead of injecting); already paused.
+
+The user's later widget click is a **separate** person-opened inject (3.59), not this reminder.
+
 ### 3.34 Timeline `[event]` wake
 
 | Field | Value |
@@ -1017,6 +1079,33 @@ When the user @-mentions agents, `buildMentionedAgentsContext` prepends:
 
 Inserted via skill-command expansion in `dispatchUserTurn` (`withMentionedAgentsContext`). Empty mention list returns `null`.
 
+### 3.49a Skill-run expansion — `buildSkillRunPrompt`
+
+| Field | Value |
+| --- | --- |
+| Symbols | `buildSkillRunPrompt`, `expandSkillReferences` (`skill-references.ts`); `SKILL_INJECTED_BODY_LIMIT = 8000` |
+| Role | `user` (prepended onto the opening person-opened prompt in `dispatchUserTurn`, **before** mentioned-agents 3.49) |
+| Hidden marker | No (person-opened send). Schedule-triggered skill runs use the `[routine]` cue and go through automation (3.33), not this expander. |
+
+User-invoked template (`trigger: "reference"`), lines joined with `\n`:
+
+```text
+The user invoked the "${skill.name}" skill (${identity}). Run it now.
+What it does: ${description}          # omitted if empty
+Recipe to follow:
+${clampBlock(skill.body, 8000)}
+Helper files live beside this skill in ${dir}: ${helperScripts}. Use them with Shell as the recipe directs.   # if helpers
+Carry out the recipe now, adapting it to anything else the user said in this message.
+```
+
+`identity`: `managed skill id ${id}` / `plugin skill id ${id}, file ${filePath}` / `folder ${id}`.
+
+If `skill.id === "learn-from-demonstration"` and a 64-hex `teachQueueScope` is present, append `Teach recording queue scope: ${scope}`. Teach-recording persistence uses user text `The recording is finished. Learn the task from it.` (`TEACH_RECORDING_PERSISTED_PROMPT`) plus a skill-reference rich-text node; this expander then injects the recipe.
+
+**Fires:** `collectSkillReferences(richText)` yields ids the skill store can resolve.
+
+**Does not fire:** no skill references in rich text; unknown ids skipped; empty prompt after expansion is unchanged. Group sessions still expand skills (mentioned-agents 3.49 is what group skips).
+
 ### 3.50 Group-chat member turn — `buildGroupTurnPrompt`
 
 | Field | Value |
@@ -1047,14 +1136,36 @@ If `isWindingDown`: `The room is wrapping up this turn: reply only if it's essen
 
 SendToUser in a group turn goes to the room (text only). Hitting the per-turn send cap is a **tool error**, not a user inject: `Not delivered — you've reached this room turn's 3-message limit. Consolidate, or wait for your next turn.`
 
-### 3.51 Secret-request / widget / auto-review cards (user-visible transcript, not extra model user text)
+### 3.50a Group redrive note — `buildGroupRedriveNote`
 
-These are **SendToUser tool results / host cards**, not harness-injected user prompts:
+| Field | Value |
+| --- | --- |
+| Symbol | `buildGroupRedriveNote` |
+| Role | `user` (appended to the **same** 3.50 group-member prompt on retry) |
+| Hidden marker | No (`runner.run(..., { isGroupMemberTurn: true })` does not set `hidden`) |
+| Max | Attempts 2 and 3 only (`maxAttempts = 3`) |
 
-- Widget / secret-request / user-form / permission / connector cards increment `sentMessageCount`.
+Full text (leading newline included):
+
+```text
+
+(Redelivery: your previous attempt at this turn was interrupted by a direct message to you. The room has NOT seen any reply from you for the messages above — anything you said or did while handling that direct message stayed in that private chat. If you already did the work, send the result to this room with SendToUser now; otherwise take the turn normally.)
+```
+
+**Fires:** `runGroupMemberTurn` retries because a DM preempted the member (`dmPreemptedGroupMemberIds`) **and** this attempt sent no room text, applied no reaction, `attempt < 3`, and the room turn is still current.
+
+**Does not fire:** first attempt; member already sent/reacted; room turn no longer current; session lost on re-pin.
+
+
+### 3.51 Secret-request / widget / auto-review cards (pending chrome; resolutions in 3.54–3.59)
+
+The **cards themselves** are SendToUser tool results / host chrome (they increment `sentMessageCount`). Several **resolutions** of those cards **do** inject a later user prompt — see 3.54–3.59. Remaining non-inject chrome:
+
+- Permission / connector / auto-review **cards** while pending.
 - `SAND_AWAITING_USER_SEND_MESSAGE_BLOCKED` is a **tool error string** if the model tries another SendToUser while awaiting the user: `This turn is already waiting on the user (you sent a question widget or handed the box back to them), so this message was not delivered. Wait for the user — their response arrives as the next message — then say this on your next turn.`
-- Auto-review approval cards and classifier **system** prompt (`SAND_AUTO_REVIEW_CLASSIFIER_SYSTEM_PROMPT`, ~60k chars) run on a **classifier** model, not the chat turn’s user stream.
+- Auto-review classifier **system** prompt (`SAND_AUTO_REVIEW_CLASSIFIER_SYSTEM_PROMPT`, ~60k chars) runs on a **classifier** model, not the chat turn’s user stream.
 - Local-tool denial/expiry strings (`SAND_LOCAL_TOOLS_*_MESSAGE`) are **tool results**.
+- `buildUserFormSkippedFieldsNote` is a **tool-result** suffix on `request_user_form`, not a new user message.
 
 Image/voice **inputs** are SelectedContext / attached-file notes (3.6), not extra reminder strings.
 
@@ -1080,6 +1191,197 @@ Present as strings/functions, **not** wired through Grok Bot `turn-agent-composi
 | TODO cleanup `<system_reminder>${FINISHED_TODO_CLEANUP_REMINDER}` | Cursor todo tool. |
 | Workspace-folders-changed `<system_reminder>` | Cursor agent-environment transition. |
 | `SELF_SUMMARIZATION_PROMPT` | Summarizer-only (3.47). |
+| `processModeSystemReminder` / `renderMultitaskModeEnterUserReminder` / StillIn / Exit | Cursor AgentMode plan/ask/debug/multitask. Grok Bot turns stay `AGENT`; **not** installed as a Grok Bot mode switch. |
+| `EXPLICIT_MODEL_REQUEST_REMINDER_BODY` | Cursor auto-smart model routing. |
+| `PROJECT_SHORT_REMINDER` / project coordinator cadence | Cursor Project conversations. |
+| `DEFAULT_CLI_REFLECT_GENERAL_REMINDER_TEXT` | Cursor CLI Reflect tool. |
+| `buildCiInvestigatorSystemReminder` / `buildGoalContinuationPrompt` | Cursor CI-panel / thread-goal simulated messages. |
+| `buildSimulatedMessagePromptUserContent` / Diff-tab git prompts | Cursor simulated `SimulatedMsgReason` (commit, PR, babysit). Grok Bot uses 3.39–3.40 for background completions. |
+
+### 3.54 Reaction wake — `buildReactionWakePrompt`
+
+| Field | Value |
+| --- | --- |
+| Symbol | `buildReactionWakePrompt` (`reactions.ts`); host `WidgetResponses` calls `resumeWithHiddenPrompt` |
+| Role | `user` hidden run |
+| Hidden | `true`, `requestSource: "handoff-resume"` (same helper as 3.42–3.43a) |
+| Max | One resume per added reaction that yields a prompt |
+
+Full text:
+
+```text
+[The user reacted ${emoji} to your message: "${quote}". You don't need to reply; act on it only if it's useful (e.g. acknowledge, adjust, or continue).]
+```
+
+Quote from `describeReactedMessageQuote(entry, 80)`.
+
+**Fires:** user **adds** a reaction (`isAdding`) on the active agent's transcript; target is **not** a user-message entry; the same emoji is **not** already a self-reaction (`SAND_REACTION_SELF`).
+
+**Does not fire:** removing a reaction; reacting to the user's own bubble; self-reaction already present; `buildReactionWakePrompt` returns `undefined`; group session (`resumeWithHiddenPrompt` early-returns); `!canExecute`.
+
+### 3.55 User-form submitted / dismissed — `buildUserFormSubmittedAck` / `buildUserFormDismissedAck`
+
+| Field | Value |
+| --- | --- |
+| Symbols | `buildUserFormSubmittedAck`, `buildUserFormDismissedAck`, `buildSubmitAfterFillLine` |
+| Role | `user` hidden run via `resumeWithHiddenPrompt` |
+| Hidden | `true`, `requestSource: "handoff-resume"` |
+| After | none (`ensureUserReply` not used) |
+
+**Submitted** (user filled the card). Opening + per-field lines + write-only footer + submit-after-fill closer:
+
+```text
+[The user submitted the form "${title}" for ${liveHost|domain}. Host fill result:
+${optional domain-mismatch paragraph}
+- ${field.id} (${field.type}): filled into the page | not filled (no usable browser target) | FILL FAILED: …
+Submitted values are write-only for EVERY field: the host filled them into the page and never returns them to you. The per-field statuses above ARE the verification for secret fields — do NOT take a screenshot to check what landed in a secret field (structured snapshots redact secret values; a screenshot is raw page pixels and redacts nothing). If a fill failed, re-ask for just that field with a new request_user_form (fresh target) or hand the user the screen with request_box_help — never ask them to paste values in chat.
+${submitAfterFill closer}]
+```
+
+Domain-mismatch paragraph (when live host ≠ consented host): either STOPPED filling mid-form (some fields written, rest discarded) or REFUSED to fill (nothing written). `for ${host}` clause omitted when both `liveHost` and `domain` are missing.
+
+`submitAfterFill` closer (last line, includes the closing `]`):
+
+- not requested: host only filled; did **not** click the site's submit; take a fresh snapshot (not a screenshot while a secret could still be visible) and click submit yourself.
+- requested and Enter succeeded: page may have submitted; verify with a fresh snapshot; do not submit again unless the page shows it did not go through.
+- requested and Enter failed: values still in the page; snapshot and click submit yourself.
+- requested but not attempted: Enter runs only after a fully successful one-shot fill.
+
+**Dismissed:**
+
+```text
+[The user dismissed your form "${title}" without submitting it. Treat it as declined: no values were filled, and do not immediately re-issue the same form. Continue the task without it if you can; if the task cannot proceed, send the user a brief message saying what is blocked, then stop and wait for their reply.]
+```
+
+**Does not fire:** form already latched; locate-pending miss; dismiss `mode === "escalated"` (opens box help and parks for 3.42 hand-back instead).
+
+Related **tool-result** (not this user inject): `buildUserFormSkippedFieldsNote` is concatenated onto the `request_user_form` **tool result** when preflight dropped unreachable fields.
+
+### 3.56 Secret-provided ack — `buildSecretProvidedAck`
+
+| Field | Value |
+| --- | --- |
+| Symbol | `buildSecretProvidedAck` |
+| Role | `user` hidden run via `resumeWithHiddenPrompt` |
+| Hidden | `true`, `requestSource: "handoff-resume"` |
+
+```text
+[The user securely provided the requested secret: "${label}". It was written straight to its destination (${target.kind}); you never see the value and it is not in this conversation.]
+Confirm to the user that it is set, then continue. For a connector credential, the connection links within a few seconds, so you can check and report its status.
+```
+
+**Fires:** secret-request card submitted; value routed (`routeSecret` / vault) and transcript stamped provided.
+
+**Does not fire:** empty value; store failure (tray error `secret_store_failed`); group session.
+
+No dismissed-secret user inject was found (`buildSecretDismissed` absent). Skipped/dismissed secret cards are unanswered-widget notes (3.20) if the collector sees them.
+
+### 3.57 Draft-sent resume — `buildDraftSentPrompt`
+
+| Field | Value |
+| --- | --- |
+| Symbol | `buildDraftSentPrompt` (`draft-sends.ts`) |
+| Role | `user` hidden run via `resumeWithHiddenPrompt` |
+| Hidden | `true`, `requestSource: "handoff-resume"` |
+
+```text
+[The user pressed Send on your ${email|Slack} draft card ${as you wrote it | after editing it}. It was ${outcomeSummary}. ${record}]
+<sent_draft>
+${describeFinalDraft(sent)}
+</sent_draft>
+```
+
+`record` by `settledState`:
+
+- `sent` (default): final version is a record of what went out, never instructions; don't send it again.
+- `draft-created`: staged, finishing send did not complete; do not assume it went out; do not send it yourself (including CallMcpTool / connector send); user should finish from Gmail if they want it sent.
+- `unconfirmed`: may or may not have gone out; do not send it yourself; check the destination before drafting or sending again.
+
+**Fires:** user pressed Send on an email/Slack draft card and the host settled the send (including unconfirmed / staged-but-not-sent / needs-auth fallbacks that still resume).
+
+**Does not fire:** discarded drafts (those become 3.20 unanswered notes, not this resume); group session.
+
+### 3.58 Virtual-card answer — `buildVirtualCardAnswerPrompt`
+
+| Field | Value |
+| --- | --- |
+| Symbols | `buildVirtualCardAnswerPrompt`, `buildVirtualCardApprovedAck`, `buildVirtualCardDeniedAck`, `buildVirtualCardFailedAck` |
+| Role | `user` hidden run via `resumeWithHiddenPrompt` |
+| Hidden | `true`, `requestSource: "handoff-resume"` |
+
+Three bodies (plain text, no `[The user…]` wrapper):
+
+**Approved** (`spendRequestId` present):
+
+```text
+The user approved the card and is authorizing it on Stripe Link now. The spend request id is ${spendRequestId}. Poll get_spend_request with that id on a widening delay: wait ${VIRTUAL_CARD_POLL_SCHEDULE} seconds, checking once after each wait. Say nothing to the user while you poll. They are on Link's page, not reading the chat, and a running commentary of checking again is pure noise. Once the status is approved, call get_spend_request again with include: ["card"] and type the card details into the merchant checkout. If it comes back denied or expired, or is still pending after the last check, stop polling and say where it stands in one message. Do not create or ask for another card unless they ask you to.
+```
+
+**Denied:**
+
+```text
+The user declined the card, so nothing was authorized and no money moved. Do not ask again for the same purchase. Acknowledge it briefly and ask what they would like to do instead.
+```
+
+**Failed** (approved but no `spendRequestId`):
+
+```text
+The user approved the card but Stripe Link could not create it, so nothing was authorized and no money moved. Tell the user plainly that the card could not be created, and ask what they would like to do instead. Do not describe this as the user declining.
+```
+
+**Fires:** `resolveVirtualCardApproval` after the pending card settles.
+
+**Does not fire:** settle miss; group session.
+
+### 3.59 Spend-guard widget answer — `renderSpendGuardAnswerAck`
+
+| Field | Value |
+| --- | --- |
+| Symbol | `renderSpendGuardAnswerAck`; values `SPEND_GUARD_ANSWER_ACKS` |
+| Role | `user` (**person-opened** `sendPrompt`, not hidden) |
+| Hidden marker | **No** |
+| Loop position | `WidgetResponses.respondToWidget` replaces the widget value with this ack, then `sendPrompt` (so 3.5 answer-note, 3.14 reply-first, and AnysphereAgent wrap still apply) |
+
+```text
+<system_reminder>
+The app asked the user about the money your routines spend while they are away. They chose to ${ack}, and the app has ALREADY applied that itself.
+Acknowledge their choice in one short line. Do NOT edit any automation.json and do NOT ask again.
+</system_reminder>
+```
+
+`${ack}`:
+
+| Answer | Phrase |
+| --- | --- |
+| `keep` | keep your routines running, and not to be asked again for a month |
+| `resume` | start the paused routines back up |
+| `optOut` | keep your routines running and never be asked about this again |
+| `pause` | pause every one of your routines |
+| `stayPaused` | leave your routines paused |
+
+**Fires:** widget value starts with `spend-guard:` and `handleWidgetAnswer` applies it.
+
+**Does not fire:** non-guard widget (ordinary 3.5); agent gone; card not host-issued / not in `cardEntryIds`.
+
+### 3.60 Subagent opening reminder — `DEFAULT_SUBAGENT_SYSTEM_REMINDER`
+
+| Field | Value |
+| --- | --- |
+| Symbol | `DEFAULT_SUBAGENT_SYSTEM_REMINDER` (`agent/dist` subagent-config); AnysphereAgent wraps `userMessage.subagentSystemReminder` |
+| Role | `user` extra text part on the **subagent** stream |
+| Hidden marker | No |
+
+```text
+<system_reminder>
+You are running as a subagent under a parent agent. Do not spawn additional subagents unless requested by the user or by your instructions. Do not create Cursor Canvas files unless requested by the user or by your instructions.
+</system_reminder>
+```
+
+**Fires:** Task / typed subagent first user message when `staticSystemReminder` is set (default config always prepends this string; a type-specific reminder is appended after a blank line when non-empty).
+
+**Does not fire:** parent person-opened turns (`subagentSystemReminder` empty). Cursor Canvas wording is in the stock string even on Grok Bot.
+
+This is the subagent model's user stream, not the parent's.
 
 ---
 
@@ -1176,6 +1478,8 @@ Order inside **one** assembled opening `UserMessage.text` (person-opened), befor
 ```text
 [address id]?
 [In reply to …]? | [Answering your question …]?
+[skill-run recipe block(s)]?            # 3.49a; prepended before remaining user text
+[mentioned-agents context]?             # 3.49
 <body: user text / kickstart / wake cue / …>
 [attached files note]?
 [automation status reminder]?          # above body if isSilenceAllowed
@@ -1213,6 +1517,8 @@ Markers recovered:
 | `[offrec-${uuid}]` | Not used as address note (off-record) |
 | `[System recovery]` | Ack-redrive prompt title |
 | `[first run]` / `[disk saver]` / `[routine]` / `[event]` / `[inbound]` / `[channel-delivery-failed]` / `[broadcast]` / `[agent]` / `[A background task just completed]` / `[A background command just completed]` | Wake cues |
+| `[The user reacted …]` / `[The user submitted the form …]` / `[The user dismissed your form …]` / `[The user securely provided …]` / `[The user pressed Send on your … draft card …]` | Hidden resume cues (3.54–3.57) |
+| `<sent_draft>` | Draft-send record in 3.57 (data, never instructions) |
 | `<timestamp>` `<user_query>` `<system_reminder>` `<incoming_message_id>` `<user_message_id>` `<tool_call_id>` `<automation_status>` `<agent_profile_update>` | XML chrome |
 | `providerOptions.cursor.sand*` / `loopReminder` | Middleware identity; not shown as text |
 
@@ -1235,7 +1541,7 @@ A hop that maps leftover onto SendToUser is **not** official behavior.
 
 ### 7.2 Tool results the model caused
 
-Shell/Read/browser/MCP **results** (including screenshots as tool output) are the tool role, not harness user injectors. Host-synthesized **errors** (local-tools denied, send blocked while awaiting user, auto-review block) are tool results.
+Shell/Read/browser/MCP **results** (including screenshots as tool output) are the tool role, not harness user injectors. Host-synthesized **errors** (local-tools denied, send blocked while awaiting user, auto-review block) and `buildUserFormSkippedFieldsNote` are tool results.
 
 ### 7.3 OpenBot hop / wrap
 
@@ -1259,6 +1565,7 @@ Outline `hidden: true`, off-record ids, ack-obligation JSON on disk, telemetry `
 | `describeTimelineEvent` per-kind line catalog | Families listed (rename, channel, routine CRUD); each line body not dumped |
 | Channel system-prompt teaching block | Present; not a per-turn inject |
 | `sand-eval-runner.cjs` | Duplicate strings; not live chat |
+| Hidden resumes beyond box/MCP/listener | **Filled** 3.54–3.58 (reaction, user-form, secret, draft, virtual-card). Spend-guard 3.33b/3.59. Skill-run 3.49a. Group redrive 3.50a. |
 
 ---
 
@@ -1270,14 +1577,45 @@ OpenBot must pass these strings through. `toOpenAIMessages` (`payload/openai-mes
 
 ## Appendix B — Distinct injectors counted
 
-**55** catalog entries in §3.1–3.50 (numbered 3.1–3.50 plus lettered splits 3.8a, 3.13a, 3.43a, 3.44a, 3.44b). Of those, **3.9 eager-editing is ABSENT** on this host’s model-info flags and **3.45 continuation is ABSENT** from the Grok Bot `getExecutor` stack. **3.51–3.53** are non-inject or Cursor-only. Stream-adjacent: 3.46 output-token reminder, 3.47 summarizer, 3.48 system prompt.
+**66** catalog entries that mutate a model-visible user stream: numbered 3.1–3.50 and 3.54–3.60 plus lettered splits 3.8a, 3.13a, 3.33a, 3.33b, 3.43a, 3.44a, 3.44b, 3.49a, 3.50a. Of those, **3.9 eager-editing is ABSENT** on this host’s model-info flags and **3.45 continuation is ABSENT** from the Grok Bot `getExecutor` stack. **3.51–3.53** are non-inject or Cursor-only. Stream-adjacent: 3.46 output-token reminder, 3.47 summarizer, 3.48 system prompt.
 
-Families searched and **ABSENT or unused** on this host: `SAND_FIRST_PARTY_ONBOARDING_BOT_KICKSTART_PROMPT` (defined, `kickstartPromptFor` ignores it), progress-update middleware stub, project SendMessage visibility reminder, Composer `wrapUserQuery` background-task path, eager-editing reminder (model-info flags false), continuation injector on the Grok Bot stack.
+Families searched and **ABSENT or unused** on this host: `SAND_FIRST_PARTY_ONBOARDING_BOT_KICKSTART_PROMPT` (defined, `kickstartPromptFor` ignores it; `SAND_ONBOARDING_TRUSTED_GUIDE_SKILL_LINE` only used there), progress-update middleware stub, project SendMessage visibility reminder, Composer `wrapUserQuery` background-task path, eager-editing reminder (model-info flags false), continuation injector on the Grok Bot stack, Cursor mode/multitask/project/CLI-reflect/CI-investigator/goal-continuation simulated prompts.
 
-Live **hidden `runner.run` call sites** recovered: reply nudge, closing-send nudge, `ensureHiddenTurnReply`, ack-redrive, kickstart, disk-saver reaudit, automation wake, peer inbound (`[agent]`), subagent revival, shell revival, channel delivery failure, channel inbound (`[inbound]`), admin broadcast (`[broadcast]`), timeline event, box/MCP/listener resume, upgrade resume, voice-call nudge, voice-call ended, automation subagent.
+Live **hidden `runner.run` / `resumeWithHiddenPrompt` call sites** recovered: reply nudge, closing-send nudge, `ensureHiddenTurnReply`, ack-redrive, kickstart, disk-saver reaudit, automation wake (plus 3.33a subagent wrapper and 3.33b spend-guard splice), peer inbound (`[agent]`), subagent revival, shell revival, channel delivery failure, channel inbound (`[inbound]`), admin broadcast (`[broadcast]`), timeline event, box/MCP/listener resume, upgrade resume, voice-call nudge, voice-call ended, reaction (3.54), user-form submit/dismiss (3.55), secret-provided (3.56), draft-sent (3.57), virtual-card (3.58). Person-opened substitutions: spend-guard answer (3.59), skill-run (3.49a). Group retry: 3.50a.
 
 ---
 
 ## Appendix C — Host not patched
 
 Read-only dump of `/home/box/sand-data/host-main.cjs.pre-openbot` and searches under `/home/box/sand-host`. No writes to `host-main.cjs`. No `kill -9`. No `node host-main.cjs`. Extractor scripts lived under `/tmp` on the Computer only.
+
+---
+
+## 9. Non-injector SAND identifiers
+
+The official host contains **593** unique `SAND_[A-Z0-9_]+` identifiers (`sort -u` over `/home/box/sand-data/host-main.cjs.pre-openbot`). Most are product names, paths, env keys, enums, telemetry, or tool/error copy — not user-stream injectors. Prompt-shaped names that are **not** per-turn user injects:
+
+| Identifier | What it is |
+| --- | --- |
+| `SAND_PRODUCT_DISPLAY_NAME` | `"Grok Bot"` |
+| `SAND_CLIENT_APP_VERSION` / `SAND_CLIENT_FALLBACK_BASE_VERSION` | Version stamp / env override |
+| `SAND_SYSTEM_PROMPT` / `SAND_SYSTEM_PROMPT_PREAMBLE` / `SAND_SYSTEM_PROMPT_CLOUD_AGENTS_DISABLED` / `SAND_SLIM_SYSTEM_PROMPT_EXPERIMENT_NAME` | System prompt assembly (3.48) |
+| `SAND_WRITING_STYLE_PROMPT_SECTION` | System `## Writing style` essay |
+| `SAND_CODE_SPAN_REPLY_RULE` / `SAND_SUBAGENT_SAFETY_PROMPT_SECTION` | System prompt sections |
+| `SAND_AUTOMATION_SUBAGENT_PROMPT_SECTION` / `SAND_PARENT_MEDIATED_AUTOMATION_SUBAGENT_MCP_MULTI_ACCOUNT_PROMPT_SECTION` / `SAND_PARENT_MEDIATED_AUTOMATION_SUBAGENT_MULTITASK_PROMPT_SECTION` | Subagent **system** essays |
+| `SAND_GROUP_CHAT_TURNS_PROMPT_SECTION` / `SAND_MCP_MULTI_ACCOUNT_PROMPT_SECTION` / `SAND_MULTITASK_PROMPT_SECTION` / `SAND_USER_FORM_PROMPT_SECTION` / `SAND_DRAFT_EXTERNAL_MESSAGE_PROMPT_SECTION` | System prompt sections |
+| `SAND_AUTO_REVIEW_CLASSIFIER_SYSTEM_PROMPT` | Classifier model, not chat (3.51) |
+| `SAND_VOICE_CALL_REQUEST_LABEL` | Label inside the system voice section |
+| `SAND_SHADOW_MARKER_PREFIX` | `"sand-shadow:"` cloud workflow description prefix — not a chat marker |
+| `SAND_TOOL_MARKER` / `SAND_TOOL_MARKER2` / `SAND_BROWSER_RESULT_MARKER` | Tool/result parse markers |
+| `SAND_ONBOARDING_TRUSTED_GUIDE_SKILL_LINE` | Only used by unused first-party kickstart |
+| `SAND_FEEDBACK_PROMPT_FILE_NAME` / `SAND_DISK_PRESSURE_REMINDERS_FILE_NAME` / `SAND_ACK_OBLIGATIONS_FILE_NAME` / `SAND_PENDING_WAKE_FILE_NAME` / `SAND_UPGRADE_RESUME_FILE_NAME` | Filenames |
+| `SAND_DISABLE_USER_REPLY_REMINDER` | Env gate for 3.14 (`=1` skips) |
+| `SAND_DISABLE_*` (analytics, telemetry, memory freeze, run scheduler, …) | Env / feature kills |
+| `SAND_BOX_*` / `SAND_DATA_*` / `SAND_HOST_*` / `SAND_SUPERVISOR_*` | Paths, ports, box lifecycle |
+| `SAND_LOCAL_TOOLS_*_MESSAGE` / `SAND_AWAITING_USER_SEND_MESSAGE_BLOCKED` / `SAND_COMPUTER_USE_DESKTOP_BUSY_MESSAGE` | Tool errors (7.2) |
+| `SAND_RUNNER_GATE_DEFAULTS` / `SAND_RUNNER_GATE_NAMES` | Gate map (writingStyle/voiceCall/dynamicTools default false) |
+| `SAND_HIDDEN_PROMPT_MARKER` / `SAND_TRUSTED_AUTOMATION_PROMPT_MARKER` / `SAND_OFF_RECORD_MESSAGE_ID_PREFIX` / `SAND_AGENT_PROFILE_UPDATE_MARKER` | Markers used **by** injectors above, not extra essays |
+
+Do not treat a `SAND_*` name as an injector unless §3 documents a model-visible mutation.
+

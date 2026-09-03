@@ -297,7 +297,12 @@ platform-dependent.
 - Header: record id mono + status pill + time, close icon button. Body scrolls; sections:
   Overview (definition grid), Error (danger-tint block when present), Token usage (mono trio),
   Upstream endpoint (mono, wrapped), Request / Response bodies (`pre` mono 11.5, `--surface-2`
-  pane, max-h 240, truncation notice row).
+  pane, max-h 240, truncation notice row). Each body section header carries a compact ghost
+   copy button (12 px icon, hairline border; 44 px touch target on mobile) that flips to a Check
+   for 1.5 s on success. It copies the **raw** captured body exactly as returned by the API — the
+   original string for text bodies, compact JSON (not the 2-space display) for object bodies, and
+   the captured `preview` when the body was truncated — never appending truncation or redaction
+   annotations (the UI already communicates those).
 - `role="dialog"`, labelled by record id, Esc closes, focus returns to the row. Deep link
   `#/logs?id=…` opens it directly; unknown id → "record pruned by retention" notice.
 
@@ -540,6 +545,10 @@ activate), current = `--ink` + number in `--primary`-ring circle, done = Check `
    **drawer** (§3.9); deep link `#/logs?id=…` supported; 404 → "record pruned by retention".
 4. **Empty**: recording off → explainer + "Turn on recording" (scrolls to settings); enabled but
    empty → "No requests yet…". **Loading:** 8 skeleton rows.
+5. **Drawer payload copy**: Request and Response body section headers carry a compact ghost copy
+   button (Copy → Check swap, 1.5 s); it copies the raw captured payload exactly as returned by the
+   API — never the pretty-printed display form — and is hidden when the body is absent or empty.
+   Truncated bodies copy the captured `preview` with no added suffix.
 
 ---
 
@@ -622,7 +631,7 @@ decorative, `<title>` + role img on meaningful.
 | `x` | close (toast, dialog, drawer, chip) |
 | `triangle-alert`, `shield-alert`, `circle-alert` | warning notice, blocking banner, field error |
 | `info` | rule microcopy, reminders, tooltips |
-| `copy`, `check` (swap) | copy URL/endpoint buttons |
+| `copy`, `check` (swap) | copy URL/endpoint/payload buttons |
 | `refresh-cw` | refresh (tunnel URL, logs, model catalog) |
 | `plus` | add provider / model |
 | `search` | logs search input, listbox search |

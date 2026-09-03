@@ -202,7 +202,9 @@ Redirect here automatically from any page when the catalog is empty and mode is 
   days 1–365) — FR-35, FR-36; table of records: time, model, status, latency, error snippet — FR-37;
   privacy note: "Keys are always redacted server-side; bodies default off" — FR-42; record drawer
   (deep-link `#/logs?id=…`): full header, provider name, upstream endpoint, error, token usage,
-  request/response bodies with truncation notices — FR-38.
+  request/response bodies with truncation notices, and a copy button on each body that puts the
+  raw captured payload (exactly as returned by the API, redaction included) on the clipboard —
+  FR-38.
 - **Actions:** refresh; free-text search; errors-only filter — FR-37; model filter, date range,
   pagination (P1) — FR-40; clear all logs (confirm) — FR-39.
 - **Empty:** recording disabled → prominent explainer "Turn on recording to capture future turns";

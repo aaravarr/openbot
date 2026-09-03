@@ -50,8 +50,8 @@ trycloudflare 地址会过期。更新、`openbot tunnel on`，或 Chat 上的 *
 
 1. 打开控制页。
 2. 选一个服务商；或选 **Custom**，粘贴任何 OpenAI 兼容的 Base URL。
-3. 粘贴 API Key 和模型 ID。
-4. 点 **Start chatting**。
+3. 粘贴 API Key 并激活。向导只保存服务商和 Key。
+4. 在 **Models** 页拉取或添加模型，再启用。
 5. 回到 Grok Bot，发一条**新消息**。
 
 下一回合就会走你刚接上的模型。上下文、最大输出、推理等级和输入类型先用默认值；之后在对应服务商里打开该模型再改。

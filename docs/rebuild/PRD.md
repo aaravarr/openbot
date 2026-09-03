@@ -64,7 +64,7 @@ host (FR-4, FR-7).
 | 1 | **Dashboard** | `#/` | Is my box working? What is active right now? |
 | 2 | **Models** | `#/models`, `#/models/:providerId` | Configure providers, models, limits, keys; fetch + auto-fill models |
 | 3 | **Logs** | `#/logs` (detail drawer deep-links `#/logs?id=…`) | What did the hop actually do? |
-| — | **Setup wizard** | `#/setup` | First-run: provider → key+model → activate |
+| — | **Setup wizard** | `#/setup` | First-run: provider → credentials → activate |
 | — | App shell | — | Header, status strip, toasts, blocked/unreachable states |
 
 Nav order mirrors the lifecycle: operate → configure → debug. The wizard is a route, not a modal,
@@ -142,7 +142,8 @@ that quotes the post-save human message (FR-45); **refusals** render as structur
 - **Actions:**
   - **Add provider** (also the engine behind the `#/setup` wizard): preset picker (OpenAI,
     DeepSeek, Zhipu GLM, Kimi, Qwen, OpenRouter, Groq, xAI, Custom) with prefills and hints, then
-    name / base URL / model id / API key — FR-8, FR-9.
+    name / base URL / API key — FR-8, FR-9. Models are fetched or added on the Models page after
+    activation.
   - Edit provider name / base URL, rotate key in the same dialog or standalone ("Replace key" uses
     the dedicated key-only command) — FR-11, FR-21, FR-23.
   - Remove provider (confirm; cascade copy spells out model loss and, for the last provider, the
@@ -178,17 +179,13 @@ that quotes the post-save human message (FR-45); **refusals** render as structur
 
 **Setup wizard (`#/setup`)** — 3 steps, same `upsert-provider` save at the end:
 1. **Provider** — preset cards or Custom (FR-8).
-2. **Credentials & model** — prefilled name/origin/model id (editable, **optional**), blind API key
-   entry (FR-21). The model id may be left empty — a provider can be saved with zero models. A
-   **"Save provider & fetch models"** action (Source A) upserts the provider + key (a mid-wizard
-   save), fetches its `/v1/models`, and opens the **Import models dialog** to pick which models to
-   add with Source B auto-fill instead of typing by hand (FR-50, FR-53, FR-54). Imported models
-   become the wizard's model selection. Abandoning the wizard after this mid-save leaves the
-   provider in the catalog (accepted — power-user tool).
-3. **Review & activate** — summary, explicit "Wrap host and activate" button, and the consequence
-   line: "Grok Bot will restart and use this model on the next message." With no model yet, Review
-   shows a non-blocking notice "No model yet — you can fetch models from the Models page after
-   activation" and activation proceeds (provider in custom mode with zero models) — FR-45, FR-46.
+2. **Credentials** — prefilled name/origin (editable), blind API key entry (FR-21). The wizard
+   saves provider + key only (`modelSlug: ""`). A provider can be saved with zero models. Fetch
+   models on the Models page after activation (FR-50, FR-53, FR-54).
+3. **Review & activate** — summary, explicit "Wrap host and activate" button. Review shows model
+   as "— (none)" and a non-blocking notice "No model yet — you can fetch models from the Models
+   page after activation"; activation proceeds (provider in custom mode with zero models) —
+   FR-45, FR-46.
 Redirect here automatically from any page when the catalog is empty and mode is official.
 
 ### 3.3 Logs (`#/logs`)
@@ -211,12 +208,11 @@ Redirect here automatically from any page when the catalog is empty and mode is 
 ### 3.4 New functional requirements — model list fetching & auto-fill (FR-50–FR-55)
 
 - **FR-50** [UI+B] Fetch a provider's model list from its own `/v1/models` (**Source A**). A "Fetch
-  models" action on the provider detail panel and in the setup wizard calls
+  models" action on the provider detail panel (Models page, after activation) calls
   `POST /api/providers/{providerId}/fetch-models`; the backend performs the upstream call
   **server-side using the stored secret** (secrets are write-only and never sent to the browser), so
   this must be a backend endpoint, never a browser fetch. On success the result is presented in the
-  **Import models dialog** (see FR-53/FR-54), never as an inline list. *Owner: Models + Setup
-  wizard.*
+  **Import models dialog** (see FR-53/FR-54), never as an inline list. *Owner: Models.*
 - **FR-51** [B] The fetch endpoint returns a normalized model list (`id`, optional `name`,
   `contextLength`, `maxOutputTokens`, `modalities`, `reasoningLevels`) or a **structured error**
   distinguishing `unreachable` / `unauthorized` / `not-supported` / `no-secret` /
@@ -239,12 +235,12 @@ Redirect here automatically from any page when the catalog is empty and mode is 
   the catalog effort list when present; a boolean-only (legacy) catalog keeps `true` →
   `default·none·high` and `false` → `default` only, and must not wipe nonempty Source A levels;
   else the fetch's levels. Unmatched models still import,
-  with manual fields. *Owner: Models + Setup wizard.*
+  with manual fields. *Owner: Models.*
 - **FR-54** [UI] **Fetch button states.** `idle → loading → dialog | partial-failure | empty |
   error`. Success opens the Import models dialog with the fetched list. Partial-failure opens the
   same dialog with a non-blocking warning naming what was skipped (the valid rows remain selectable).
   An empty result shows the dialog's empty state. Hard failures render the structured error inside
-  the dialog with a remedy (`no-secret` routes to the key field). *Owner: Models + Setup wizard.*
+  the dialog with a remedy (`no-secret` routes to the key field). *Owner: Models.*
 - **FR-55** [UI] **Catalog cache status + refresh.** The Models page settings area shows the Source B
   cache status (ready/loading/failed) with last-fetched time and a Refresh button
   (`POST /api/model-catalog/refresh`). *Owner: Models.*
@@ -267,13 +263,12 @@ No FR is unassigned; none is assigned to two primary owners.
 ## 4. Core user flows
 
 1. **First-time setup (official → custom).** Dashboard empty-state CTA → `#/setup` → pick preset
-   (prefill + hint) → enter/adjust name, base URL, model id (**optional**), blind key → optionally
-   "Save provider & fetch models" (mid-wizard save + import) → review ("Grok Bot will restart and
-   use X on the next message", or the no-model notice) → **Activate** (explicit save). *Feedback:*
-   saving pill → success toast quoting the active model (or "Provider activated." with no model);
+   (prefill + hint) → enter/adjust name, base URL, blind key → review (model "— (none)"; "No model
+   yet — you can fetch models from the Models page after activation") → **Activate** (explicit
+   save with empty `modelSlug`). *Feedback:* saving pill → success toast "Provider activated.";
    host bounce noted if wrap bytes changed. *Failure:* refusal banner with remedy (e.g. foreign
-   listener on :9280); wizard retains input. *Verify:* send a message in Grok Bot and confirm the
-   model in Logs.
+   listener on :9280); wizard retains input. *Verify:* fetch or add a model on Models, send a
+   message in Grok Bot, and confirm the model in Logs.
 2. **Switch active model.** Dashboard quick switcher → pick model. *Decision point:* provider has
    no key → detour to its key field with explanation ("the hop would fail with no key") → key entry
    → save → then the switch proceeds. *Feedback:* toast "Grok Bot will use X (level) on the next

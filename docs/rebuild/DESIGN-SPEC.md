@@ -363,8 +363,8 @@ platform-dependent.
 ### 3.17 Model fetch UI (Source A / Source B)
 
 - **Fetch models button** (DownloadCloud 14 px, compact ghost `--hairline` border — not a heavy
-  button) on the provider detail header, and in the setup wizard's credentials step where it reads
-  **"Save provider & fetch models"** (it upserts the provider + key before fetching). States:
+  button) on the provider detail header. Fetching lives on the Models page after activation; the
+  setup wizard saves provider + key only. States:
   - **idle** — normal secondary button, label "Fetch models".
   - **loading** — button disabled, label swaps to a Loader2 spinner + "Fetching…"; width locked;
     no other control blocks.
@@ -510,24 +510,20 @@ Master–detail: left rail 300 px provider list; right detail pane.
 
 ### 4.3 Setup wizard (`#/setup`)
 
-Centered column 680 px. Steps header: 3 items (Provider → Credentials & model → Review &
+Centered column 680 px. Steps header: 3 items (Provider → Credentials → Review &
 activate), current = `--ink` + number in `--primary`-ring circle, done = Check `--success`.
 
 1. **Provider**: 3×3 preset card grid (OpenAI, DeepSeek, Zhipu GLM, Kimi, Qwen, OpenRouter,
    Groq, xAI, Custom): name 13·600 + mono origin 11; selected = 2 px `--primary` outline +
    accent-tint; hint line under grid swaps per preset.
-2. **Credentials & model**: prefilled name / base URL / model id (mono inputs 36 px, **model id
-   optional**), blind API key + eye, per-preset helper ("Create a key at platform.deepseek.com —
-   stored locally, never displayed again"). A **"Save provider & fetch models"** action (§3.17)
-   upserts the provider + key, then opens the **Import models dialog** to pick which models to add
-   with Source B auto-fill instead of typing; imported models are summarized in step 2 and carried
-   into Review. Inline validation on Continue (model id not required).
+2. **Credentials**: prefilled name / base URL (mono inputs 36 px), blind API key + eye, per-preset
+   helper ("Create a key at platform.deepseek.com — stored locally, never displayed again"). Inline
+   validation on Continue (name, base URL, and API key required). Models are not entered in the
+   wizard; fetch or add them on the Models page after activation.
 3. **Review & activate**: definition list summary (key shown as "••••• — saved on activate", model
-   listed or "— (none)"), warning notice *"Grok Bot will restart and use {model} on the next
-   message."* when a model is selected — otherwise an info notice *"No model yet — you can fetch
-   models from the Models page after activation."* Primary large orange "Wrap host and activate" →
-   spinner + global Saving pill → success toast. Refusal → blocking-style banner inside the wizard
-   with the remedy; input retained.
+   "— (none)"), info notice *"No model yet — you can fetch models from the Models page after
+   activation."* Primary large orange "Wrap host and activate" → spinner + global Saving pill →
+   success toast. Refusal → blocking-style banner inside the wizard with the remedy; input retained.
 - Back ghost between steps; Cancel link top-left returns to `#/`; step state survives navigation
   within the wizard (session storage).
 

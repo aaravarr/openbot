@@ -45,7 +45,7 @@ The first commit is on `main`. Every later change is a PR, then merge. Conventio
 
 ## OpenBot config skill
 
-Path: `skills/openbot-config/` (`SKILL.md` plus `reference.md`) at the repository root. Grok Bot loads **project-root `skills/`**, not `.cursor/skills/`.
+Path: `skills/openbot-config/` (`SKILL.md` plus `reference.md`) at the repository root. Grok Bot loads **project-root `skills/`**, not `.cursor/skills/`. The control page can copy that tree into `/home/box/agent-data/workflows/<slug>/` so Grok Bot loads it as a user skill.
 
 Grok Bot on the Computer uses this project skill to configure the box: providers, models, keys, official vs custom, tunnel, and logs. Prefer sand-data JSON when wrap is already custom; reconcile for wrap and tunnel.
 

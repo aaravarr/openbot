@@ -10,6 +10,7 @@ import type {
   FetchModelsError,
   FetchModelsErrorKind,
   FetchModelsResult,
+  GrokSkillsReport,
   LogChannelFilter,
   LogDetail,
   LogList,
@@ -147,7 +148,7 @@ export async function save(command: Command): Promise<SaveResult> {
 }
 
 export async function healthz(): Promise<{ ok: true; service: string }> {
-  return (await request("/healthz")) as { ok: true; service: string };
+  return (await request("/healthz")) as { ok: true; service: "openbot" };
 }
 
 /* ---- §8.1 Source A: fetch a provider's model list ---- */
@@ -163,6 +164,16 @@ export async function getModelCatalog(modelId?: string): Promise<ModelCatalog> {
 
 export async function refreshModelCatalog(): Promise<RefreshCatalogResult> {
   return (await request("/api/model-catalog/refresh", jsonInit({}))) as RefreshCatalogResult;
+}
+
+/* ---- Grok Bot user skills (workflows) ---- */
+export async function getGrokSkills(): Promise<GrokSkillsReport> {
+  return (await request("/api/grok-skills")) as GrokSkillsReport;
+}
+
+export async function installGrokSkills(slug?: string): Promise<GrokSkillsReport & { ok: true }> {
+  const body = slug !== undefined ? { slug } : {};
+  return (await request("/api/grok-skills/install", jsonInit(body))) as GrokSkillsReport & { ok: true };
 }
 
 /* ---- Logs ---- */

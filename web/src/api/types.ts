@@ -244,3 +244,19 @@ export type ModelCatalog = {
 };
 
 export type RefreshCatalogResult = { ok: true; status: "loading"; startedAt: string };
+
+export type GrokSkillState = "missing" | "stale" | "current" | "unavailable" | "blocked";
+
+export type GrokSkill = {
+  slug: string;
+  name: string;
+  state: GrokSkillState;
+  destPath: string;
+};
+
+export type GrokSkillsReport = {
+  dest: string;
+  source: "github" | "local" | "none";
+  ref?: string;
+  skills: GrokSkill[];
+};

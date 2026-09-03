@@ -17,6 +17,7 @@ import { publicTunnelUrl } from "../lib/tunnel-url";
 import { useApp, useBoxState } from "../store";
 import { Listbox, type ListboxGroup } from "../components/Listbox";
 import { QrCode } from "../components/QrCode";
+import { GrokSkillCard } from "../components/GrokSkillCard";
 import { ConfirmDialog } from "../components/overlays";
 import {
   Badge,
@@ -153,18 +154,23 @@ export function Dashboard() {
 
   if (empty) {
     return (
-      <section className="card card--pad" aria-label="Setup">
-        <EmptyState
-          icon={Rocket}
-          title="Set up your first provider"
-          body="Connect an OpenAI-compatible provider so Grok Bot can chat through it."
-          action={
-            <Button variant="primary" onClick={() => navigate({ kind: "setup" })}>
-              Set up a provider
-            </Button>
-          }
-        />
-      </section>
+      <div className="stack">
+        <section className="card card--pad" aria-label="Setup">
+          <EmptyState
+            icon={Rocket}
+            title="Set up your first provider"
+            body="Connect an OpenAI-compatible provider so Grok Bot can chat through it."
+            action={
+              <Button variant="primary" onClick={() => navigate({ kind: "setup" })}>
+                Set up a provider
+              </Button>
+            }
+          />
+        </section>
+        <div className="grid grid--12">
+          <GrokSkillCard />
+        </div>
+      </div>
     );
   }
 
@@ -373,6 +379,8 @@ export function Dashboard() {
             </div>
           </div>
         </section>
+
+        <GrokSkillCard />
 
         {/* Recent requests */}
         <section className="card col-12" aria-labelledby="h-recent">

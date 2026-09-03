@@ -9,13 +9,14 @@ import {
   Zap,
 } from "lucide-react";
 import { hasKey, listLogs, modelById, providerById } from "../api/client";
-import type { LogRecord, Model, SaveResult, TunnelState } from "../api/types";
+import type { LogRecord, Model, SaveResult } from "../api/types";
 import { channelLabel, formatLatency, formatTime, formatTokens, labelReasoning } from "../lib/format";
 import { deriveHealth } from "../lib/health";
-import type { Route } from "../lib/router";
 import { navigate } from "../lib/router";
+import { publicTunnelUrl } from "../lib/tunnel-url";
 import { useApp, useBoxState } from "../store";
 import { Listbox, type ListboxGroup } from "../components/Listbox";
+import { QrCode } from "../components/QrCode";
 import { ConfirmDialog } from "../components/overlays";
 import {
   Badge,
@@ -50,6 +51,7 @@ export function Dashboard() {
   const tunnel = state.snapshot.tunnel;
   const health = deriveHealth(state, service);
   const empty = state.providers.length === 0;
+  const tunnelHref = tunnel.kind === "cloudflare-quick" ? publicTunnelUrl(tunnel.url) : "";
 
   useEffect(() => {
     let alive = true;
@@ -306,16 +308,12 @@ export function Dashboard() {
               <>
                 <div className="tunnel-url">
                   <Globe style={{ color: "var(--muted)", width: 15, height: 15, flex: "none" }} aria-hidden="true" />
-                  <span className="url">https://{tunnel.url}</span>
+                  <span className="url">{tunnelHref}</span>
                 </div>
-                <Button variant="secondary-sm" icon={Copy} onClick={() => void copy(`https://${tunnel.url}`)}>
+                <Button variant="secondary-sm" icon={Copy} onClick={() => void copy(tunnelHref)}>
                   Copy URL
                 </Button>
-                {tunnel.qr ? (
-                  <pre className="qr-pre" aria-label="QR code for the public URL">
-                    {tunnel.qr}
-                  </pre>
-                ) : null}
+                <QrCode value={tunnelHref} label="QR code for the public URL" />
                 <Notice tone="warn" icon={Info}>
                   Anyone with this URL can open this console. Keys stay on the Computer.
                 </Notice>

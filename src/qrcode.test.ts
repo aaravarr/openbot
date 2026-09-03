@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { qrMatrix, renderQrAscii } from "./qrcode.ts";
+import { qrMatrix, qrWithQuietZone, renderQrAscii } from "./qrcode.ts";
 
 function finderAt(matrix: boolean[][], originR: number, originC: number): void {
   for (let r = 0; r < 7; r += 1) {
@@ -32,4 +32,17 @@ test("renderQrAscii returns a block drawing", () => {
   const lines = ascii.split("\n");
   assert.ok(lines.length >= 10);
   assert.equal(new Set(lines.map((line) => line.length)).size, 1);
+});
+
+test("qrWithQuietZone pads four light modules by default", () => {
+  const matrix = qrMatrix("https://openbot-test.trycloudflare.com");
+  const padded = qrWithQuietZone(matrix);
+  assert.equal(padded.length, matrix.length + 8);
+  assert.equal(padded[0]?.length, matrix.length + 8);
+  for (let i = 0; i < 4; i += 1) {
+    assert.equal(padded[0]?.[i], false);
+    assert.equal(padded[i]?.[0], false);
+    assert.equal(padded[padded.length - 1]?.[i], false);
+  }
+  finderAt(padded, 4, 4);
 });

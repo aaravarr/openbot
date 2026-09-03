@@ -1,5 +1,3 @@
-[English](../README.md) · [中文](../README.zh-CN.md)
-
 # Official Grok Bot 0.30 harness injection
 
 Complete catalog of every official injector that mutates the **model-visible** message stream (and related user-hidden chrome) on stock Grok Bot 0.30 on the Computer. Source of truth is the installed official host, not OpenBot wrap/hop.

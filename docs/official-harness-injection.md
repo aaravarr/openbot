@@ -111,6 +111,8 @@ isSandUserDeliveryToolName = SendToUser || SendMessage
 
 `sentMessageCount` increments on stream update `type: "send-message"`. `reacted` increments on a successful `react-to-message` update. A widget / attachment / cursor-agent card **does** increment `sentMessageCount` (it is a send-message), but start-of-turn ack middleware requires a **text** SendToUser (`args.type === "text"`).
 
+When those counters (and the mid-turn / post-turn / idle reminders that read them) fire is collected in [official SendToUser reminders](official-sendtouser-reminders.md) — a when-it-fires view of 3.14, 3.21–3.23, and 3.27–3.29 only. This catalog remains the full injector dump.
+
 ---
 
 ## 3. Catalog of injectors
@@ -323,6 +325,8 @@ Earlier turns were produced by a different AI model. It may have called tools th
 **Does not fire:** background-task-completion simulated messages; missing/empty mcid on either side; same model.
 
 ### 3.14 Reply-first reminder (opening user message)
+
+When this fires relative to the other SendToUser-delivery reminders: [official SendToUser reminders](official-sendtouser-reminders.md).
 
 | Field | Value |
 | --- | --- |

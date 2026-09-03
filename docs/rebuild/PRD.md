@@ -236,8 +236,9 @@ Redirect here automatically from any page when the catalog is empty and mode is 
   and reasoning support on import (each auto-filled field is marked). The field-fill mapping rule:
   context/output tokens use the catalog value when present, else the Source A fetch value, else the
   backend default; modalities use the catalog's non-empty list, else the fetch list; reasoning uses
-  the catalog's `reasoning` flag — `true` → default allow-list `default·none·high`, `false` →
-  `default` only (no selectable reasoning) — else the fetch's levels. Unmatched models still import,
+  the catalog effort list when present; a boolean-only (legacy) catalog keeps `true` →
+  `default·none·high` and `false` → `default` only, and must not wipe nonempty Source A levels;
+  else the fetch's levels. Unmatched models still import,
   with manual fields. *Owner: Models + Setup wizard.*
 - **FR-54** [UI] **Fetch button states.** `idle → loading → dialog | partial-failure | empty |
   error`. Success opens the Import models dialog with the fetched list. Partial-failure opens the

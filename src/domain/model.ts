@@ -46,7 +46,7 @@ export function parseReasoningLevel(value: unknown): ReasoningLevel | undefined 
   return token as ReasoningLevel;
 }
 
-function keepReasoningOrder(selected: ReadonlySet<string>): ReasoningLevel[] {
+export function keepReasoningOrder(selected: ReadonlySet<string>): ReasoningLevel[] {
   return REASONING_LEVELS.filter((item) => selected.has(item));
 }
 

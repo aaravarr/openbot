@@ -229,6 +229,8 @@ export type CatalogLookupModel = {
   maxOutputTokens: number | null;
   modalities: string[];
   reasoning: boolean;
+  /** Ordered allow-list from Source B; empty or omitted on a boolean-only cache. */
+  reasoningLevels?: readonly string[];
   pricing: { input: number | null; output: number | null; currency: string } | null;
 };
 

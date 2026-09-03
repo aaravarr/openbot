@@ -167,7 +167,7 @@ function AppInner() {
   } else if (route.kind === "setup") {
     page = <Setup />;
   } else if (route.kind === "logs") {
-    page = <Logs logId={route.logId} />;
+    page = <Logs logId={route.logId} page={route.page} />;
   } else {
     page = <Dashboard />;
   }

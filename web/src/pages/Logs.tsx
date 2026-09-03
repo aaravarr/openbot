@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   RefreshCw,
   ScrollText,
@@ -45,6 +47,9 @@ import { NumberInput } from "../components/fields";
 
 type DrawerState = { ids: string[]; details: LogDetail[]; notFound: boolean };
 
+const PAGE_SIZES = [25, 50, 100] as const;
+const DEFAULT_PAGE_SIZE = 50;
+
 function asLogChannels(values: ReadonlyArray<string | undefined>): Array<LogChannel | undefined> {
   return values.map((value) => {
     if (value === "official" || value === "custom-host" || value === "hop") return value;
@@ -52,9 +57,12 @@ function asLogChannels(values: ReadonlyArray<string | undefined>): Array<LogChan
   });
 }
 
-export function Logs({ logId }: { logId?: string }) {
+export function Logs({ logId, page: routePage }: { logId?: string; page?: number }) {
   const state = useBoxState();
   const { pushToast } = useApp();
+
+  const [page, setPage] = useState(() => (routePage !== undefined && routePage >= 1 ? routePage : 1));
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
 
   const [settings, setSettings] = useState<LogSettings | null>(state.logSettings ?? null);
   const [recording, setRecording] = useState(settings?.loggingEnabled ?? false);
@@ -93,6 +101,20 @@ export function Logs({ logId }: { logId?: string }) {
 
   const pairs = useMemo(() => pairLogRows(records), [records]);
 
+  const routePageValue = routePage !== undefined && routePage >= 1 ? routePage : 1;
+
+  // Keep the internal page in step with the URL when it changes from outside
+  // (browser back/forward, pasted deep link). Pager actions set state first, so
+  // the route echo that follows is a no-op.
+  useEffect(() => {
+    setPage(routePageValue);
+  }, [routePageValue]);
+
+  const goToPage = useCallback((next: number) => {
+    setPage(next);
+    navigate({ kind: "logs", page: next > 1 ? next : undefined });
+  }, []);
+
   const loadRecords = useCallback(async () => {
     setLoading(true);
     try {
@@ -101,20 +123,46 @@ export function Logs({ logId }: { logId?: string }) {
         ok: errorsOnly ? false : undefined,
         channel: channelFilter || undefined,
         model: modelFilter ?? undefined,
-        pageSize: 100,
+        page,
+        pageSize,
       });
+      const lastPage = Math.max(1, Math.ceil(list.total / pageSize));
+      if (page > lastPage) {
+        // The requested page slipped past the last valid page (e.g. records were
+        // pruned by retention, or all were cleared). Land on a valid page instead
+        // of an empty state.
+        setTotal(list.total);
+        setRecords([]);
+        goToPage(lastPage);
+        return; // keep loading until the corrected page resolves
+      }
       setRecords(list.items);
       setTotal(list.total);
+      setLoading(false);
     } catch {
-      /* toast */
-    } finally {
       setLoading(false);
     }
-  }, [q, errorsOnly, channelFilter, modelFilter]);
+  }, [q, errorsOnly, channelFilter, modelFilter, page, pageSize, goToPage]);
 
   useEffect(() => {
     void loadRecords();
   }, [loadRecords]);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  const resetToFirstPage = useCallback(() => {
+    if (page !== 1) goToPage(1);
+  }, [page, goToPage]);
+
+  const onPageSizeChange = useCallback(
+    (value: string) => {
+      const next = Number(value);
+      if (!(PAGE_SIZES as readonly number[]).includes(next)) return;
+      setPageSize(next);
+      goToPage(1);
+    },
+    [goToPage],
+  );
 
   const openDrawer = useCallback(
     async (ids: readonly string[]) => {
@@ -193,6 +241,7 @@ export function Logs({ logId }: { logId?: string }) {
       await clearLogs();
       setRecords([]);
       setTotal(0);
+      goToPage(1);
       pushToast("success", "Logs cleared", "All request records were deleted.");
     } catch (err) {
       pushToast("error", "Clear failed", err instanceof Error ? err.message : "Could not clear logs.");
@@ -221,6 +270,16 @@ export function Logs({ logId }: { logId?: string }) {
           { value: "official", label: "Official", sublabel: "Stock Grok tap" },
           { value: "custom", label: "Custom", sublabel: "Upstream + harness" },
         ],
+      },
+    ],
+    [],
+  );
+
+  const pageSizeGroups: ListboxGroup[] = useMemo(
+    () => [
+      {
+        label: "Per page",
+        options: PAGE_SIZES.map((n) => ({ value: String(n), label: `${n} records` })),
       },
     ],
     [],
@@ -301,11 +360,22 @@ export function Logs({ logId }: { logId?: string }) {
               placeholder="Search id, model, error…"
               aria-label="Search records"
               value={q}
-              onChange={(e) => setQ(e.target.value)}
+              onChange={(e) => {
+                setQ(e.target.value);
+                resetToFirstPage();
+              }}
             />
           </span>
           <label className="switch" style={{ fontSize: 12 }}>
-            <input type="checkbox" role="switch" checked={errorsOnly} onChange={(e) => setErrorsOnly(e.target.checked)} />
+            <input
+              type="checkbox"
+              role="switch"
+              checked={errorsOnly}
+              onChange={(e) => {
+                setErrorsOnly(e.target.checked);
+                resetToFirstPage();
+              }}
+            />
             <span className="switch__track"><span className="switch__thumb" /></span>
             <span className="switch__label">Errors only</span>
           </label>
@@ -313,14 +383,20 @@ export function Logs({ logId }: { logId?: string }) {
             label="Filter by channel"
             groups={channelGroups}
             value={channelFilter}
-            onChange={(v) => setChannelFilter(v === "official" || v === "custom" ? v : "")}
+            onChange={(v) => {
+              setChannelFilter(v === "official" || v === "custom" ? v : "");
+              resetToFirstPage();
+            }}
             triggerStyle={{ height: 30 }}
           />
           <Listbox
             label="Filter by model"
             groups={modelGroups}
             value={modelFilter ?? ""}
-            onChange={(v) => setModelFilter(v || null)}
+            onChange={(v) => {
+              setModelFilter(v || null);
+              resetToFirstPage();
+            }}
             triggerStyle={{ height: 30 }}
           />
           <span className="mono" style={{ fontSize: 12, color: "var(--muted)" }}>
@@ -413,6 +489,38 @@ export function Logs({ logId }: { logId?: string }) {
             </tbody>
           </table>
         </div>
+
+        <footer className="logs-pager">
+          <span className="logs-pager__count" aria-live="polite">
+            {total} record{total === 1 ? "" : "s"}
+          </span>
+          <div className="logs-pager__nav">
+            <Button
+              variant="ghost-sm"
+              icon={ChevronLeft}
+              aria-label="Previous page"
+              disabled={page <= 1}
+              onClick={() => goToPage(page - 1)}
+            />
+            <span className="logs-pager__status">Page {page} of {totalPages}</span>
+            <Button
+              variant="ghost-sm"
+              icon={ChevronRight}
+              aria-label="Next page"
+              disabled={page >= totalPages}
+              onClick={() => goToPage(page + 1)}
+            />
+          </div>
+          <div className="logs-pager__size">
+            <Listbox
+              label="Records per page"
+              groups={pageSizeGroups}
+              value={String(pageSize)}
+              onChange={onPageSizeChange}
+              triggerStyle={{ height: 28 }}
+            />
+          </div>
+        </footer>
       </section>
 
       <ConfirmDialog
@@ -431,7 +539,7 @@ export function Logs({ logId }: { logId?: string }) {
         loading={drawerLoading}
         onClose={() => {
           setDrawer(null);
-          navigate({ kind: "logs" });
+          navigate({ kind: "logs", page: page > 1 ? page : undefined });
         }}
       />
     </>

@@ -4,7 +4,7 @@ export type Route =
   | { kind: "dashboard" }
   | { kind: "models"; providerId?: string }
   | { kind: "setup" }
-  | { kind: "logs"; logId?: string };
+  | { kind: "logs"; logId?: string; page?: number };
 
 export function parseHash(hash: string): Route {
   const raw = hash.replace(/^#\/?/, "");
@@ -24,7 +24,10 @@ export function parseHash(hash: string): Route {
       return { kind: "setup" };
     case "logs": {
       const logId = query.get("id") ?? undefined;
-      return { kind: "logs", logId };
+      const pageRaw = query.get("page");
+      const pageNum = pageRaw === null ? NaN : Number(pageRaw);
+      const page = Number.isInteger(pageNum) && pageNum >= 1 ? pageNum : undefined;
+      return { kind: "logs", logId, page };
     }
     default:
       return { kind: "dashboard" };
@@ -39,8 +42,13 @@ export function toHash(route: Route): string {
       return route.providerId ? `#/models/${encodeURIComponent(route.providerId)}` : "#/models";
     case "setup":
       return "#/setup";
-    case "logs":
-      return route.logId ? `#/logs?id=${encodeURIComponent(route.logId)}` : "#/logs";
+    case "logs": {
+      const params = new URLSearchParams();
+      if (route.logId) params.set("id", route.logId);
+      if (route.page !== undefined && route.page > 1) params.set("page", String(route.page));
+      const suffix = params.toString();
+      return suffix ? `#/logs?${suffix}` : "#/logs";
+    }
   }
 }
 

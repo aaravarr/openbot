@@ -113,3 +113,25 @@ test("generic OpenAI thinking=false sets thinking disabled", () => {
   assert.equal(result, "openai-thinking-off");
   assert.deepEqual(body.thinking, { type: "disabled" });
 });
+
+test("generic OpenAI passes max through as reasoning_effort max", () => {
+  const body: Record<string, unknown> = { model: "deepseek-v4-flash" };
+  const result = maps.applyProviderReasoningControls(body, {
+    modelId: "deepseek-v4-flash",
+    baseUrl: "https://openrouter.ai/api/v1",
+    parameters: [{ id: "effort", value: "max" }],
+  });
+  assert.equal(result, "openai-effort");
+  assert.equal(body.reasoning_effort, "max");
+});
+
+test("generic OpenAI passes xhigh through as reasoning_effort xhigh", () => {
+  const body: Record<string, unknown> = { model: "deepseek-v4-flash" };
+  const result = maps.applyProviderReasoningControls(body, {
+    modelId: "deepseek-v4-flash",
+    baseUrl: "https://openrouter.ai/api/v1",
+    parameters: [{ id: "effort", value: "xhigh" }],
+  });
+  assert.equal(result, "openai-effort");
+  assert.equal(body.reasoning_effort, "xhigh");
+});

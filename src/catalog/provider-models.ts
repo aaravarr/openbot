@@ -1,5 +1,7 @@
 import { type Catalog } from "../domain/types.ts";
+import { keepReasoningOrder } from "../domain/model.ts";
 import { secretFor, type SecretStore } from "../supervisor/secrets.ts";
+import { fetchedReasoningLevels, mapVendorEffort } from "./reasoning-efforts.ts";
 
 /**
  * Source A: fetch a provider's own model list from its base URL + /v1/models,
@@ -18,8 +20,6 @@ export const PROVIDER_MODELS_TOTAL_TIMEOUT_MS = 30_000;
 export const defaultFetch: FetchLike = (url, init) => fetch(url, init);
 
 const MODALITY_TOKENS = new Set<string>(["text", "image", "video", "audio"]);
-const REASONING_ORDER = ["default", "none", "low", "medium", "high", "max", "xhigh"];
-const REASONING_TOKENS = new Set<string>(REASONING_ORDER);
 
 /** Normalized Source A model row (PRD §8.1 models[]). */
 export type FetchedModel = {
@@ -93,20 +93,16 @@ export function filterModalities(value: unknown): string[] {
 
 export function filterReasoningLevels(value: unknown): string[] {
   const raw = firstArray(value);
-  const out: string[] = [];
   const seen = new Set<string>();
   if (raw) {
     for (const item of raw) {
-      if (typeof item !== "string") {
-        continue;
-      }
-      const token = item.trim().toLowerCase();
-      if (REASONING_TOKENS.has(token) && !seen.has(token)) {
-        seen.add(token);
+      const mapped = mapVendorEffort(item);
+      if (mapped !== undefined) {
+        seen.add(mapped);
       }
     }
   }
-  return REASONING_ORDER.filter((level) => seen.has(level));
+  return keepReasoningOrder(seen);
 }
 
 function modelListFrom(raw: unknown): unknown[] | undefined {
@@ -136,7 +132,7 @@ function normalizeEntry(item: Record<string, unknown>, id: string): FetchedModel
       item.max_tokens,
     ),
     modalities: filterModalities(firstArray(item.input_modalities, architecture?.input_modalities, item.modalities)),
-    reasoningLevels: filterReasoningLevels(firstArray(item.reasoningLevels, item.reasoning_levels)),
+    reasoningLevels: [...fetchedReasoningLevels(item)],
   };
 }
 

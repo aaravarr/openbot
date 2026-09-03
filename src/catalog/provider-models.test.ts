@@ -80,7 +80,36 @@ test("normalizeProviderModels maps modalities and reasoning levels to the allowe
   const model = result.models[0];
   assert.ok(model);
   assert.deepEqual(model.modalities, ["text", "image"]);
-  assert.deepEqual(model.reasoningLevels, ["low", "high"]);
+  assert.deepEqual(model.reasoningLevels, ["default", "none", "low", "high"]);
+});
+
+test("normalizeProviderModels reads nested reasoning.supported_efforts", () => {
+  const result = normalizeProviderModels({
+    data: [
+      {
+        id: "deepseek-v4-flash",
+        reasoning: { mandatory: false, supported_efforts: ["xhigh", "high"] },
+      },
+    ],
+  });
+  assert.ok(result);
+  assert.deepEqual(result.models[0]?.reasoningLevels, ["default", "none", "high", "xhigh"]);
+});
+
+test("normalizeProviderModels reads nested reasoning_options", () => {
+  const result = normalizeProviderModels({
+    data: [
+      {
+        id: "glm-5.3-flash",
+        reasoning_options: [
+          { type: "toggle" },
+          { type: "effort", values: ["low", "high", "max"] },
+        ],
+      },
+    ],
+  });
+  assert.ok(result);
+  assert.deepEqual(result.models[0]?.reasoningLevels, ["default", "none", "low", "high", "max"]);
 });
 
 test("fetch-models succeeds and forwards the stored secret server-side", async () => {

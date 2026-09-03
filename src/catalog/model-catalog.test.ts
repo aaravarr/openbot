@@ -409,3 +409,145 @@ test("catalog keeps openrouter fields when models.dev yields an empty husk", asy
     assert.equal(result.model.name, "GLM-5.3-Flash"); // models.dev name still wins the non-null conflict
   }
 });
+
+test("catalog maps OpenRouter supported_efforts including max and omits none when mandatory", async () => {
+  const fs = memFs();
+  const fetchFn: FetchLike = async (url) => {
+    if (url.includes("openrouter")) {
+      return jsonResponse(200, {
+        data: [
+          {
+            id: "z-ai/glm-5.3-flash",
+            name: "Z.ai: GLM 5.3 Flash",
+            reasoning: { mandatory: true, supported_efforts: ["max", "high", "low"] },
+          },
+        ],
+      });
+    }
+    return jsonResponse(200, {});
+  };
+  const manager = createCatalogManager({ fs, cachePath, fetchFn, now: clock() });
+  await manager.start();
+
+  const result = manager.snapshot("z-ai/glm-5.3-flash").lookup;
+  assert.ok(result);
+  assert.equal(result.found, true);
+  if (result.found) {
+    assert.equal(result.model.reasoning, true);
+    assert.deepEqual(result.model.reasoningLevels, ["default", "low", "high", "max"]);
+    assert.equal(result.model.reasoningLevels.includes("none"), false);
+  }
+});
+
+test("catalog maps models.dev reasoning_options effort plus toggle", async () => {
+  const fs = memFs();
+  const fetchFn: FetchLike = async (url) => {
+    if (url.includes("openrouter")) {
+      return jsonResponse(200, { data: [] });
+    }
+    return jsonResponse(200, {
+      zai: {
+        models: {
+          "glm-5.3-flash": {
+            id: "glm-5.3-flash",
+            name: "GLM-5.3-Flash",
+            reasoning: true,
+            reasoning_options: [
+              { type: "toggle" },
+              { type: "effort", values: ["low", "high", "max"] },
+            ],
+          },
+        },
+      },
+    });
+  };
+  const manager = createCatalogManager({ fs, cachePath, fetchFn, now: clock() });
+  await manager.start();
+
+  const result = manager.snapshot("glm-5.3-flash").lookup;
+  assert.ok(result);
+  assert.equal(result.found, true);
+  if (result.found) {
+    assert.equal(result.model.reasoning, true);
+    assert.deepEqual(result.model.reasoningLevels, ["default", "none", "low", "high", "max"]);
+  }
+});
+
+test("catalog unions reasoningLevels across records that share a bare id", async () => {
+  const fs = memFs();
+  const fetchFn: FetchLike = async (url) => {
+    if (url.includes("openrouter")) {
+      return jsonResponse(200, {
+        data: [
+          {
+            id: "z-ai/glm-5.3-flash",
+            name: "Z.ai: GLM 5.3 Flash",
+            reasoning: { mandatory: false, supported_efforts: ["xhigh", "high"] },
+          },
+        ],
+      });
+    }
+    return jsonResponse(200, {
+      zai: {
+        models: {
+          "glm-5.3-flash": {
+            id: "glm-5.3-flash",
+            name: "GLM-5.3-Flash",
+            reasoning: true,
+            reasoning_options: [
+              { type: "toggle" },
+              { type: "effort", values: ["low", "high", "max"] },
+            ],
+          },
+        },
+      },
+    });
+  };
+  const manager = createCatalogManager({ fs, cachePath, fetchFn, now: clock() });
+  await manager.start();
+
+  for (const modelId of ["z-ai/glm-5.3-flash", "glm-5.3-flash"]) {
+    const result = manager.snapshot(modelId).lookup;
+    assert.ok(result);
+    assert.equal(result.found, true, `lookup by "${modelId}" should hit`);
+    if (result.found) {
+      assert.deepEqual(result.model.reasoningLevels, ["default", "none", "low", "high", "max", "xhigh"]);
+    }
+  }
+});
+
+test("catalog disk cache without reasoningLevels stays boolean-only", async () => {
+  const fs = memFs();
+  fs.write(
+    cachePath,
+    JSON.stringify({
+      lastFetched: "t0",
+      totalModels: 1,
+      sources: [],
+      models: {
+        "z-ai/glm-5.3-flash": {
+          id: "z-ai/glm-5.3-flash",
+          name: "GLM",
+          contextLength: null,
+          maxOutputTokens: null,
+          modalities: [],
+          reasoning: true,
+          pricing: null,
+        },
+      },
+    }),
+  );
+  const fetchFn: FetchLike = async () => {
+    throw new Error("down");
+  };
+  const manager = createCatalogManager({ fs, cachePath, fetchFn, now: clock() });
+  await manager.start();
+
+  const result = manager.snapshot("z-ai/glm-5.3-flash").lookup;
+  assert.ok(result);
+  assert.equal(result.found, true);
+  if (result.found) {
+    assert.equal(result.model.reasoning, true);
+    assert.deepEqual(result.model.reasoningLevels, []);
+  }
+});

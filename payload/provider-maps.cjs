@@ -77,7 +77,7 @@ function applyGeneric(body, parameters) {
     return "openai-thinking-off";
   }
   var effort = param(parameters, "effort");
-  var openaiEffort = { low: "low", medium: "medium", high: "high", max: "high", xhigh: "high" };
+  var openaiEffort = { low: "low", medium: "medium", high: "high", max: "max", xhigh: "xhigh" };
   var token = effort != null ? openaiEffort[String(effort)] : undefined;
   if (token && body.reasoning_effort == null) {
     body.reasoning_effort = token;

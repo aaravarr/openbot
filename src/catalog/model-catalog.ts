@@ -1,5 +1,11 @@
 import { type AbsPath } from "../domain/types.ts";
 import { defaultFetch, filterModalities, type FetchLike } from "./provider-models.ts";
+import {
+  buildReasoningAllowList,
+  parseStoredReasoningLevels,
+  unionReasoningLevels,
+  vendorReasoningFacts,
+} from "./reasoning-efforts.ts";
 
 export type { FetchLike } from "./provider-models.ts";
 
@@ -31,6 +37,7 @@ export type CatalogModel = {
   readonly maxOutputTokens: number | null;
   readonly modalities: string[];
   readonly reasoning: boolean;
+  readonly reasoningLevels: readonly string[];
   readonly pricing: CatalogPricing | null;
 };
 
@@ -155,10 +162,31 @@ function hasReasoning(item: Record<string, unknown>): boolean {
   return REASONING_ID_MARKERS.some((marker) => id.includes(marker) || name.includes(marker));
 }
 
+function attachReasoning(
+  item: Record<string, unknown>,
+  base: Omit<CatalogModel, "reasoning" | "reasoningLevels">,
+  hint: boolean,
+): CatalogModel {
+  const reasoningLevels = buildReasoningAllowList(vendorReasoningFacts(item), hint);
+  return {
+    ...base,
+    reasoning: hint || reasoningLevels.some((level) => level !== "default"),
+    reasoningLevels,
+  };
+}
+
 /** Strip the provider namespace, leaving the bare model id (`z-ai/glm-5.3-flash` -> `glm-5.3-flash`). */
 function bareModelId(id: string): string {
   const slash = id.lastIndexOf("/");
   return slash === -1 ? id : id.slice(slash + 1);
+}
+
+function reasoningRichness(model: CatalogModel): number {
+  const nonDefault = model.reasoningLevels.filter((level) => level !== "default").length;
+  if (nonDefault > 0) {
+    return nonDefault;
+  }
+  return model.reasoning ? 1 : 0;
 }
 
 /** Count populated fields so alias resolution can prefer the richest record. */
@@ -168,7 +196,7 @@ function populatedFields(model: CatalogModel): number {
   if (model.contextLength !== null) count += 1;
   if (model.maxOutputTokens !== null) count += 1;
   if (model.modalities.length > 0) count += 1;
-  if (model.reasoning) count += 1;
+  count += reasoningRichness(model);
   if (model.pricing !== null) count += 1;
   return count;
 }
@@ -207,6 +235,7 @@ function mergePricing(
  * Field-level merge so a husk from one source never erases a populated field
  * from the other: a non-null (or non-empty) value wins over null/empty, and on
  * a true conflict the incoming record wins when it is the models.dev source.
+ * reasoningLevels is always a union so a boolean-only husk cannot wipe efforts.
  */
 function mergeCatalogModel(existing: CatalogModel, incoming: CatalogModel, incomingWins: boolean): CatalogModel {
   const name = preferNonNull(existing.name, incoming.name, incomingWins);
@@ -225,6 +254,7 @@ function mergeCatalogModel(existing: CatalogModel, incoming: CatalogModel, incom
     maxOutputTokens,
     modalities,
     reasoning: existing.reasoning || incoming.reasoning,
+    reasoningLevels: unionReasoningLevels(existing.reasoningLevels, incoming.reasoningLevels),
     pricing: mergePricing(existing.pricing, incoming.pricing, incomingWins),
   };
 }
@@ -243,19 +273,22 @@ function normalizeOpenRouterEntry(item: unknown): CatalogModel | undefined {
   }
   const architecture = nestedRecord(item, "architecture");
   const topProvider = nestedRecord(item, "top_provider");
-  return {
-    id: item.id.trim(),
-    name: stringOrNull(item.name),
-    contextLength: firstPositiveInt(item.context_length, item.contextLength, architecture?.context_length),
-    maxOutputTokens: firstPositiveInt(
-      topProvider?.max_completion_tokens,
-      item.max_completion_tokens,
-      item.maxOutputTokens,
-    ),
-    modalities: filterModalities(firstArray(item.input_modalities, architecture?.input_modalities, item.modalities)),
-    reasoning: hasReasoning(item),
-    pricing: normalizePricing(item.pricing),
-  };
+  return attachReasoning(
+    item,
+    {
+      id: item.id.trim(),
+      name: stringOrNull(item.name),
+      contextLength: firstPositiveInt(item.context_length, item.contextLength, architecture?.context_length),
+      maxOutputTokens: firstPositiveInt(
+        topProvider?.max_completion_tokens,
+        item.max_completion_tokens,
+        item.maxOutputTokens,
+      ),
+      modalities: filterModalities(firstArray(item.input_modalities, architecture?.input_modalities, item.modalities)),
+      pricing: normalizePricing(item.pricing),
+    },
+    hasReasoning(item),
+  );
 }
 
 /**
@@ -273,15 +306,18 @@ function normalizeModelsDevEntry(item: unknown): CatalogModel | undefined {
   }
   const limit = nestedRecord(item, "limit");
   const modalities = nestedRecord(item, "modalities");
-  return {
-    id: item.id.trim(),
-    name: stringOrNull(item.name),
-    contextLength: firstPositiveInt(limit?.context, item.context_length, item.contextLength),
-    maxOutputTokens: firstPositiveInt(limit?.output, item.max_output_tokens, item.maxOutputTokens),
-    modalities: filterModalities(firstArray(modalities?.input, item.input_modalities, item.modalities)),
-    reasoning: item.reasoning === true || hasReasoning(item),
-    pricing: normalizePricing(item.cost ?? item.pricing),
-  };
+  return attachReasoning(
+    item,
+    {
+      id: item.id.trim(),
+      name: stringOrNull(item.name),
+      contextLength: firstPositiveInt(limit?.context, item.context_length, item.contextLength),
+      maxOutputTokens: firstPositiveInt(limit?.output, item.max_output_tokens, item.maxOutputTokens),
+      modalities: filterModalities(firstArray(modalities?.input, item.input_modalities, item.modalities)),
+      pricing: normalizePricing(item.cost ?? item.pricing),
+    },
+    item.reasoning === true || hasReasoning(item),
+  );
 }
 
 function dedupeEntries(
@@ -342,6 +378,7 @@ function parseCatalogModel(value: unknown): CatalogModel | undefined {
     maxOutputTokens: firstPositiveInt(value.maxOutputTokens),
     modalities,
     reasoning: value.reasoning === true,
+    reasoningLevels: parseStoredReasoningLevels(value.reasoningLevels),
     pricing: normalizePricing(value.pricing),
   };
 }
@@ -392,25 +429,43 @@ export function createCatalogManager(deps: {
   const sources: { name: string; url: string; modelCount: number; lastFetched: string | null }[] =
     MODEL_CATALOG_SOURCES.map((source) => ({ name: source.name, url: source.url, modelCount: 0, lastFetched: null }));
 
-  // Derived alias index: bare model id -> richest catalog record, so lookups by
-  // either the namespaced id (`z-ai/glm-5.3-flash`) or the bare id
-  // (`glm-5.3-flash`) both resolve. Rebuilt from `lookup` after every load/fetch.
-  let bareIndex = new Map<string, CatalogModel>();
-
-  function rebuildBareIndex(): void {
-    const next = new Map<string, CatalogModel>();
+  function modelsSharingBareId(bare: string): CatalogModel[] {
+    const matches: CatalogModel[] = [];
     for (const model of lookup.values()) {
-      const bare = bareModelId(model.id);
-      const current = next.get(bare);
-      if (
-        current === undefined ||
-        populatedFields(model) > populatedFields(current) ||
-        (populatedFields(model) === populatedFields(current) && model.id < current.id)
-      ) {
-        next.set(bare, model);
+      if (bareModelId(model.id) === bare) {
+        matches.push(model);
       }
     }
-    bareIndex = next;
+    return matches;
+  }
+
+  /**
+   * Resolve by exact id or bare id, unioning reasoningLevels across every
+   * record that shares the bare id (OpenRouter `z-ai/glm-5.3-flash` + models.dev
+   * `glm-5.3-flash`).
+   */
+  function resolveLookup(modelId: string): CatalogModel | undefined {
+    const bare = bareModelId(modelId);
+    const matches = modelsSharingBareId(bare);
+    if (matches.length === 0) {
+      return undefined;
+    }
+    const exact = lookup.get(modelId);
+    const ranked = [...matches].sort((a, b) => {
+      const delta = populatedFields(b) - populatedFields(a);
+      if (delta !== 0) {
+        return delta;
+      }
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+    let merged = ranked[0]!;
+    for (const model of ranked.slice(1)) {
+      merged = mergeCatalogModel(merged, model, false);
+    }
+    if (exact !== undefined) {
+      return { ...merged, id: exact.id };
+    }
+    return merged;
   }
 
   function currentStatus(): "ready" | "loading" | "failed" {
@@ -467,7 +522,6 @@ export function createCatalogManager(deps: {
           }
         }
       }
-      rebuildBareIndex();
       hasData = true;
       return true;
     } catch {
@@ -497,7 +551,6 @@ export function createCatalogManager(deps: {
         failures.push(outcome?.error ?? "fetch failed");
       }
     }
-    rebuildBareIndex();
     if (anySuccess) {
       lastFetched = stamp;
       lastError = null;
@@ -534,7 +587,7 @@ export function createCatalogManager(deps: {
     },
     snapshot(modelId?: string): CatalogSnapshot {
       const status = currentStatus();
-      const model = modelId !== undefined ? (lookup.get(modelId) ?? bareIndex.get(bareModelId(modelId))) : undefined;
+      const model = modelId !== undefined ? resolveLookup(modelId) : undefined;
       const lookupValue: CatalogLookup | undefined =
         modelId !== undefined ? (model !== undefined ? { found: true, model } : { found: false }) : undefined;
       return {

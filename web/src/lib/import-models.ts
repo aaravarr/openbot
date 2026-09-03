@@ -10,15 +10,39 @@ import type { CatalogLookupModel, FetchedModel } from "../api/types";
  * - contextTokens / maxOutputTokens: catalog value when present, else the
  *   fetch value, else omitted (the backend fills its default).
  * - modalities: the catalog's non-empty list, else the fetch list, else omitted.
- * - reasoningLevels: catalog `reasoning === true` → `["default","none","high"]`;
- *   `reasoning === false` → `["default"]` (no selectable reasoning); otherwise
- *   the fetch's levels, else omitted.
+ * - reasoningLevels:
+ *   1. catalog `reasoningLevels` nonempty → use that ordered allow-list
+ *   2. else fetched `reasoningLevels` nonempty → use Source A
+ *   3. else catalog `reasoning === false` → `["default"]`
+ *   4. else catalog `reasoning === true` → legacy `["default","none","high"]`
+ *      (boolean-only / old cache)
+ *   5. else omit (backend defaults)
+ *   A boolean-only catalog must not wipe nonempty Source A levels.
  */
 
-const CATALOG_REASONING: readonly string[] = ["default", "none", "high"];
+const LEGACY_CATALOG_REASONING: readonly string[] = ["default", "none", "high"];
 
 function positive(value: number | null | undefined): number | undefined {
   return value !== null && value !== undefined && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function importReasoningLevels(
+  fetched: FetchedModel,
+  catalog?: CatalogLookupModel,
+): readonly string[] | undefined {
+  if (catalog?.reasoningLevels !== undefined && catalog.reasoningLevels.length > 0) {
+    return catalog.reasoningLevels;
+  }
+  if (fetched.reasoningLevels?.length) {
+    return fetched.reasoningLevels;
+  }
+  if (catalog && catalog.reasoning === false) {
+    return ["default"];
+  }
+  if (catalog && catalog.reasoning === true) {
+    return LEGACY_CATALOG_REASONING;
+  }
+  return undefined;
 }
 
 export function modelImportFields(
@@ -33,15 +57,7 @@ export function modelImportFields(
 } {
   const contextTokens = positive(catalog?.contextLength) ?? positive(fetched.contextLength);
   const maxOutputTokens = positive(catalog?.maxOutputTokens) ?? positive(fetched.maxOutputTokens);
-
-  let reasoningLevels: readonly string[] | undefined;
-  if (catalog && catalog.reasoning === true) {
-    reasoningLevels = CATALOG_REASONING;
-  } else if (catalog && catalog.reasoning === false) {
-    reasoningLevels = ["default"];
-  } else if (fetched.reasoningLevels?.length) {
-    reasoningLevels = fetched.reasoningLevels;
-  }
+  const reasoningLevels = importReasoningLevels(fetched, catalog);
 
   const modalities = catalog?.modalities?.length
     ? catalog.modalities

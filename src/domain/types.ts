@@ -60,7 +60,7 @@ type SecretKeys = "apiKey" | "Authorization" | "API_SERVER_KEY" | "secret" | "ke
 export type ProviderParameter = { readonly id: string; readonly value: string };
 
 /** default = omit thinking fields. none = send an explicit off. */
-export type ReasoningLevel = "default" | "none" | "low" | "medium" | "high" | "max" | "xhigh";
+export type ReasoningLevel = "default" | "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export type Modality = "text" | "image" | "video" | "audio";
 

@@ -511,7 +511,7 @@ test("catalog unions reasoningLevels across records that share a bare id", async
     assert.ok(result);
     assert.equal(result.found, true, `lookup by "${modelId}" should hit`);
     if (result.found) {
-      assert.deepEqual(result.model.reasoningLevels, ["default", "none", "low", "high", "max", "xhigh"]);
+      assert.deepEqual(result.model.reasoningLevels, ["default", "none", "low", "high", "xhigh", "max"]);
     }
   }
 });

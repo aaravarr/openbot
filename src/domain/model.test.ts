@@ -5,12 +5,14 @@ import {
   DEFAULT_MODALITIES,
   DEFAULT_REASONING_LEVELS,
   hasSelectableReasoning,
+  keepReasoningOrder,
   makeModel,
   normalizeModel,
   parseModalities,
   parsePositiveTokens,
   parseReasoningLevels,
   pickActiveReasoning,
+  REASONING_LEVELS,
 } from "./model.ts";
 import { HIGH_AGENT_MAX_TOKENS, type ModelId, type ProviderId } from "./types.ts";
 import { parseModelSlug } from "../supervisor/plan.ts";
@@ -43,6 +45,18 @@ test("empty reasoning and modality lists fall back to defaults", () => {
 
 test("parseReasoningLevels prepends default on old catalogs", () => {
   assert.deepEqual(parseReasoningLevels(["none", "low", "high"]), ["default", "none", "low", "high"]);
+});
+
+test("REASONING_LEVELS places xhigh one step below max", () => {
+  assert.deepEqual(
+    [...REASONING_LEVELS],
+    ["default", "none", "low", "medium", "high", "xhigh", "max"],
+  );
+  assert.deepEqual(
+    keepReasoningOrder(new Set(["max", "xhigh", "high", "default"])),
+    ["default", "high", "xhigh", "max"],
+  );
+  assert.deepEqual(parseReasoningLevels(["max", "xhigh", "high"]), ["default", "high", "xhigh", "max"]);
 });
 
 test("parsePositiveTokens rejects zero, negative, and oversized values", () => {

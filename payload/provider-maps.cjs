@@ -37,7 +37,7 @@ function applyGlm(body, parameters) {
     return "glm-thinking-off";
   }
   var effort = param(parameters, "effort");
-  var glmEffort = { low: "low", medium: "medium", high: "high", max: "max", xhigh: "max" };
+  var glmEffort = { low: "low", medium: "medium", high: "high", xhigh: "max", max: "max" };
   var token = effort != null ? glmEffort[String(effort)] : undefined;
   if (token) {
     if (!body.thinking) body.thinking = { type: "enabled" };
@@ -48,7 +48,7 @@ function applyGlm(body, parameters) {
 }
 
 function applyGrok(body, maxMode, parameters) {
-  var effortToXai = { low: "low", medium: "medium", high: "high", max: "xhigh", xhigh: "xhigh" };
+  var effortToXai = { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "xhigh" };
   if (maxMode === true) {
     body.reasoning_effort = "xhigh";
     return "grok-max";
@@ -77,7 +77,7 @@ function applyGeneric(body, parameters) {
     return "openai-thinking-off";
   }
   var effort = param(parameters, "effort");
-  var openaiEffort = { low: "low", medium: "medium", high: "high", max: "max", xhigh: "xhigh" };
+  var openaiEffort = { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
   var token = effort != null ? openaiEffort[String(effort)] : undefined;
   if (token && body.reasoning_effort == null) {
     body.reasoning_effort = token;

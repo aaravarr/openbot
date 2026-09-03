@@ -148,7 +148,7 @@ that quotes the post-save human message (FR-45); **refusals** render as structur
   - Remove provider (confirm; cascade copy spells out model loss and, for the last provider, the
     return to official) — FR-12.
   - Add / edit model: slug, context tokens, max output tokens, reasoning allow-list chips
-    (`default/none/low/medium/high/max/xhigh`; `default` always kept), modalities — FR-13, FR-14.
+    (`default/none/low/medium/high/xhigh/max`; `default` always kept), modalities — FR-13, FR-14.
   - Per-row **Use** button (secondary affordance for FR-3; key-missing detour applies — FR-22).
   - Key-required guidance: choosing/using a model whose provider has no key routes to that
     provider's key field with an explanation, never a dead 503 — FR-22, FR-24.
@@ -444,7 +444,7 @@ No fields required. `providerId` is a URL-encoded path segment (the provider slu
       "contextLength": 128000,
       "maxOutputTokens": 65536,
       "modalities": ["text"],
-      "reasoningLevels": ["default", "none", "low", "medium", "high", "max", "xhigh"]
+      "reasoningLevels": ["default", "none", "low", "medium", "high", "xhigh", "max"]
     }
   ]
 }
@@ -459,7 +459,7 @@ No fields required. `providerId` is a URL-encoded path segment (the provider slu
 | `contextLength` | int \| null | no | context window in tokens; 0/null = unknown |
 | `maxOutputTokens` | int \| null | no | max output in tokens; 0/null = unknown |
 | `modalities` | string[] | no | subset of `text`/`image`/`video`/`audio`; empty = unknown |
-| `reasoningLevels` | string[] | no | subset of `default`/`none`/`low`/`medium`/`high`/`max`/`xhigh`; empty = use defaults |
+| `reasoningLevels` | string[] | no | subset of `default`/`none`/`low`/`medium`/`high`/`xhigh`/`max`; empty = use defaults |
 
 **Partial failure** = `200` with `ok: true` and `skipped > 0` (some entries dropped, e.g.
 `missing-id`). This is the UI "partial-failure" state: valid rows remain addable.

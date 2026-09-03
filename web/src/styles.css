@@ -851,13 +851,13 @@ tr.is-open .row-indicator { border-left-color: var(--primary); }
 .model-meta-line { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .model-row-actions {
   display: inline-flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
   align-items: center;
-  flex-wrap: wrap;
   gap: 4px;
-  max-width: 100%;
-  vertical-align: middle;
+  white-space: nowrap;
 }
-table.data td.cell-actions { white-space: normal; }
+table.data td.cell-actions { white-space: nowrap; width: 1%; }
 
 .logs-toolbar { flex-wrap: wrap; gap: 10px; }
 .logs-toolbar__spacer { flex: 1; min-width: 0; }
@@ -1237,10 +1237,17 @@ table.data td.cell-actions { white-space: normal; }
   table.data.table--stack tbody td.cell-actions {
     justify-content: flex-end;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     padding-top: 8px;
     margin-top: 4px;
     border-top: 1px solid var(--hairline-soft);
+  }
+  table.data.table--stack tbody td.cell-actions .model-row-actions {
+    display: inline-flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    white-space: nowrap;
   }
   table.data.table--stack tbody td.cell-actions::before { display: none; }
   table.data.table--stack tbody td.cell-actions .btn,

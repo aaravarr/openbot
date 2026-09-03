@@ -352,7 +352,7 @@
       type: "success",
       skipped: 0,
       models: [
-        { id: "glm-5.3", name: "GLM 5.3", matched: true, context: "128K", out: "65,536", modalities: "text", reasoning: "default·none·low·medium·high·max·xhigh", exists: true },
+        { id: "glm-5.3", name: "GLM 5.3", matched: true, context: "128K", out: "65,536", modalities: "text", reasoning: "default·none·low·medium·high·xhigh·max", exists: true },
         { id: "glm-5.3-flash", name: "GLM 5.3 Flash", matched: true, context: "128K", out: "65,536", modalities: "text · image", reasoning: "default·none·low·medium·high", exists: true },
         { id: "glm-5.2", name: "GLM 5.2", matched: true, context: "128K", out: "65,536", modalities: "text", reasoning: "default·none·low·medium·high", exists: false },
         { id: "glm-4.5", name: "GLM 4.5", matched: true, context: "128K", out: "32,768", modalities: "text", reasoning: "default·none·low·medium·high", exists: false },
@@ -372,7 +372,7 @@
       skipped: 2,
       skippedReason: "missing id",
       models: [
-        { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", matched: true, context: "128K", out: "65,536", modalities: "text", reasoning: "default·none·low·medium·high·max·xhigh", exists: true },
+        { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", matched: true, context: "128K", out: "65,536", modalities: "text", reasoning: "default·none·low·medium·high·xhigh·max", exists: true },
         { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", matched: true, context: "128K", out: "65,536", modalities: "text", reasoning: "default·none·low·medium·high", exists: true },
         { id: "deepseek-v4-flash-vision", name: "DeepSeek V4 Flash Vision", matched: true, context: "128K", out: "65,536", modalities: "text · image", reasoning: "default·none·low·medium·high", exists: false },
         { id: "deepseek-reasoner", name: "DeepSeek Reasoner", matched: true, context: "128K", out: "32,768", modalities: "text", reasoning: "default·none·low·medium·high", exists: false },

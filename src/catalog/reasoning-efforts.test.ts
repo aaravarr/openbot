@@ -142,7 +142,7 @@ test("unionReasoningLevels does not let an empty husk erase a rich list", () => 
   assert.deepEqual(unionReasoningLevels([], ["default", "none", "xhigh"]), ["default", "none", "xhigh"]);
   assert.deepEqual(
     unionReasoningLevels(["default", "max"], ["default", "none", "xhigh"]),
-    ["default", "none", "max", "xhigh"],
+    ["default", "none", "xhigh", "max"],
   );
 });
 

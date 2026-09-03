@@ -117,7 +117,7 @@ Catalog = { providers: Provider[], models: Model[], bindings: Binding[] }
   - `maxOutputTokens`: default 65 536 (`HIGH_AGENT_MAX_TOKENS`), cap 10 000 000; enforced by the
     hop as the ceiling for upstream `max_tokens`.
   - `reasoningLevels`: per-model **allow-list** from universe
-    `default | none | low | medium | high | max | xhigh`; default allow-list is
+    `default | none | low | medium | high | xhigh | max`; default allow-list is
     `[default, none, low, medium, high]`. `default` = omit thinking fields upstream; `none` = send
     an explicit disable. `default` is always present after normalization.
   - `activeReasoning`: the level actually sent on the next turn; must be in the allow-list
@@ -233,7 +233,7 @@ current UI exposure.
   provider, the box returns to official and the plan file is deleted.
 - **FR-13** [UI] Add a model to a provider (`upsert-model`) with limits.
 - **FR-14** [UI] Edit a model's limits: context tokens, max output tokens, reasoning-level
-  allow-list (chips from `default/none/low/medium/high/max/xhigh`), input modalities
+  allow-list (chips from `default/none/low/medium/high/xhigh/max`), input modalities
   (text/image/video/audio). Server-side coercion: positive ints ≤ 10 000 000; `default` always
   kept in the allow-list; unknown values dropped.
 - **FR-15** [UI] See per-model meta: formatted context/output sizes and modalities.

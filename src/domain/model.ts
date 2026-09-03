@@ -17,8 +17,8 @@ export const REASONING_LEVELS: readonly ReasoningLevel[] = [
   "low",
   "medium",
   "high",
-  "max",
   "xhigh",
+  "max",
 ];
 export const DEFAULT_REASONING_LEVELS: readonly ReasoningLevel[] = ["default", "none", "low", "medium", "high"];
 export const MODALITIES: readonly Modality[] = ["text", "image", "video", "audio"];

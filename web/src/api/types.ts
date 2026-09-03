@@ -4,7 +4,7 @@
  * the log endpoints, and the §8 model-fetch/catalog endpoints.
  */
 
-export type ReasoningLevel = "default" | "none" | "low" | "medium" | "high" | "max" | "xhigh";
+export type ReasoningLevel = "default" | "none" | "low" | "medium" | "high" | "xhigh" | "max";
 export type Modality = "text" | "image" | "video" | "audio";
 export type LogChannel = "hop" | "official" | "custom-host";
 export type LogChannelFilter = "official" | "custom";
@@ -15,8 +15,8 @@ export const REASONING_LEVELS: readonly ReasoningLevel[] = [
   "low",
   "medium",
   "high",
-  "max",
   "xhigh",
+  "max",
 ];
 export const DEFAULT_REASONING_LEVELS: readonly ReasoningLevel[] = [
   "default",

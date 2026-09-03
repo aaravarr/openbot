@@ -2,7 +2,7 @@ import { keepReasoningOrder, parseReasoningLevel } from "../domain/model.ts";
 import { type ReasoningLevel } from "../domain/types.ts";
 
 /**
- * Vendor effort token → OpenBot reasoning level. `max` and `xhigh` stay distinct
+ * Vendor effort token → OpenBot reasoning level. `xhigh` and `max` stay distinct
  * chips; unknown tokens are dropped. Do not use `parseReasoningLevels` here —
  * an empty list becomes DEFAULT_REASONING_LEVELS, which is wrong for catalog.
  */
@@ -18,11 +18,11 @@ const VENDOR_EFFORT_TO_LEVEL: { readonly [token: string]: ReasoningLevel } = {
   medium: "medium",
   med: "medium",
   high: "high",
-  max: "max",
   xhigh: "xhigh",
   "x-high": "xhigh",
   "extra-high": "xhigh",
   extra_high: "xhigh",
+  max: "max",
 };
 
 /** Fallback when reasoning is on but the vendor listed no efforts and no toggle. */
@@ -127,7 +127,7 @@ export function vendorReasoningFacts(item: unknown): VendorReasoningFacts {
 
 /**
  * Build the OpenBot allow-list from vendor facts.
- * Always keeps `default`. Does not invent `max` / `xhigh`.
+ * Always keeps `default`. Does not invent `xhigh` / `max`.
  */
 export function buildReasoningAllowList(
   facts: VendorReasoningFacts,

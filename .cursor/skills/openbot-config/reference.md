@@ -1,0 +1,257 @@
+# OpenBot config reference
+
+Read this from [SKILL.md](SKILL.md) when you need disk shapes, HTTP/CLI contracts, presets, or hop maps. Do not put secrets in examples.
+
+## Architecture
+
+OpenBot is a box supervisor. Callers parse input into `DesiredState` (`OfficialBox | CustomBox` in `src/domain/types.ts`), then `reconcile(desired)`. They do not sequence wrap, hop start, and host bounce themselves.
+
+- Chat routing: `node /home/box/sand-host/host-main.cjs` on the **Computer**.
+- Loopback `127.0.0.1:9280`: control UI, `/api/*`, hop `POST /v1/chat/completions`.
+- Custom wrap marker: `/* openbot-stock-wrap */`. A known `/* opengrok-stock-wrap */` header is peeled back to stock before official restore or custom wrap.
+- `align(desired, wrap)` returns `needs-reinstall` when desired is custom and the host file is stock unmarked. That is not official.
+- Infer desired from `openbot-mode`, not from plan-file existence. Official keeps the plan.
+- Bindings are `{ conversation, modelId }`. Derive `hopBaseUrl` with `hopBaseUrl(LOOPBACK_HOP)` → `http://127.0.0.1:9280/v1`. Secret field names are unrepresentable on `Binding`.
+- Live maps file is repo `payload/provider-maps.cjs` only, reloaded per hop call (`delete require.cache` then `require`).
+- `python …/hop-server.py` leftovers are SIGTERM'd. A leftover `hop-server.cjs` pid is stopped. Any other foreign listener on `:9280` is refused, not adopted.
+
+## Disk map
+
+Default root: `/home/box/sand-data/` (see env below).
+
+| Path | Kind | Shape / values |
+|---|---|---|
+| `openbot-plan.json` | JSON | Compiled custom plan (`planToJson(compileCustomPlan)`). Trailing newline. |
+| `openbot-mode` | text | `official` or `custom` plus newline. Do not delete the plan on official. |
+| `secrets.json` | JSON, **0600** | `{ "providers": { "<providerId>": "<stored locally>" } }` |
+| `openbot-expose` | text | `loopback` or `cloudflare-quick` plus newline. Written by reconcile. |
+| `openbot-logs.json` | JSON | LogSettings (see below). Trailing newline. |
+| `openbot-model-catalog.json` | JSON | Source B cache — **do not hand-edit**; `POST /api/model-catalog/refresh` |
+| `openbot-tunnel.json` | JSON | Cached public tunnel URL — do not fake a URL; use `set-expose` / `openbot tunnel on` |
+| `openbot-requests.jsonl` + `openbot-request-bodies/` | logs | Not config |
+| `host-main.cjs.pre-openbot` | backup | Read-only dump; do not patch as the source of wrap |
+| `openbot-hop.pid`, `openbot-ui.pid`, `openbot-tunnel.pid` | pids | Supervisor-owned; do not impersonate |
+| `bin/cloudflared` | binary | Downloaded by tunnel reconcile |
+
+Host file: `/home/box/sand-host/host-main.cjs`.
+
+## Env overrides
+
+| Env | Role |
+|---|---|
+| `OPENBOT_SAND_DATA` | Sand-data directory (default `/home/box/sand-data`) |
+| `OPENBOT_PLAN` | Plan JSON path; hop-handler and runtime also use this |
+| `OPENBOT_MODE` | Mode file path (runtime) |
+| `OPENBOT_SECRETS` | Secrets JSON path |
+| `OPENBOT_LOGS` | Log settings path |
+| `OPENBOT_MAPS` | Maps module path (default `payload/provider-maps.cjs` next to hop) |
+| `OPENBOT_HOST_MAIN` | Host file |
+| `OPENBOT_REPO` | Install / repo root for the loopback service |
+| `OPENBOT_API_KEY` | CLI install secret only (never argv `--api-key` / `--secret` / `-k`) |
+| `OPENBOT_TUNNEL` | Install expose token (`cloudflare` or `off`) |
+
+If `OPENBOT_SAND_DATA` is unset, hop/runtime may infer the directory from `OPENBOT_PLAN`.
+
+## `openbot-plan.json`
+
+Written by `planToJson(compileCustomPlan)` in `src/supervisor/plan.ts`:
+
+```json
+{
+  "kind": "custom",
+  "hop": { "host": "127.0.0.1", "port": 9280 },
+  "hopBaseUrl": "http://127.0.0.1:9280/v1",
+  "agents": {
+    "*": { "modelId": "<slug not providerId:slug>", "providerId": "<provider id>" }
+  },
+  "catalog": {
+    "providers": [{
+      "id": "zhipu",
+      "name": "Zhipu GLM",
+      "origin": "https://open.bigmodel.cn/api/paas/v4",
+      "maxTokensDefault": 65536,
+      "mapFile": "provider-maps.cjs"
+    }],
+    "models": [{
+      "id": "zhipu:glm-5.3-flash",
+      "providerId": "zhipu",
+      "slug": "glm-5.3-flash",
+      "contextTokens": 128000,
+      "maxOutputTokens": 65536,
+      "reasoningLevels": ["default", "none", "low", "medium", "high"],
+      "activeReasoning": "default",
+      "modalities": ["text"],
+      "parameters": []
+    }],
+    "bindings": [{
+      "conversation": { "kind": "wildcard" },
+      "modelId": "zhipu:glm-5.3-flash"
+    }]
+  }
+}
+```
+
+Rules:
+
+- `agents["*"].modelId` is the **slug**; `bindings[].modelId` is **`providerId:slug`**. Keep them in sync.
+- `model.id` must equal `providerId:slug`.
+- Hop `lookupRoute`: wildcard first (match requested against bound slug, id, or `agents["*"].modelId`), then catalog model by id, then by slug.
+- `mapFile` must stay `"provider-maps.cjs"`.
+- Provider `id` = slugify(name) (`toLowerCase`, non-alphanumerics → `-`, trim dashes, empty → `provider`), `/^[a-z0-9][a-z0-9._-]{0,63}$/i`.
+- Reasoning universe order: `default`, `none`, `low`, `medium`, `high`, `xhigh`, `max` (`xhigh` is one step below `max`).
+- Default allow-list if omitted: `default`, `none`, `low`, `medium`, `high`. Always keep `default` in an edited allow-list.
+- `maxOutputTokens` default 65536 (`HIGH_AGENT_MAX_TOKENS`), cap 10_000_000. Do not default 8192. `contextTokens` default 128000. `maxTokensDefault` on providers is 65536.
+- Do not put keys on bindings or in the plan.
+- Invalid or missing plan JSON → hop **503** (`openbot plan missing; save a provider in the UI`); runtime `loadPlan()` failure logs and falls back. Write valid JSON plus a trailing newline.
+- `parameters` are `{ "id": string, "value": string }[]`, preserved in the plan. No UI command edits them — Grok Bot may edit them in JSON (e.g. GLM `fast`). Do **not** set GLM `fast: true` as a default.
+- Keep `hop` / `hopBaseUrl` as loopback 9280 / `http://127.0.0.1:9280/v1`.
+
+## `secrets.json`
+
+Mode **0600**. Shape:
+
+```json
+{
+  "providers": {
+    "<providerId>": "<stored locally>"
+  }
+}
+```
+
+Hop `loadKey(providerId)` reads this file **per request**. Missing key → hop **503** `no secret for this provider`. Never print values.
+
+## `openbot-mode` and `openbot-expose`
+
+- Mode file: `official\n` or `custom\n`. Source of truth for wrap mode. Reconcile writes it (`writeMode`). Do not flip this file to wrap or unwrap.
+- Expose file: `loopback\n` or `cloudflare-quick\n`. Tokens `cloudflare` / `on` / `cf` parse to `cloudflare-quick`; `off` / `loopback` / `no` / `false` parse to `loopback`. Tailscale is not in this release.
+
+## `openbot-logs.json`
+
+```json
+{
+  "loggingEnabled": false,
+  "logBodies": false,
+  "logBodiesOnError": true,
+  "logRetentionDays": 7,
+  "maxBodyCaptureBytes": 65536,
+  "maxRecords": 200
+}
+```
+
+Ranges: `logRetentionDays` 1–365; `maxBodyCaptureBytes` 1024–1048576; `maxRecords` 1–10000.
+
+`payload/request-log.cjs` `loadSettings()` reads the file each time. Enabling logging **on** for official host tap may keep wrap marked (`attachSession` / `wrapSession` → `tapSession`, not a hop). Prefer `PUT /api/logs/settings` so prune plus official reconcile run. Custom hop logging can take a JSON edit.
+
+`PUT /api/logs/settings` JSON body uses the same fields; response includes `wrapBytesChanged` and optional `wrapError`. Also: `GET /api/logs/settings`, `GET /api/logs`, `GET /api/logs/:id`, `POST /api/logs/clear`.
+
+## Hop per-request reload
+
+On each `POST /v1/chat/completions`:
+
+- Plan: `readJson(OPENBOT_PLAN || /home/box/sand-data/openbot-plan.json)`
+- Secrets: `secrets.json` via `loadKey`
+- Maps: `require.cache` deleted, then `provider-maps.cjs`
+- Log settings: `loadSettings()` from disk
+
+Runtime wrap (`payload/runtime.cjs`) `loadPlan()` / `readMode()` also hit disk per turn. A JSON edit while custom wrap is live applies on the **next** Grok Bot message. It does not wrap a stock host.
+
+## `POST /api/save` kinds
+
+`src/parse/ui.ts`. Base `http://127.0.0.1:9280`. Header `Content-Type: application/json`. Each kind runs `reconcile`.
+
+| kind | Body fields | Notes |
+|---|---|---|
+| `official` | (none) | Stock wrap when logging off; tap wrap possible if logging on. Plan stays. |
+| `upsert-provider` or `custom` | `name`, `origin`, `modelSlug`, `secret`; optional limits | Empty `modelSlug` = zero-model provider. Provider id = slugify(name). Sets wildcard to the new model when slug is nonempty. |
+| `upsert-model` | `providerId`, `slug`; optional limits | Provider must exist. `model.id` = `providerId:slug`. |
+| `use-model` | `modelId` (`providerId:slug`); optional `reasoning` | Sets wildcard binding. |
+| `remove-provider` | `providerId` | Last provider/model → official + empty catalog write (plan removed only in that path). |
+| `remove-model` | `modelId` | Wildcard falls back to another model when possible. |
+| `set-secret` | `providerId`, `secret` | Provider must exist; custom needs at least one model. |
+| `update-provider` | `providerId`, `name`, `origin`; optional `secret` | Keeps existing id. |
+| `set-expose` | `expose`: `cloudflare` or `off` | Also accepts parse tokens listed above. |
+
+Optional model limits on upsert: `contextTokens`, `maxOutputTokens`, `reasoningLevels`, `modalities`, `activeReasoning`.
+
+Success `200`: `{ ok: true, wrapBytesChanged, snapshot, providers, models, keyedProviders, activeModelId, logSettings }`.
+
+## Other HTTP
+
+| Method | Path | Role |
+|---|---|---|
+| GET | `/api/state` or `/api/snapshot` | `{ snapshot, providers, models, keyedProviders, activeModelId, logSettings }` |
+| POST | `/api/providers/:id/fetch-models` | Source A list for that provider (needs secret) |
+| GET | `/api/model-catalog` | Source B cache snapshot; `?modelId=` lookup |
+| POST | `/api/model-catalog/refresh` | `202 { ok, status: "loading", startedAt }` |
+| POST | `/v1/chat/completions` | Hop (not a config API) |
+
+`GET /api/state` `snapshot.alignment.kind` is `needs-reinstall` when desired custom and wrap is `stock-unmarked`.
+
+## 409 refusals
+
+Reconcile refusals (`src/supervisor/reconcile.ts`):
+
+| kind | Meaning |
+|---|---|
+| `host-missing` | `host-main.cjs` not found |
+| `foreign-hop` | Foreign process owns `:9280` while desired is custom |
+| `foreign-ui` | Foreign process owns `:9280` while desired is official |
+| `foreign-opengrok` | Foreign opengrok wrap still present after peel |
+| `census-refused` | Host layout not wrappable (`private-lane`, `gap`, `ambiguous-factory`, …) |
+| `syntax-check-failed` | Wrapped host failed `node --check` |
+| `listen-failed` | Port 9280 could not be bound |
+
+Do not adopt the foreign pid. `--census-only` is observe, not proof that wrap would succeed (`--dry-run` is `proveWrap`).
+
+## CLI
+
+From `/home/box/sand-data/openbot` (or `openbot` on `PATH`):
+
+```bash
+node --experimental-strip-types src/cli.ts status
+node --experimental-strip-types src/cli.ts official
+node --experimental-strip-types src/cli.ts tunnel on
+node --experimental-strip-types src/cli.ts tunnel off
+node --experimental-strip-types src/cli.ts tunnel status
+```
+
+Install / update (reconcile from disk or new provider): `--origin` and `--model` together require `OPENBOT_API_KEY`. `--tunnel cloudflare|off`. `--host-main`, `--sand-data`, `--json`. `--census-only` is not wrap proof. `--dry-run` is.
+
+## Presets (origins only)
+
+From `web/src/lib/presets.ts`. Use for filling plan/API `origin` (and a suggested slug). Do not copy keys.
+
+| Name | origin |
+|---|---|
+| OpenAI | `https://api.openai.com/v1` |
+| DeepSeek | `https://api.deepseek.com` |
+| Zhipu GLM | `https://open.bigmodel.cn/api/paas/v4` |
+| Kimi | `https://api.moonshot.cn/v1` |
+| Qwen | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| OpenRouter | `https://openrouter.ai/api/v1` |
+| Groq | `https://api.groq.com/openai/v1` |
+| xAI | `https://api.x.ai/v1` |
+
+Custom: any OpenAI-compatible base URL.
+
+## Hop reasoning maps
+
+Do **not** retell these as UI display order. Display/allow-list order is `default · none · low · medium · high · xhigh · max`.
+
+`payload/provider-maps.cjs` `applyProviderReasoningControls`:
+
+- GLM (`glm*` slug or `bigmodel.cn` origin): `xhigh` → upstream `max`; `max` → `max`. `fast: true` disables thinking.
+- Grok (`grok*` slug or `api.x.ai`): `max` → upstream `xhigh`; `xhigh` → `xhigh`.
+- Generic: pass-through (`xhigh` stays `xhigh`, `max` stays `max`).
+
+Hop injects `effort` / `thinking` parameters from `activeReasoning` (`default` omits; `none` → thinking false; else effort = level). Extra plan `parameters` except `effort`/`thinking` are forwarded.
+
+## JSON-enough check
+
+All three:
+
+1. `openbot-mode` trims to `custom`
+2. Host file contains `/* openbot-stock-wrap */` (first line after a successful custom wrap)
+3. `GET http://127.0.0.1:9280/api/state` succeeds (loopback service up, ours — not foreign)
+
+Then catalog/secret/log JSON edits apply on the next message. Otherwise reconcile.

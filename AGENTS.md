@@ -43,6 +43,35 @@ Before changing `ui/`, read `DESIGN.md`. It comes from `npx getdesign@latest add
 
 The first commit is on `main`. Every later change is a PR, then merge. Conventional Commits: `type(scope): subject`.
 
+## OpenBot config skill
+
+Path: `.cursor/skills/openbot-config/` (`SKILL.md` plus `reference.md`).
+
+Grok Bot on the Computer uses this project skill to configure the box: providers, models, keys, official vs custom, tunnel, and logs. Prefer sand-data JSON when wrap is already custom; reconcile for wrap and tunnel.
+
+Whenever sand-data files, save commands, hop reload behavior, wrap/mode, reasoning universe, presets, or hop maps **change**, the skill must be updated **in the same change or a follow-up PR**.
+
+### How to update
+
+The parent/coordinator agent must **not** rewrite the skill itself. Dispatch a subagent with:
+
+1. The diff of the product change
+2. Instruction to Read `SKILL.md` and `reference.md`
+3. No StrReplace (Read full files, Write whole files as UTF-8)
+4. Keep `SKILL.md` under 500 lines; put schemas in `reference.md`
+5. No secrets in examples
+6. Tests not required unless TypeScript changed
+
+### Updater checklist
+
+- Disk paths
+- JSON shapes
+- JSON-vs-reconcile rule
+- `/api/save` kinds
+- Hop per-request reload
+- Do-not list
+- Reasoning order `high · xhigh · max`
+
 ## Tests
 
 `npm test` and `npm run typecheck` must stay green. Prefer Node's test runner. Verify UI in a browser when you change it. Verify install on a Computer when you change wrap or hop. A typecheck is not proof that chat routes.

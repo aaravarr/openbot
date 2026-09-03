@@ -47,5 +47,8 @@ app.asar
 Thumbs.db
 .idea/
 .vscode/
-.cursor/
+.cursor/*
+!.cursor/skills/
+.cursor/skills/*
+!.cursor/skills/openbot-config/
 *.swp

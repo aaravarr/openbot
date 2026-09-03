@@ -4,6 +4,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { LOOPBACK, SERVICE_PORT, type Catalog, type Snapshot, type TunnelObserved } from "../domain/types.ts";
+import { grokSkillsStatus, installGrokSkills, isSkillSlug } from "../grok-skills.ts";
 import { officialBox } from "../parse/argv.ts";
 import { fetchModelsForProvider } from "../catalog/provider-models.ts";
 import { createCatalogManager } from "../catalog/model-catalog.ts";
@@ -287,6 +288,64 @@ async function handleLogsApi(req: http.IncomingMessage, res: http.ServerResponse
   return false;
 }
 
+function parseInstallSlug(parsed: unknown): { ok: true; slug?: string } | { ok: false; error: string } {
+  if (parsed === null || parsed === undefined) {
+    return { ok: true };
+  }
+  if (typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, error: "invalid json" };
+  }
+  if (!("slug" in parsed)) {
+    return { ok: true };
+  }
+  const raw = (parsed as { slug?: unknown }).slug;
+  if (raw === undefined || raw === null || raw === "") {
+    return { ok: true };
+  }
+  if (typeof raw !== "string" || !isSkillSlug(raw)) {
+    return { ok: false, error: "invalid slug" };
+  }
+  return { ok: true, slug: raw };
+}
+
+async function handleGrokSkillsApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+  if (req.method === "GET" && url.pathname === "/api/grok-skills") {
+    const report = await grokSkillsStatus({ repoRoot });
+    sendJson(res, 200, report);
+    return true;
+  }
+  if (req.method === "POST" && url.pathname === "/api/grok-skills/install") {
+    let parsed: unknown = {};
+    const raw = await readBody(req);
+    if (raw.trim()) {
+      try {
+        parsed = JSON.parse(raw) as unknown;
+      } catch {
+        sendJson(res, 400, { error: "invalid json" });
+        return true;
+      }
+    }
+    const slug = parseInstallSlug(parsed);
+    if (!slug.ok) {
+      sendJson(res, 400, { error: slug.error });
+      return true;
+    }
+    const result = await enqueueSave(async () => {
+      if (slug.slug !== undefined) {
+        return installGrokSkills({ repoRoot, slug: slug.slug });
+      }
+      return installGrokSkills({ repoRoot });
+    });
+    if (result.ok) {
+      sendJson(res, 200, { ok: true, ...result.report });
+      return true;
+    }
+    sendJson(res, result.status, { ok: false, error: result.error, ...result.report });
+    return true;
+  }
+  return false;
+}
+
 async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
   const current = deps();
   if (req.method === "GET" && (url.pathname === "/api/snapshot" || url.pathname === "/api/state")) {
@@ -313,6 +372,9 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       sendJson(res, result.status, result.body);
       return;
     }
+  }
+  if (await handleGrokSkillsApi(req, res, url)) {
+    return;
   }
   if (await handleLogsApi(req, res, url)) {
     return;

@@ -76,6 +76,8 @@ trycloudflare 地址会过期。更新、`openbot tunnel on`，或 Chat 上的 *
 - **Provider** —— 账号。页眉始终有 **Edit**（无障碍名称 **Edit endpoint**）、**Key**，以及 Key saved 标记。**Edit** 弹出名称和 Base URL。**Key** 弹出 API Key。**Add model** 弹出 **New model**（模型 ID 加限额）。点模型行会弹出限额编辑。**Use** 把它放到 Chat。思考强度在 Chat 上选，不在这里选。
 - **Logs** —— 这台 Computer 上的 hop 与官方 host 流记录。默认关闭，不记录。
 
+在 **Dashboard** 上，**Install from the OpenBot repo** 会把 OpenBot 配置技能复制到 Grok Bot 的用户技能目录（`/home/box/agent-data/workflows`），不会写入插件目录。
+
 如果某个模型还没有 Key，Chat 会带你去对应的服务商页，而不是悄悄失败。没有 Key 也可以先打开模型弹窗改限额。
 
 图片、视频、音频会记在模型配置里，供以后使用。当前聊天仍只发送文本。

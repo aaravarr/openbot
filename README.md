@@ -76,6 +76,8 @@ Three panes. Limits open as dialogs, not a third page of stacked forms.
 - **Provider** — the account. The header always shows **Edit** (accessible name **Edit endpoint**), **Key**, and a Key saved badge. **Edit** opens name and base URL in a dialog. **Key** opens the API key dialog. **Add model** opens a **New model** dialog (model ID plus limits). Click a model row to edit limits in a dialog. **Use** puts that model on Chat. Thinking is chosen on Chat, not here.
 - **Logs** — hop and official host-stream records for this Computer. Recording is **off by default**.
 
+On **Dashboard**, **Install from the OpenBot repo** copies the OpenBot config skill into Grok Bot user skills (`/home/box/agent-data/workflows`), not plugins.
+
 If a model still needs a key, Chat takes you to that provider instead of failing silently. You can still open a model dialog and set limits before a key exists.
 
 Image, video, and audio are stored on the model for later. Chat still sends text.

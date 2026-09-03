@@ -41,6 +41,8 @@ things: static UI files, the JSON control API, and the hop. All API responses ar
 | GET | `/api/logs` | List hop request records, newest first | Query: `q` (substring over id/model/error/provider/endpoint), `model` (exact), `from`,`to` (ISO date range on `startedAt`), `ok=true|false`, `page` (≥1), `pageSize` (1–100, default 50) | `{ items: LogRecord[], total, page, pageSize }` |
 | GET | `/api/logs/{id}` | One record incl. captured request/response bodies (redacted, possibly truncated) | id is URL-encoded path segment, `[A-Za-z0-9._-]+` | `200 LogRecord & { request?, response? }`; `404 { error }` |
 | POST | `/api/logs/clear` | Delete all log records and body files | — | `{ ok: true }` |
+| GET | `/api/grok-skills` | Compare OpenBot repo `skills/` (GitHub Contents, then local `skills/`) with Grok Bot **user** skills under `/home/box/agent-data/workflows`. Does not create directories. Never reads or writes managed-skills or plugins | — | `{ dest, source, ref?, skills[] }` where `source` is github / local / none and each skill `state` is missing / stale / current / unavailable / blocked |
+| POST | `/api/grok-skills/install` | Install or update one slug or all source slugs into `workflows/<slug>/`. Overwrites source files only; extra user files stay. GitHub first, local `skills/` fallback | optional `slug` | `200 { ok:true, dest, source, ref?, skills }`; `400` invalid/unknown slug; `403` cannot write workflows; `503` source unavailable |
 
 ### 2.2 `POST /api/save` command union (the write surface)
 
@@ -330,6 +332,16 @@ current UI exposure.
 - **FR-49** [UI] Accessibility basics already encoded functionally: skip link, aria-live toasts,
   labelled controls. (Keep as requirements, restyle freely.)
 
+### 4.9 Grok Bot user skills
+
+- **FR-56** [UI] Dashboard hairline card installs OpenBot Grok Bot skills from the OpenBot repo
+  `skills/` tree into Grok Bot **user** skills (`/home/box/agent-data/workflows/<slug>/`) only —
+  never managed-skills or plugins. GitHub Contents API first (`ref` = `OPENBOT_COMMIT` or
+  `payload/version.json`, else `main`), local `repoRoot/skills/` fallback. Compare SHA-256 of
+  `relativePath + "\n" + file bytes` (source paths only). **Install** when missing, **Update**
+  (confirm) when stale, quiet **Installed** badge when current; no buttons when source-unavailable
+  or dest is not writable. Secondary / ink / ghost CTA — not Cursor Orange.
+
 ---
 
 ## 5. User flows implied by the backend
@@ -366,6 +378,9 @@ current UI exposure.
    retention. All key material is redacted.
 10. **Recover from a foreign port/wrap.** Reconcile refuses with 409 (`foreign-ui`,
     `foreign-opengrok`, …); the UI must present these as actionable blockers, not generic errors.
+11. **Install Grok Bot skill.** Dashboard card → Install / Update from the OpenBot repo → files
+    land in `/home/box/agent-data/workflows/<slug>/` so Grok Bot can configure OpenBot. Extra files
+    in that folder are left alone.
 
 ---
 
@@ -393,8 +408,10 @@ current UI exposure.
 - **NFR-8 Platform.** Runs on the Grok Bot Computer (Linux primary; installer also knows
   Darwin), Node ≥ 22 (`--experimental-strip-types`), Unix absolute paths only. UI is a static
   SPA built with Vite from `web/` into `ui/`; no server-side rendering.
-- **NFR-9 Offline tolerance.** Everything except upstream chat, cloudflared download, and the
-  tunnel itself is local. Tunnel start has a 12 s URL budget; probe timeout 2.5 s.
+- **NFR-9 Offline tolerance.** Everything except upstream chat, cloudflared download, the
+  tunnel itself, and (optional) GitHub Contents for Grok Bot skills is local. Skills fetch has a
+  10 s budget and falls back to the installed `skills/` tree. Tunnel start has a 12 s URL budget;
+  probe timeout 2.5 s.
 - **NFR-10 Idempotent saves.** Repeating a command is safe (upsert semantics; wrap no-ops when
   already marked; tunnel reuses a live URL).
 

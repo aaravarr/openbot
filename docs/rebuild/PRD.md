@@ -116,6 +116,9 @@ that quotes the post-save human message (FR-45); **refusals** render as structur
     re-enable action) — FR-5, FR-6.
   - **Tunnel card** — off / starting / live URL + copy button + QR / error + retry; the
     unauthenticated-URL warning whenever live — FR-25, FR-29, FR-30.
+  - **Grok Bot skill card** — full-width under health (also on the empty dashboard, beside the
+    orange setup CTA but not using orange). Installs OpenBot config skills into Grok Bot user
+    skills (`workflows`), not plugins — FR-56.
   - The operational rule rendered as persistent microcopy under the hero: "Changes apply to the
     next new message in Grok Bot. One model is active at a time." — FR-34.
 - **Actions:**
@@ -125,7 +128,10 @@ that quotes the post-save human message (FR-45); **refusals** render as structur
   - Reasoning level selector for the active model (chips from its allow-list) — FR-16.
   - Start / stop / refresh tunnel — FR-26, FR-27, FR-28.
   - Copy loopback URL — FR-25.
-- **Empty (no providers):** hero is replaced by a setup call-to-action → `#/setup`.
+  - Install / Update Grok Bot skill from the OpenBot repo (secondary; confirm on Update; hidden
+    when current) — FR-56.
+- **Empty (no providers):** hero is replaced by a setup call-to-action → `#/setup`. The Grok Bot
+  skill card still shows (secondary Install, not the orange setup CTA).
 - **Error states:** health strip turns each dot into a labeled fault with remedy (e.g. "foreign
   process on :9280 — stop it before switching modes"); tunnel error card with retry — FR-29; all
   refusals via the shell renderer — FR-7.
@@ -249,7 +255,7 @@ Redirect here automatically from any page when the catalog is empty and mode is 
 
 | FR | Owner | Note |
 |----|-------|------|
-| 1, 2, 3, 5, 6, 16, 22, 25–30, 34, 46 | Dashboard | FR-22 is a shared behavior wherever "use" happens |
+| 1, 2, 3, 5, 6, 16, 22, 25–30, 34, 46, 56 | Dashboard | FR-22 is a shared behavior wherever "use" happens; FR-56 is the Grok Bot skill card |
 | 4, 7, 32, 43, 44, 45, 47, 48, 49 | App shell | global contracts; FR-32 service liveness dot |
 | 8–15, 17 (read-only, P2), 20, 21, 23, 24, 50–55 | Models + Setup wizard | FR-17 display-only; FR-50–55 fetch/auto-fill |
 | 35–39, 40 (P1), 41 (P2), 42 | Logs | |
@@ -303,6 +309,10 @@ No FR is unassigned; none is assigned to two primary owners.
    exact refusal kind with remedy text; all mutations disabled; "View diagnostics" expands the raw
    snapshot (wrap kind, pids, endpoints) for manual repair. Once the host is clean, the banner
    clears on next refresh and saves re-enable.
+9. **Install Grok Bot skill.** Dashboard skill card → **Install from the OpenBot repo** (or
+   **Update** with confirm when stale). Files write to `/home/box/agent-data/workflows/<slug>/`.
+   Extra files in that folder stay. No Install when already present; no Update when missing; quiet
+   Installed badge when current.
 
 ---
 
@@ -311,7 +321,7 @@ No FR is unassigned; none is assigned to two primary owners.
 **P0 — v1 must have**
 App shell (routing FR-47/48, unreachable+retry FR-44, toasts+serialized saves FR-45/46, blocked-host
 banner FR-4, refusal renderer FR-7, a11y FR-49); Dashboard (FR-1, 2, 3, 5, 6, 16, 22, 25–30, 32,
-34, 43); Models + Setup wizard (FR-8–16, 20–24, 50–55); Logs (FR-35–39, 42). Model list fetching +
+34, 43, 56); Models + Setup wizard (FR-8–16, 20–24, 50–55); Logs (FR-35–39, 42). Model list fetching +
 auto-fill (FR-50–54) and the model-catalog cache + refresh (FR-52, FR-55) are **P0** (explicit user
 request).
 
@@ -551,3 +561,31 @@ returns `202` again without starting a second concurrent fetch (idempotent). The
 | `openbot-model-catalog.json` | merged Source B cache + per-source fetch timestamps | startup fetch + refresh |
 
 The catalog cache is **disposable** — deleting it just causes a fresh fetch at next startup.
+
+### 8.5 Grok Bot skill install
+
+`GET /api/grok-skills` and `POST /api/grok-skills/install` copy OpenBot `skills/` into Grok Bot
+**user** skills at `/home/box/agent-data/workflows/<slug>/` (override `OPENBOT_AGENT_DATA` /
+`OPENBOT_WORKFLOWS`). Source is GitHub Contents (`aaravarr/openbot`, `ref` from `OPENBOT_COMMIT`
+or `payload/version.json`, else `main`) with a ~10 s timeout, then the installed tree
+`repoRoot/skills/`. Dest never includes managed-skills or plugins. GET does not create
+directories. Install overwrites source-relative files only.
+
+```json
+{
+  "dest": "/home/box/agent-data/workflows",
+  "source": "github",
+  "ref": "main",
+  "skills": [
+    {
+      "slug": "openbot-config",
+      "name": "openbot-config",
+      "state": "missing",
+      "destPath": "/home/box/agent-data/workflows/openbot-config"
+    }
+  ]
+}
+```
+
+`state` is `missing` | `stale` | `current` | `unavailable` | `blocked`. POST body `{ "slug": "openbot-config" }`
+or `{}` for every source slug. Success `200 { ok: true, ...same shape }`.

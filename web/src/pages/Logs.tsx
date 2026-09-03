@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Check,
   ChevronDown,
+  Copy,
   RefreshCw,
   ScrollText,
   Search,
@@ -509,6 +511,9 @@ function LogDrawer({
 }
 
 function LogLayer({ detail: d, stacked }: { detail: LogDetail; stacked: boolean }) {
+  const requestRaw = rawBodyText(d.request);
+  const responseRaw = rawBodyText(d.response);
+
   const body = (
     <>
       <div className="drawer-section">
@@ -559,7 +564,10 @@ function LogLayer({ detail: d, stacked }: { detail: LogDetail; stacked: boolean 
 
       {d.hasRequest ? (
         <div className="drawer-section">
-          <span className="section-label">Request body <span style={{ color: "var(--muted)", textTransform: "none", letterSpacing: 0 }}>· keys redacted</span></span>
+          <div className="drawer-section__head">
+            <span className="section-label">Request body <span style={{ color: "var(--muted)", textTransform: "none", letterSpacing: 0 }}>· keys redacted</span></span>
+            {requestRaw ? <CopyButton label="Copy request payload" text={requestRaw} /> : null}
+          </div>
           <div className="code-pane">{stringifyBody(d.request)}</div>
           {d.requestTruncated ? <span style={{ fontSize: 12, color: "var(--muted)" }}>Body truncated by retention settings.</span> : null}
         </div>
@@ -567,7 +575,10 @@ function LogLayer({ detail: d, stacked }: { detail: LogDetail; stacked: boolean 
 
       {d.hasResponse ? (
         <div className="drawer-section">
-          <span className="section-label">Response body <span style={{ color: "var(--muted)", textTransform: "none", letterSpacing: 0 }}>· redacted</span></span>
+          <div className="drawer-section__head">
+            <span className="section-label">Response body <span style={{ color: "var(--muted)", textTransform: "none", letterSpacing: 0 }}>· redacted</span></span>
+            {responseRaw ? <CopyButton label="Copy response payload" text={responseRaw} /> : null}
+          </div>
           <div className="code-pane">{stringifyBody(d.response)}</div>
           {d.responseTruncated ? <span style={{ fontSize: 12, color: "var(--muted)" }}>Body truncated by retention settings.</span> : null}
         </div>
@@ -602,4 +613,99 @@ function stringifyBody(body: unknown): string {
   } catch {
     return String(body);
   }
+}
+
+/**
+ * Raw clipboard text for a captured body — the exact content the server
+ * returned, never the pretty-printed display form. Truncated bodies copy the
+ * captured `preview` string; no suffix is appended (the UI already shows the
+ * truncation notice).
+ */
+function rawBodyText(body: unknown): string | null {
+  if (body === null || body === undefined) return null;
+  if (typeof body === "string") return body.length > 0 ? body : null;
+  if (isTruncatedCapture(body)) {
+    return typeof body.preview === "string" && body.preview.length > 0 ? body.preview : null;
+  }
+  try {
+    const text = JSON.stringify(body);
+    return text === undefined ? null : text;
+  } catch {
+    return null;
+  }
+}
+
+function isTruncatedCapture(
+  body: unknown,
+): body is { _truncated: boolean; preview: unknown } {
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    !Array.isArray(body) &&
+    (body as { _truncated?: unknown })._truncated === true
+  );
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall back to the legacy path below */
+  }
+  return legacyCopy(text);
+}
+
+function legacyCopy(text: string): boolean {
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.left = "-9999px";
+    area.style.top = "0";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(area);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function CopyButton({ label, text }: { label: string; text: string }) {
+  const { pushToast } = useApp();
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    };
+  }, []);
+
+  const onCopy = async () => {
+    if (await copyText(text)) {
+      setCopied(true);
+      if (timer.current !== null) window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => setCopied(false), 1500);
+    } else {
+      pushToast("error", "Copy failed", "Clipboard access was denied.");
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      className={`copy-btn${copied ? " is-copied" : ""}`}
+      aria-label={copied ? "Copied" : label}
+      title={copied ? "Copied" : label}
+      onClick={() => void onCopy()}
+    >
+      {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+    </button>
+  );
 }

@@ -224,8 +224,8 @@ current UI exposure.
 
 - **FR-8** [UI] First-run onboarding: pick a provider preset (OpenAI, DeepSeek, Zhipu GLM, Kimi,
   Qwen, OpenRouter, Groq, xAI) or "Custom" (any OpenAI-compatible base URL), then enter name,
-  base URL, model id, API key (`upsert-provider`). Presets prefill name/origin/model and show a
-  per-preset hint.
+  base URL, and API key (`upsert-provider` with empty `modelSlug`). Presets prefill name/origin
+  and show a per-preset hint. Models are fetched or added on the Models page after activation.
 - **FR-9** [UI] Add further providers after the first (same command, "Add provider" flow).
 - **FR-10** [UI] List providers with a live indicator on the provider whose model is active.
 - **FR-11** [UI] Edit a provider's name and base URL (`update-provider`).
@@ -335,12 +335,12 @@ current UI exposure.
 ## 5. User flows implied by the backend
 
 1. **First connect (official → custom).** No providers → UI shows setup. User picks a preset or
-   custom endpoint, enters name/origin/model id/API key → `upsert-provider` → provider id is
-   slugified, first model created (`provider:slug`), wildcard binding set, secret stored (0600),
-   host file censused + wrapped with marker (backup written, `node --check` syntax gate), mode
-   file → `custom`, plan written, service ensured, host bounced. Next Grok Bot message uses the
-   new model. Failure modes: 409 refusals (foreign wrap, non-stock host, port conflict, syntax
-   check) must be communicable.
+   custom endpoint, enters name/origin/API key → `upsert-provider` with empty `modelSlug` →
+   provider id is slugified, secret stored (0600), no first model yet, host file censused + wrapped
+   with marker (backup written, `node --check` syntax gate), mode file → `custom`, plan written,
+   service ensured, host bounced. Fetch or add models on the Models page after activation. Failure
+   modes: 409 refusals (foreign wrap, non-stock host, port conflict, syntax check) must be
+   communicable.
 2. **Switch model.** User picks another catalog model on Chat → `use-model` → wildcard rebind.
    If the provider has no key, UI detours to the key field first (client-side check against
    `keyedProviders`; the hop would otherwise 503 "no secret for this provider").

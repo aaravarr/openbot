@@ -50,8 +50,8 @@ trycloudflare URLs expire. On update, `openbot tunnel on`, or **Refresh URL** on
 
 1. Open the control page.
 2. Choose a provider, or pick **Custom** and paste any OpenAI-compatible base URL.
-3. Paste an API key and a model id.
-4. Click **Start chatting**.
+3. Paste an API key and activate. The wizard saves the provider and key only.
+4. On the **Models** page, fetch or add a model, then use it.
 5. Go back to Grok Bot and send a **new** message.
 
 The next turn uses the model you just connected. Context, max output, reasoning levels, and input types use defaults until you open that model on its provider and change them.

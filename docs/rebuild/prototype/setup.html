@@ -87,7 +87,7 @@
       <div class="steps">
         <div class="step is-current" data-step="1"><span class="step__num">1</span>Provider</div>
         <span class="step__sep"></span>
-        <div class="step" data-step="2"><span class="step__num">2</span>Credentials &amp; model</div>
+        <div class="step" data-step="2"><span class="step__num">2</span>Credentials</div>
         <span class="step__sep"></span>
         <div class="step" data-step="3"><span class="step__num">3</span>Review &amp; activate</div>
       </div>
@@ -118,15 +118,6 @@
           <div class="field"><label for="f-name">Name</label><input class="input input--lg" id="f-name" value="Zhipu GLM"></div>
           <div class="field"><label for="f-origin">Base URL</label><input class="input input--lg input--mono" id="f-origin" value="https://open.bigmodel.cn/api/paas/v4"></div>
           <div class="field">
-            <label for="f-model">Model id <span class="badge badge--info" id="f-model-catalog" hidden><svg class="ic" style="width:11px;height:11px"><use href="#i-database"/></svg>catalog</span></label>
-            <input class="input input--lg input--mono" id="f-model" value="glm-5.3" placeholder="Optional — leave empty to fetch or add later">
-            <div class="row row--between" style="margin-top:4px">
-              <span class="helper">Optional — or save &amp; fetch the provider's list instead of typing.</span>
-              <button class="btn btn--secondary-sm" type="button" data-fetch-models data-provider="glm" data-provider-name="Zhipu GLM" data-wizard><svg class="ic"><use href="#i-download"/></svg>Save provider &amp; fetch models</button>
-            </div>
-            <div data-wizard-fetch-result hidden style="margin-top:4px;border:1px solid var(--hairline);border-radius:8px;padding:10px"></div>
-          </div>
-          <div class="field">
             <label for="f-key">API key</label>
             <span class="pw-wrap">
               <input class="input input--lg input--mono" type="password" id="f-key" placeholder="Paste your key" autocomplete="off">
@@ -147,10 +138,10 @@
           <div class="def-grid">
             <span class="k">Provider</span><span class="v">Zhipu GLM</span>
             <span class="k">Base URL</span><span class="v mono">https://open.bigmodel.cn/api/paas/v4</span>
-            <span class="k">Model</span><span class="v mono">glm-5.3</span>
+            <span class="k">Model</span><span class="v mono">— (none)</span>
             <span class="k">API key</span><span class="v mono">•••••••• (saved on activate)</span>
           </div>
-          <div class="notice notice--warn"><svg class="ic"><use href="#i-triangle"/></svg><span class="text">Grok Bot will restart and use <strong>glm-5.3</strong> on the next message. One model is active at a time.</span></div>
+          <div class="notice notice--info"><svg class="ic"><use href="#i-info"/></svg><span class="text">No model yet — you can fetch models from the Models page after activation.</span></div>
           <div class="row" style="justify-content:space-between;align-items:center">
             <button class="btn btn--ghost" data-back="2"><svg class="ic"><use href="#i-chevron-left"/></svg>Back</button>
             <button class="btn btn--primary btn--primary-lg" id="activate-btn">Wrap host and activate</button>
@@ -160,43 +151,6 @@
     </div>
   </div>
 </main>
-
-<!-- Import models (Source A fetch → modal selection → import) -->
-<div class="overlay is-hidden" id="dialog-import-models" role="dialog" aria-modal="true" aria-labelledby="im-title">
-  <div class="dialog dialog--import">
-    <div class="import-head">
-      <div class="import-head__top">
-        <span class="dialog__icon dialog__icon--accent"><svg class="ic"><use href="#i-download"/></svg></span>
-        <div class="import-head__titles">
-          <div class="dialog__title" id="im-title">Import models</div>
-          <div class="dialog__desc" id="im-desc">Choose which models to add.</div>
-        </div>
-        <button class="icon-btn" data-dialog-close aria-label="Close"><svg class="ic"><use href="#i-x"/></svg></button>
-      </div>
-      <div class="import-toolbar">
-        <span class="import-search">
-          <svg class="ic"><use href="#i-search"/></svg>
-          <input class="input" type="text" id="im-search" placeholder="Filter models" aria-label="Filter models" data-autofocus>
-        </span>
-        <span class="import-count mono" id="im-count"></span>
-        <button class="btn btn--secondary-sm" type="button" id="im-select-all">Select all</button>
-      </div>
-    </div>
-    <div class="import-notice is-hidden" id="im-partial"></div>
-    <div class="import-body" id="im-list" role="group" aria-label="Fetched models"></div>
-    <div class="import-error is-hidden" id="im-error"></div>
-    <div class="import-empty is-hidden" id="im-empty">
-      <div class="import-empty__tile"><svg class="ic"><use href="#i-download"/></svg></div>
-      <h3>No models found</h3>
-      <p>This provider returned an empty model list. Add models manually instead.</p>
-    </div>
-    <div class="import-foot">
-      <span class="import-selected" id="im-selected">0 selected</span>
-      <button class="btn btn--ghost" data-dialog-close>Cancel</button>
-      <button class="btn btn--primary" id="im-import" disabled>Import selected (0)</button>
-    </div>
-  </div>
-</div>
 
 <div class="toast-stack" aria-live="polite" aria-atomic="false"></div>
 
@@ -251,7 +205,7 @@
         if (saving) saving.classList.add("is-hidden");
         activate.disabled = false;
         activate.textContent = "Wrap host and activate";
-        window.showToast("success", "Activated", "Grok Bot will use glm-5.3 (high) on the next message.");
+        window.showToast("success", "Activated", "Provider activated.");
         setTimeout(function () {
           window.showToast("info", "Host restarted", "Grok Bot was restarted to apply the wrap.");
         }, 400);

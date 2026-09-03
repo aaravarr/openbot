@@ -549,6 +549,13 @@ activate), current = `--ink` + number in `--primary`-ring circle, done = Check `
    button (Copy → Check swap, 1.5 s); it copies the raw captured payload exactly as returned by the
    API — never the pretty-printed display form — and is hidden when the body is absent or empty.
    Truncated bodies copy the captured `preview` with no added suffix.
+6. **Pagination footer** (below the table, hairline top rule): total count ("N records", 11 px mono
+   `--muted`) left; previous/next **compact ghost-sm chevron buttons** (Lucide `ChevronLeft` /
+   `ChevronRight`, hairline border, disabled at the bounds) with "Page X of Y" (11 px mono
+   `--body`) between them; a **per-page listbox** (25 / 50 / 100, default 50) on the right. Changing
+   a filter resets to page 1; changing page keeps filters. Page is mirrored in the hash
+   (`#/logs?page=N`). Out-of-range pages clamp to the last valid page. Mobile: the footer wraps to
+   fit 375 px and prev/next grow to 44 px touch targets.
 
 ---
 

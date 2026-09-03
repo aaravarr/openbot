@@ -205,8 +205,15 @@ Redirect here automatically from any page when the catalog is empty and mode is 
   request/response bodies with truncation notices, and a copy button on each body that puts the
   raw captured payload (exactly as returned by the API, redaction included) on the clipboard —
   FR-38.
-- **Actions:** refresh; free-text search; errors-only filter — FR-37; model filter, date range,
-  pagination (P1) — FR-40; clear all logs (confirm) — FR-39.
+- **Actions:** refresh; free-text search; errors-only filter — FR-37; model filter — FR-40;
+  pagination — FR-40; clear all logs (confirm) — FR-39. Date range (`from`/`to`) remains P1.
+- **Pagination:** a footer below the table shows the total record count ("N records"), previous /
+  next ghost chevron buttons, and "Page X of Y" (Y = ⌈total / pageSize⌉, min 1). Per-page size is
+  25 / 50 / 100 via the custom listbox (default 50). Changing any filter (search, errors-only,
+  model, channel) resets to page 1; changing page keeps the filters. Between-page loading reuses the
+  skeleton rows. Page is reflected in the hash (`#/logs?page=N`) and read back on load. An
+  out-of-range page (e.g. logs pruned while deep-linked) clamps to the last valid page; clearing
+  logs returns to page 1. The pager fits a 375px viewport (prev/next at 44px touch targets).
 - **Empty:** recording disabled → prominent explainer "Turn on recording to capture future turns";
   enabled but empty → "No requests yet — send a message in Grok Bot."
 - **Error states:** settings validation (out-of-range retention) inline at the field — FR-36; API
@@ -328,9 +335,9 @@ auto-fill (FR-50–54) and the model-catalog cache + refresh (FR-52, FR-55) are 
 request).
 
 **P1 — should have**
-Logs model/date filters + pagination (FR-40); Dashboard "recent requests" mini-widget (link into
-Logs); `needs-reinstall` guided recovery action (FR-5 enhancement); phone-layout polish for tunnel
-access.
+Logs date filters (`from`/`to`) — FR-40 (model filter + pagination shipped in v1); Dashboard "recent
+requests" mini-widget (link into Logs); `needs-reinstall` guided recovery action (FR-5 enhancement);
+phone-layout polish for tunnel access.
 
 **P2 — nice to have**
 Logs advanced settings: `maxBodyCaptureBytes`, `maxRecords` (FR-41); model `parameters` read-only

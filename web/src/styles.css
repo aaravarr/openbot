@@ -900,6 +900,27 @@ table.data td.cell-actions { white-space: nowrap; width: 1%; }
 .logs-search { position: relative; display: inline-flex; align-items: center; min-width: 0; }
 .logs-search .input { padding-left: 28px; width: 220px; height: 30px; }
 
+/* Logs pagination footer (below the table). Compact ghost chevrons, 11px mono
+   counts, hairline top rule — matches the desktop density spec. */
+.logs-pager {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: 8px 12px; border-top: 1px solid var(--hairline);
+  flex-wrap: wrap; min-width: 0; row-gap: var(--sp-2);
+}
+.logs-pager__count {
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted);
+  white-space: nowrap;
+}
+.logs-pager__nav {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  margin-left: auto; flex: none;
+}
+.logs-pager__status {
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--body);
+  white-space: nowrap;
+}
+.logs-pager__size { margin-left: var(--sp-2); flex: none; }
+
 /* ==========================================================================
    Wizard specifics
    ========================================================================== */
@@ -1319,6 +1340,19 @@ table.data td.cell-actions { white-space: nowrap; width: 1%; }
   .logs-search, .logs-search .input { width: 100%; max-width: 100%; }
   .logs-toolbar .logs-search { flex: 1 1 100%; }
   .logs-toolbar__spacer { display: none; }
+
+  /* Pager: keep prev/next at a 44px touch target and let the count wrap so the
+     whole footer fits a 375px viewport without overflow. */
+  .logs-pager { padding: 8px 12px; }
+  .logs-pager__nav { margin-left: 0; gap: var(--sp-2); }
+  .logs-pager__nav .btn--ghost-sm {
+    height: 44px; min-width: 44px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .logs-pager__nav .btn--ghost-sm svg { width: 14px; height: 14px; }
+  .logs-pager__count { flex: 1 1 auto; }
+  .logs-pager__size { margin-left: 0; flex: 1 1 100%; }
+  .logs-pager__size .listbox { width: 100%; }
 
   .listbox { display: block; width: 100%; }
   .listbox__trigger { width: 100%; }

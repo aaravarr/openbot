@@ -145,14 +145,47 @@ stamp_payload_version "$DEST" "$COMMIT"
 
 cd "$DEST"
 
-# Compression deps for payload/image-read.cjs are pure JS. Tarball installs
-# ship no node_modules; load them lazily and best-effort install here. If this
-# fails (offline box), the hop still routes: compression is skipped and the
-# byte budget falls back to omitting oversize images. Set
-# OPENBOT_SKIP_NPM_INSTALL=1 to skip (used by tests and offline mirrors).
-if [[ "${OPENBOT_SKIP_NPM_INSTALL:-}" != "1" ]] && command -v npm >/dev/null 2>&1; then
-  if ! npm install --omit=dev --no-audit --no-fund --loglevel=error >/dev/null 2>&1; then
-    echo "OpenBot: npm install failed; image compression will be skipped (byte budget still enforced)" >&2
+# Compression deps for payload/image-read.cjs. Two layers keep them available:
+#
+# 1. Vendored copies in payload/vendor/ (pngjs MIT, jpeg-js BSD-3-Clause, both
+#    pure JS, no deps). They ship with the tarball, so offline boxes always
+#    have a working compression ladder: the lazy loader resolves the vendored
+#    copies first. When both vendored packages are present the npm step is
+#    skipped entirely - a blocked registry used to stall installs without any
+#    benefit.
+# 2. Best-effort `npm install --omit=dev` (only when the vendored copies are
+#    missing): the default registry first, then a npmmirror.com retry. If both
+#    fail, print a prominent WARN with a remediation hint instead of failing
+#    silently - without these libs the hop still routes, but oversized images
+#    degrade to omit placeholders instead of being re-encoded.
+# OPENBOT_SKIP_NPM_INSTALL=1 skips the npm step (tests and offline mirrors).
+payload_vendor_compression_present() {
+  [[ -f "$DEST/payload/vendor/pngjs/package.json" && -f "$DEST/payload/vendor/jpeg-js/package.json" ]]
+}
+
+warn_npm_install_failed() {
+  {
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    echo "WARN: OpenBot could not npm-install the compression libraries."
+    echo "      Reason: $1"
+    if payload_vendor_compression_present; then
+      echo "      Bundled libs in payload/vendor/ cover this: image compression stays available."
+    else
+      echo "      No bundled libs found: image compression is DISABLED. The hop still"
+      echo "      routes, but oversized images degrade to omit placeholders."
+      echo "      Remediation: give the box npm registry access (or set a mirror),"
+      echo "      then re-run this installer."
+    fi
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+  } >&2
+}
+
+if [[ "${OPENBOT_SKIP_NPM_INSTALL:-}" != "1" ]] && ! payload_vendor_compression_present; then
+  if ! command -v npm >/dev/null 2>&1; then
+    warn_npm_install_failed "npm is not on PATH"
+  elif ! npm install --omit=dev --no-audit --no-fund --loglevel=error >/dev/null 2>&1 &&
+    ! npm install --omit=dev --no-audit --no-fund --loglevel=error --registry=https://registry.npmmirror.com >/dev/null 2>&1; then
+    warn_npm_install_failed "the default npm registry and registry.npmmirror.com both failed"
   fi
 fi
 

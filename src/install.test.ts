@@ -65,6 +65,20 @@ test("install.sh fetches Node 22 when the box node is too old", () => {
   assert.match(body, /OPENBOT_COMMIT/);
 });
 
+test("install.sh vendors compression deps, retries npmmirror, and warns loudly when npm fails", () => {
+  const body = readFileSync(installSh, "utf8");
+  // Vendored copies are the offline path and skip the npm step entirely.
+  assert.match(body, /payload_vendor_compression_present/);
+  assert.match(body, /payload\/vendor\/pngjs\/package\.json/);
+  assert.match(body, /payload\/vendor\/jpeg-js\/package\.json/);
+  // npmjs failure falls back to the npmmirror registry.
+  assert.match(body, /--registry=https:\/\/registry\.npmmirror\.com/);
+  // A double failure is a prominent WARN with a remediation hint, never silent.
+  assert.match(body, /WARN: OpenBot could not npm-install/);
+  assert.match(body, /Remediation/);
+  assert.match(body, /OPENBOT_SKIP_NPM_INSTALL/);
+});
+
 test("install.sh copies the tree, leaves the host stock, and starts the UI", async () => {
   const box = mkdtempSync(path.join(os.tmpdir(), "openbot-install-box-"));
   const src = mkdtempSync(path.join(os.tmpdir(), "openbot-install-src-"));

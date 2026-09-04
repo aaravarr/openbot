@@ -37,9 +37,13 @@ function loadImageLibs() {
 
 var MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20 MB: reject absurdly large single images
 
-// Injected images are compressed to keep the outbound request under the
-// upstream gateway's hard 10 MiB body limit. Budget is 9 MiB for headroom.
-var MAX_REQUEST_MESSAGE_BYTES = 9 * 1024 * 1024;
+// Injected images are compressed so the outbound request stays inside the
+// upstream provider's body limit. The fusion gateway edge allows 10 MiB, but
+// its upstream rejected a real ~9.2 MB payload with 413 "Request Entity Too
+// Large" (incident 2026-09-04, request a16ed054), so the binding limit lives
+// below the gateway edge. Budget is 8 MiB on the serialized messages, measured
+// in UTF-8 bytes, leaving >1 MiB of margin under that observed failure.
+var MAX_REQUEST_MESSAGE_BYTES = 8 * 1024 * 1024;
 
 // Images at or below this size pass through untouched (keeps small PNGs sharp).
 var SMALL_IMAGE_BYTES = 600 * 1024;
@@ -593,11 +597,12 @@ async function degradeToBudget(images, messages, budget, convertFn) {
   for (var li = 0; li < DEGRADE_LEVELS.length; li++) {
     if (serializedBytes(messages) <= budget) return;
     var level = DEGRADE_LEVELS[li];
-    var order = images
-      .filter(function (img) {
-        return !img.omitted && (img.appliedLevel === undefined || img.appliedLevel < li);
-      })
-      .sort(function (a, b) { return b.buffer.length - a.buffer.length; });
+    // Degrade in document order: the oldest history images step down the
+    // ladder first, so the newest images (typically the current turn's)
+    // keep their quality the longest.
+    var order = images.filter(function (img) {
+      return !img.omitted && (img.appliedLevel === undefined || img.appliedLevel < li);
+    });
     for (var k = 0; k < order.length; k++) {
       if (serializedBytes(messages) <= budget) return;
       var img = order[k];
@@ -608,8 +613,10 @@ async function degradeToBudget(images, messages, budget, convertFn) {
 }
 
 function omitToBudget(images, messages, budget) {
-  // Least important = last in document order; keep the earliest images.
-  for (var i = images.length - 1; i >= 0; i--) {
+  // Sacrifice in document order: the oldest history images are omitted
+  // first, and the newest images (typically the current turn's) are kept
+  // until nothing else fits.
+  for (var i = 0; i < images.length; i++) {
     if (serializedBytes(messages) <= budget) return;
     var img = images[i];
     if (img.omitted) continue;
@@ -619,7 +626,7 @@ function omitToBudget(images, messages, budget) {
   }
 }
 
-// Compress injected data-URI images, then enforce the 9 MiB request budget.
+// Compress injected data-URI images, then enforce the 8 MiB request budget.
 // http(s) image URLs are left untouched (they cost a few bytes, not image
 // bytes). Never throws; a broken image degrades to a placeholder instead of
 // failing the request. A system converter is probed only when the budget pass

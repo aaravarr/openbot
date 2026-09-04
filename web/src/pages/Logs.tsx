@@ -619,8 +619,8 @@ function LogDrawer({
 }
 
 function LogLayer({ detail: d, stacked }: { detail: LogDetail; stacked: boolean }) {
-  const requestRaw = rawBodyText(d.request);
-  const responseRaw = rawBodyText(d.response);
+  const requestRaw = rawBodyText(d.request, d.requestFull);
+  const responseRaw = rawBodyText(d.response, d.responseFull);
 
   const body = (
     <>
@@ -726,13 +726,17 @@ function stringifyBody(body: unknown): string {
 /**
  * Raw clipboard text for a captured body — the exact content the server
  * returned, never the pretty-printed display form. Truncated bodies copy the
- * captured `preview` string; no suffix is appended (the UI already shows the
- * truncation notice).
+ * full redacted text when the record carries it, else the captured `preview`
+ * string; no suffix is appended (the UI already shows the truncation notice).
  */
-function rawBodyText(body: unknown): string | null {
+function rawBodyText(body: unknown, full?: unknown): string | null {
   if (body === null || body === undefined) return null;
   if (typeof body === "string") return body.length > 0 ? body : null;
   if (isTruncatedCapture(body)) {
+    // Truncated records keep the full redacted text alongside the preview;
+    // copy prefers it so the clipboard holds the complete body. Old rows
+    // without it fall back to the preview.
+    if (typeof full === "string" && full.length > 0) return full;
     return typeof body.preview === "string" && body.preview.length > 0 ? body.preview : null;
   }
   try {

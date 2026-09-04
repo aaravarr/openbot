@@ -497,3 +497,65 @@ test("channel official vs custom filters host-stream rows", () => {
     assert.equal((detail as { channel?: string } | null)?.channel, "official");
   });
 });
+
+test("truncated bodies keep preview plus full redacted text for copy", () => {
+  withSand((dir) => {
+    const secret = "sk-test-full-copy-secret-xyz";
+    writeFileSync(path.join(dir, "secrets.json"), JSON.stringify({ providers: { deepseek: secret } }));
+    log.saveSettings({ loggingEnabled: true, logBodies: true, maxBodyCaptureBytes: 1024 });
+    const requestBody = { model: "deepseek-v4-flash", blob: "x".repeat(4500) + secret + "y".repeat(4500) };
+    const responseBody = { reply: "z".repeat(9000) };
+    log.recordHop({ id: "req-full-01", status: 200, model: "deepseek-v4-flash", requestBody, responseBody });
+    const row = log.listRequests().items[0] as Record<string, unknown>;
+    assert.equal(row.requestTruncated, true);
+    assert.equal(row.responseTruncated, true);
+    assert.equal("requestFull" in row, false);
+    assert.equal("responseFull" in row, false);
+    const raw = JSON.parse(readFileSync(path.join(dir, "openbot-request-bodies", "req-full-01.json"), "utf8"));
+    assert.equal(typeof raw.requestFull, "string");
+    assert.equal(typeof raw.responseFull, "string");
+    const detail = log.getRequest("req-full-01") as Record<string, unknown>;
+    assert.ok(detail);
+    const req = detail.request as { _truncated?: boolean; preview?: string };
+    assert.equal(req._truncated, true);
+    assert.equal(typeof req.preview, "string");
+    const reqFull = detail.requestFull as string;
+    assert.equal(reqFull, JSON.stringify(log.redact(requestBody)));
+    assert.equal(req.preview, reqFull.slice(0, 8000));
+    assert.equal(reqFull.includes(secret), false);
+    assert.match(reqFull, /\[redacted\]/);
+    const res = detail.response as { _truncated?: boolean; preview?: string };
+    assert.equal(res._truncated, true);
+    const resFull = detail.responseFull as string;
+    assert.equal(resFull, JSON.stringify(log.redact(responseBody)));
+    assert.equal(res.preview, resFull.slice(0, 8000));
+    assert.equal(resFull.length > (res.preview as string).length, true);
+  });
+});
+
+test("non-truncated rows carry no full keys and old rows without them still read", () => {
+  withSand((dir) => {
+    log.saveSettings({ loggingEnabled: true, logBodies: true });
+    log.recordHop({
+      id: "req-full-02",
+      status: 200,
+      model: "glm-5.3-flash",
+      requestBody: { model: "glm-5.3-flash" },
+      responseBody: { choices: [] },
+    });
+    const detail = log.getRequest("req-full-02") as Record<string, unknown>;
+    assert.ok(detail);
+    assert.equal("requestFull" in (detail as object), false);
+    assert.equal("responseFull" in (detail as object), false);
+    // Old rows recorded before full-text capture have no full keys; callers fall back to preview.
+    const legacy = JSON.parse(readFileSync(path.join(dir, "openbot-request-bodies", "req-full-02.json"), "utf8"));
+    delete legacy.requestFull;
+    delete legacy.responseFull;
+    writeFileSync(path.join(dir, "openbot-request-bodies", "req-full-02.json"), JSON.stringify(legacy));
+    const reread = log.getRequest("req-full-02") as Record<string, unknown>;
+    assert.equal("requestFull" in (reread as object), false);
+    assert.equal("responseFull" in (reread as object), false);
+    assert.ok(reread.request);
+    assert.ok(reread.response);
+  });
+});

@@ -162,6 +162,10 @@ export type LogRecord = {
 export type LogDetail = LogRecord & {
   request?: unknown;
   response?: unknown;
+  /** Full redacted body text for copy buttons; present only on truncated records. */
+  requestFull?: string;
+  /** Full redacted body text for copy buttons; present only on truncated records. */
+  responseFull?: string;
 };
 
 export type LogList = {

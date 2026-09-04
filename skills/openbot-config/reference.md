@@ -163,9 +163,10 @@ The custom path (hop + custom wrap runtime, both share `payload/openai-messages.
 
 `toOpenAIMessages` converts a host `{ "type": "image", … }` part into a standard OpenAI `image_url` content part instead of the old `"[image]"` placeholder. The part's field shape is unspecified, so it probes tolerantly:
 
-1. `data` / `base64` (raw base64) — paired with a `mime` / `mimeType` field, or sniffed from magic bytes (png/jpeg/webp/gif).
-2. `url` — `http(s)://` or `data:` URI, used as-is.
-3. `path` / `file` — a local file, read from disk and sniffed to a `data:image/<mime>;base64,…` URI.
+1. `image` — the observed attachment shape is `{ "type": "image", "image": <payload>, "mimeType": … }`. The payload may be a `data:image/…;base64,…` URI (used as-is), bare base64, raw bytes (`Buffer`/`TypedArray`, sniffed), a nested record (e.g. `{ "data": …, "mimeType": … }`), or an array of those. A `mime` / `mimeType` sibling is honored, otherwise magic bytes are sniffed.
+2. `data` / `base64` (raw base64) — paired with a `mime` / `mimeType` field, or sniffed from magic bytes (png/jpeg/webp/gif).
+3. `url` — `http(s)://` or `data:` URI, used as-is.
+4. `path` / `file` — a local file, read from disk and sniffed to a `data:image/<mime>;base64,…` URI.
 
 Any hit becomes `{ "type": "image_url", "image_url": { "url": … } }`. If **all** probes fail, it falls back to the old `"[image]"` placeholder. Guards: missing / unreadable / non-file / over **20 MB** → fall back, never throw.
 
@@ -190,12 +191,23 @@ On each `POST /v1/chat/completions`, after `toOpenAIMessages` converts host part
   MIME comes from the extension. Multiple images in one turn each get their own user message, each placed right after its own tool result.
 - **Guards**: missing / unreadable / non-file / over **20 MB** → skip that image, log a warning to stderr, and leave the tool result as-is. Never throw, never block the chat request. Text reads (non-image paths) and non-Read tools pass through untouched.
 
+### Harness image bytes on tool results (`experimental_content`)
+
+The official Read tool returns inline base64 image bytes on the tool result under `experimental_content` (aliases `experimentalContent` and plural forms are probed; entries may be a single object or an array, shaped roughly like `{ "type": "image", "data": "<base64>", "mimeType": … }`; a `data:` URI or raw bytes under `image` are accepted too). Behavior:
+
+- **Carry**: the conversion carries that raw value verbatim on the emitted `role: "tool"` row so it survives the runtime → hop round-trip. `enrichImageReads` then strips every carried alias from every row before anything can reach upstream — the harness's own field is never forwarded as an invented upstream field.
+- **Map**: harness image bytes win. The same injected `role: "user"` message shape as a disk Read is inserted right after the tool result (label `[Image attached from Read: <path>]` when the tool call is a Read of an image file, else `[Image attached from tool result]`). This applies to **any** tool result that carries image bytes, not only Read calls — the model sees exactly what the harness produced, and the file is never re-read from disk (short-circuit).
+- **Never double-inject**: if the tool result text already contains image data (`image_url` / a `data:` URI), nothing is injected. A second conversion pass over already-injected messages does not duplicate the image. Identical duplicate URLs inside one `experimental_content` value are collapsed to one image.
+- **Fallback**: `experimental_content` present but with no usable image entries (e.g. only text items, or undecodable bytes) → normal behavior resumes: a Read-style call still gets the disk-read injection, other tools are untouched.
+- **Guards**: entries whose own `type` is not `image` are skipped; decoded bytes over **20 MB** are skipped; remote `http(s)` URLs are passed through only when a sibling mime or the file extension says image — the hop never fetches.
+
 ### Image compression & request byte budget
 
-The upstream gateway has a hard **10 MiB** request-body limit; injected base64 inflates images by ~33%. Before dispatch, `payload/image-read.cjs` compresses every data-URI image and enforces a **9 MiB** budget on `body.messages`:
+The upstream gateway has a hard **10 MiB** request-body limit; injected base64 inflates images by ~33%. Before dispatch, `payload/image-read.cjs` compresses every data-URI image (whatever its source: harness bytes, disk read, or user attachment) and enforces a **9 MiB** budget on `body.messages`:
 
 - **Compress**: images ≤ **600 KB** pass through untouched (keeps small PNGs sharp). Larger png/jpeg are re-encoded to **JPEG q≈85, long edge ≤1568** (alpha flattened onto white), via pure-JS `pngjs` + `jpeg-js` (no native deps). webp/gif cannot be decoded in pure JS: the box is probed once for ImageMagick `convert` / `ffmpeg` and used if present, otherwise they pass through (stderr note). The compressed result is used only when smaller than the original.
-- **Budget**: if the serialized messages still exceed 9 MiB, the largest image is repeatedly down-stepped (quality q85→q70→q50, then size 1568→1024→768). If it still does not fit, the least-important image (last in document order) is replaced with the text `[image omitted: budget]`, preserving order — the request never 413s. Each step logs one stderr line with before/after bytes.
+- **Budget**: if the serialized messages still exceed 9 MiB, the largest image is repeatedly down-stepped (quality q85→q70→q50, then size 1568→1024→768; each image steps through each rung at most once). If it still does not fit, the least-important image (last in document order) is replaced with the text `[image omitted: budget]`, preserving order — the request never 413s. Each step logs one stderr line with before/after bytes. Text-only or under-budget requests never spawn the converter probe.
+- **Deps on the box**: `install.sh` runs a best-effort `npm install --omit=dev` so tarball installs have `pngjs`/`jpeg-js`. The libraries load lazily: if they are missing (offline install), the hop still routes — compression is skipped (stderr note) and the byte budget falls back to omitting oversize images. `OPENBOT_SKIP_NPM_INSTALL=1` skips the install step (tests / offline mirrors).
 
 ## `POST /api/save` kinds
 

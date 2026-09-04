@@ -144,4 +144,16 @@ fi
 stamp_payload_version "$DEST" "$COMMIT"
 
 cd "$DEST"
+
+# Compression deps for payload/image-read.cjs are pure JS. Tarball installs
+# ship no node_modules; load them lazily and best-effort install here. If this
+# fails (offline box), the hop still routes: compression is skipped and the
+# byte budget falls back to omitting oversize images. Set
+# OPENBOT_SKIP_NPM_INSTALL=1 to skip (used by tests and offline mirrors).
+if [[ "${OPENBOT_SKIP_NPM_INSTALL:-}" != "1" ]] && command -v npm >/dev/null 2>&1; then
+  if ! npm install --omit=dev --no-audit --no-fund --loglevel=error >/dev/null 2>&1; then
+    echo "OpenBot: npm install failed; image compression will be skipped (byte budget still enforced)" >&2
+  fi
+fi
+
 exec node --experimental-strip-types src/cli.ts install --host-main "$HOST" --sand-data "$DATA"

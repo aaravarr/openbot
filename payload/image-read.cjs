@@ -16,8 +16,24 @@ var fs = require("fs");
 var os = require("os");
 var path = require("path");
 var { execFile } = require("child_process");
-var PNG = require("pngjs").PNG;
-var jpegJs = require("jpeg-js");
+
+// Compression libraries load lazily and are tolerated as missing: tarball
+// installs ship no node_modules. Without them the hop still routes and the
+// byte budget still applies (oversize images degrade to the omit placeholder);
+// only the re-encoding is skipped. install.sh runs a best-effort
+// `npm install --omit=dev` so real installs normally have them.
+var imageLibs; // undefined = unprobed, null = unavailable, else { PNG, jpegJs }
+
+function loadImageLibs() {
+  if (imageLibs !== undefined) return imageLibs;
+  try {
+    imageLibs = { PNG: require("pngjs").PNG, jpegJs: require("jpeg-js") };
+  } catch (err) {
+    imageLibs = null;
+    logLine("image-read: pngjs/jpeg-js not available; image compression is skipped (byte budget still enforced)");
+  }
+  return imageLibs;
+}
 
 var MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20 MB: reject absurdly large single images
 
@@ -126,6 +142,151 @@ function contentHasImageData(content) {
   return /data:[a-z0-9.+-]+\/[a-z0-9.+-]+[;,]/i.test(text);
 }
 
+// --- Layer C: harness-provided image bytes (experimental_content) -----------
+//
+// The official Read tool returns inline base64 image bytes on the tool result
+// under `experimental_content` (aliases `experimentalContent` and plural
+// forms). The conversion in openai-messages.cjs carries that raw value
+// verbatim onto the emitted `role: "tool"` row so it survives the
+// runtime -> hop round-trip; this module owns all probing and strips the
+// carried keys before anything can reach upstream.
+
+var EXPERIMENTAL_KEYS = [
+  "experimental_content",
+  "experimentalContent",
+  "experimental_contents",
+  "experimentalContents",
+];
+
+// Raw experimental content of a record, probing tolerant field aliases.
+function experimentalContentRaw(record) {
+  if (!isRecord(record)) return undefined;
+  for (var i = 0; i < EXPERIMENTAL_KEYS.length; i++) {
+    if (record[EXPERIMENTAL_KEYS[i]] !== undefined) return record[EXPERIMENTAL_KEYS[i]];
+  }
+  return undefined;
+}
+
+// Read the carried value off a converted row and delete every alias key, so it
+// can never leak upstream regardless of what enrichment decides below.
+function takeExperimentalContent(row) {
+  var raw;
+  for (var i = 0; i < EXPERIMENTAL_KEYS.length; i++) {
+    var key = EXPERIMENTAL_KEYS[i];
+    if (raw === undefined && row[key] !== undefined) raw = row[key];
+    delete row[key];
+  }
+  return raw;
+}
+
+function isImageMime(mime) {
+  return typeof mime === "string" && /^image\//i.test(mime);
+}
+
+function looksLikeImageUrlExt(value) {
+  return typeof value === "string" && /\.(png|jpe?g|webp|gif)$/i.test(value);
+}
+
+function mimeHintFromRecord(record) {
+  if (!isRecord(record)) return "";
+  var hint = typeof record.mimeType === "string" ? record.mimeType : "";
+  if (!hint && typeof record.mime === "string") hint = record.mime;
+  if (!hint && isRecord(record.source) && typeof record.source.media_type === "string") {
+    hint = record.source.media_type;
+  }
+  return hint;
+}
+
+function bytesFromValue(value) {
+  if (Buffer.isBuffer(value)) return value;
+  if (ArrayBuffer.isView(value)) {
+    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (value instanceof ArrayBuffer) return Buffer.from(value);
+  return null;
+}
+
+// Resolve one leaf value (data: URI, bare base64, raw bytes, or an http(s)
+// image URL) to a normalized `{ url, mime }` entry, or null when it is not
+// usable image data. `mimeHint` comes from sibling mimeType-style fields.
+function imageEntryFromValue(value, mimeHint) {
+  if (typeof value === "string" && value) {
+    if (/^data:/i.test(value)) {
+      var parsed = parseDataUri(value);
+      if (!parsed || !Buffer.isBuffer(parsed.buffer) || parsed.buffer.length === 0) return null;
+      if (parsed.buffer.length > MAX_IMAGE_BYTES) return null;
+      if (isImageMime(parsed.mime)) return { url: value, mime: parsed.mime };
+      // Odd or empty prefix: trust the decoded bytes instead.
+      var sniffed = sniffImageMime(parsed.buffer);
+      if (!isImageMime(sniffed)) return null;
+      return { url: dataUrlFromBuffer(parsed.buffer, sniffed), mime: sniffed };
+    }
+    if (/^https?:\/\//i.test(value)) {
+      // Only pass through remote URLs that name an image; never fetch here.
+      if (isImageMime(mimeHint) || looksLikeImageUrlExt(value)) return { url: value, mime: "" };
+      return null;
+    }
+    var bytes = Buffer.from(value, "base64");
+    if (bytes.length === 0 || bytes.length > MAX_IMAGE_BYTES) return null;
+    var mime = isImageMime(mimeHint) ? mimeHint : sniffImageMime(bytes);
+    if (!isImageMime(mime)) return null;
+    return { url: dataUrlFromBuffer(bytes, mime), mime: mime };
+  }
+  var raw = bytesFromValue(value);
+  if (raw) {
+    if (raw.length === 0 || raw.length > MAX_IMAGE_BYTES) return null;
+    var m = isImageMime(mimeHint) ? mimeHint : sniffImageMime(raw);
+    if (!isImageMime(m)) return null;
+    return { url: dataUrlFromBuffer(raw, m), mime: m };
+  }
+  return null;
+}
+
+// Probe a tolerantly-shaped value for image data: records are walked through
+// `image`/`data`/`base64`/`url`/`source` fields, arrays item by item, and
+// strings/buffers resolved directly. Never throws; unknown shapes yield null.
+function imageEntryFromAny(value, hint) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" || Buffer.isBuffer(value) || ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
+    return imageEntryFromValue(value, hint);
+  }
+  if (Array.isArray(value)) {
+    for (var i = 0; i < value.length; i++) {
+      var sub = imageEntryFromAny(value[i], hint);
+      if (sub) return sub;
+    }
+    return null;
+  }
+  if (isRecord(value)) {
+    var h = mimeHintFromRecord(value) || hint || "";
+    var keys = ["image", "data", "base64", "url", "source"];
+    for (var k = 0; k < keys.length; k++) {
+      var entry = imageEntryFromAny(value[keys[k]], h);
+      if (entry) return entry;
+    }
+  }
+  return null;
+}
+
+// Extract normalized image entries from an experimental_content value (single
+// item or array). Items whose own `type` names something other than "image"
+// are skipped so text entries are never misread as image bytes.
+function extractExperimentalImageUrls(value) {
+  if (value === undefined || value === null) return [];
+  var items = Array.isArray(value) ? value : [value];
+  var out = [];
+  var seen = Object.create(null);
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    if (isRecord(item) && typeof item.type === "string" && item.type && item.type !== "image") continue;
+    var entry = imageEntryFromAny(item, "");
+    if (!entry || seen[entry.url]) continue;
+    seen[entry.url] = true;
+    out.push(entry);
+  }
+  return out;
+}
+
 function logLine(message) {
   try {
     process.stderr.write("openbot-hop " + message + "\n");
@@ -191,13 +352,15 @@ function resizeRgba(src, sw, sh, dw, dh) {
 }
 
 function decodeToRgba(buffer, mime) {
+  var libs = loadImageLibs();
+  if (!libs) return null;
   try {
     if (mime === "image/png") {
-      var png = PNG.sync.read(buffer);
+      var png = libs.PNG.sync.read(buffer);
       return { width: png.width, height: png.height, data: Buffer.from(png.data) };
     }
     if (mime === "image/jpeg") {
-      var jpg = jpegJs.decode(buffer, { useTArray: true, formatAsRGBA: true });
+      var jpg = libs.jpegJs.decode(buffer, { useTArray: true, formatAsRGBA: true });
       return { width: jpg.width, height: jpg.height, data: Buffer.from(jpg.data) };
     }
   } catch (err) {
@@ -225,7 +388,9 @@ function encodeToJpeg(buffer, mime, opts) {
     h = dh;
   }
   try {
-    var encoded = jpegJs.encode({ data: data, width: w, height: h }, numberOr(opts.quality, DEFAULT_QUALITY));
+    var libs = loadImageLibs();
+    if (!libs) return null;
+    var encoded = libs.jpegJs.encode({ data: data, width: w, height: h }, numberOr(opts.quality, DEFAULT_QUALITY));
     return Buffer.from(encoded.data);
   } catch (err) {
     return null;
@@ -429,13 +594,15 @@ async function degradeToBudget(images, messages, budget, convertFn) {
     if (serializedBytes(messages) <= budget) return;
     var level = DEGRADE_LEVELS[li];
     var order = images
-      .filter(function (img) { return !img.omitted; })
+      .filter(function (img) {
+        return !img.omitted && (img.appliedLevel === undefined || img.appliedLevel < li);
+      })
       .sort(function (a, b) { return b.buffer.length - a.buffer.length; });
     for (var k = 0; k < order.length; k++) {
       if (serializedBytes(messages) <= budget) return;
       var img = order[k];
       var res = await encodeToJpegOrConvert(img.buffer, img.mime, level, convertFn);
-      applyImageResult(img, res, "image-read degraded");
+      if (applyImageResult(img, res, "image-read degraded")) img.appliedLevel = li;
     }
   }
 }
@@ -455,17 +622,12 @@ function omitToBudget(images, messages, budget) {
 // Compress injected data-URI images, then enforce the 9 MiB request budget.
 // http(s) image URLs are left untouched (they cost a few bytes, not image
 // bytes). Never throws; a broken image degrades to a placeholder instead of
-// failing the request.
+// failing the request. A system converter is probed only when the budget pass
+// actually needs one — pure-text and under-budget requests never spawn it.
 async function enforceImageBudget(messages, options) {
   if (!Array.isArray(messages)) return messages;
   options = options || {};
   var budget = numberOr(options.budget, MAX_REQUEST_MESSAGE_BYTES);
-  var convertFn;
-  if (options.convert === undefined) {
-    convertFn = await getSystemConvertFn();
-  } else {
-    convertFn = options.convert;
-  }
 
   var images = collectDataUriImages(messages);
   if (images.length === 0) return messages;
@@ -473,12 +635,13 @@ async function enforceImageBudget(messages, options) {
   // 1. Normalize every image (small pass-through, large -> JPEG q85/1568).
   for (var i = 0; i < images.length; i++) {
     var img = images[i];
-    var res = await prepareImageForModel(img.buffer, img.mime, { convert: convertFn });
+    var res = await prepareImageForModel(img.buffer, img.mime, { convert: options.convert });
     applyImageResult(img, res, "image-read compressed");
   }
 
   // 2. Budget enforcement.
   if (serializedBytes(messages) > budget) {
+    var convertFn = options.convert !== undefined ? options.convert : await getSystemConvertFn();
     await degradeToBudget(images, messages, budget, convertFn);
   }
   if (serializedBytes(messages) > budget) {
@@ -538,36 +701,66 @@ function collectImageReadCalls(messages) {
   return map;
 }
 
-function imageMessageFor(filePath, dataUrl) {
+function imageMessageFor(label, dataUrl) {
   return {
     role: "user",
     content: [
-      { type: "text", text: "[Image attached from Read: " + filePath + "]" },
+      { type: "text", text: label },
       { type: "image_url", image_url: { url: dataUrl } },
     ],
   };
 }
 
-// Enrich an OpenAI-format message array. Multiple matching images in one turn
+// Enrich an OpenAI-format message array. Tool results carrying harness image
+// bytes (experimental_content) are mapped to the same injected user-message
+// shape as disk reads; those bytes short-circuit Layer B, so the file is never
+// re-read from disk and nothing is injected twice. Multiple images in one turn
 // each get their own user message, placed immediately after the tool result
 // they enrich.
 async function enrichImageReads(messages) {
   if (!Array.isArray(messages)) return messages;
+
+  // Strip carried experimental content from every row first: the hop never
+  // forwards it upstream, whatever enrichment decides below.
+  var experimentalByRow = new Map();
+  for (var s = 0; s < messages.length; s++) {
+    var row = messages[s];
+    if (!isRecord(row)) continue;
+    var raw = takeExperimentalContent(row);
+    if (raw === undefined || row.role !== "tool") continue;
+    var urls = extractExperimentalImageUrls(raw);
+    if (urls.length) experimentalByRow.set(row, urls);
+  }
+
   var imageCalls = collectImageReadCalls(messages);
   var out = [];
   for (var i = 0; i < messages.length; i++) {
     var msg = messages[i];
     out.push(msg);
     if (!isRecord(msg) || msg.role !== "tool") continue;
+    // Image data already present in the result text means nothing is injected:
+    // neither harness bytes nor a disk read (never double-inject).
+    if (contentHasImageData(msg.content)) continue;
+    var provided = experimentalByRow.get(msg);
+    if (provided && provided.length) {
+      var call = imageCalls[msg.tool_call_id];
+      var label = call
+        ? "[Image attached from Read: " + call.filePath + "]"
+        : "[Image attached from tool result]";
+      for (var k = 0; k < provided.length; k++) {
+        out.push(imageMessageFor(label, provided[k].url));
+      }
+      logLine("image-read mapped " + provided.length + " harness image byte(s) after a tool result");
+      continue; // harness bytes win; never read the file from disk here
+    }
     var hit = imageCalls[msg.tool_call_id];
     if (!hit) continue;
-    if (contentHasImageData(msg.content)) continue;
     var read = await readImageDataUrl(hit.filePath);
     if (!read.ok) {
       logLine("image-read skipped: " + hit.filePath + " (" + read.reason + ")");
       continue;
     }
-    out.push(imageMessageFor(hit.filePath, read.dataUrl));
+    out.push(imageMessageFor("[Image attached from Read: " + hit.filePath + "]", read.dataUrl));
     logLine("image-read enriched: " + hit.filePath);
   }
   return out;
@@ -579,6 +772,9 @@ exports.enforceImageBudget = enforceImageBudget;
 exports.isImageReadToolName = isImageReadToolName;
 exports.filePathFromArgs = filePathFromArgs;
 exports.contentHasImageData = contentHasImageData;
+exports.experimentalContentRaw = experimentalContentRaw;
+exports.extractExperimentalImageUrls = extractExperimentalImageUrls;
+exports.imageEntryFromAny = imageEntryFromAny;
 exports.imageExtOf = imageExtOf;
 exports.sniffImageMime = sniffImageMime;
 exports.dataUrlFromBuffer = dataUrlFromBuffer;

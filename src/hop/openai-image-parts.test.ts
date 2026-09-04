@@ -153,3 +153,53 @@ test("a second toOpenAIMessages pass preserves image_url content (runtime -> hop
   assert.equal(parts[1]?.type, "image_url");
   assert.equal(parts[1]?.image_url?.url, `data:image/png;base64,${PNG_BASE64}`);
 });
+
+// --- `image` field (observed attachment shape) ------------------------------
+
+test("host image part with an image data URL is used as-is", () => {
+  const dataUrl = `data:image/png;base64,${PNG_BASE64}`;
+  const out = toOpenAIMessages([
+    { role: "user", content: [{ type: "image", image: dataUrl, mimeType: "image/png" }] },
+  ]);
+  const parts = partsOf(out);
+  assert.equal(parts[0]?.type, "image_url");
+  assert.equal(parts[0]?.image_url?.url, dataUrl);
+});
+
+test("host image part with bare base64 in the image field is sniffed", () => {
+  const out = toOpenAIMessages([
+    { role: "user", content: [{ type: "image", image: PNG_BASE64 }] },
+  ]);
+  const parts = partsOf(out);
+  assert.equal(parts[0]?.type, "image_url");
+  assert.equal(parts[0]?.image_url?.url, `data:image/png;base64,${PNG_BASE64}`);
+});
+
+test("host image part with raw bytes in the image field is sniffed", () => {
+  const out = toOpenAIMessages([
+    { role: "user", content: [{ type: "image", image: PNG_BYTES, mimeType: "image/png" }] },
+  ]);
+  const parts = partsOf(out);
+  assert.equal(parts[0]?.type, "image_url");
+  assert.equal(parts[0]?.image_url?.url, `data:image/png;base64,${PNG_BASE64}`);
+});
+
+test("host image part with a nested image record is probed", () => {
+  const out = toOpenAIMessages([
+    {
+      role: "user",
+      content: [{ type: "image", image: { data: PNG_BASE64, mimeType: "image/png" } }],
+    },
+  ]);
+  const parts = partsOf(out);
+  assert.equal(parts[0]?.type, "image_url");
+  assert.equal(parts[0]?.image_url?.url, `data:image/png;base64,${PNG_BASE64}`);
+});
+
+test("an unusable image field still falls back to the [image] placeholder", () => {
+  const out = toOpenAIMessages([
+    { role: "user", content: [{ type: "image", image: "definitely not base64 !!!" }] },
+  ]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0]?.content, "[image]");
+});

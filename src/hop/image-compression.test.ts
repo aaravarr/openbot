@@ -106,4 +106,108 @@ test("enforceImageBudget leaves non-image content untouched", async () => {
   ];
   const out = await imageRead.enforceImageBudget(messages, { convert: null });
   assert.deepEqual(out, messages);
+  assert.equal(out, messages);
+});
+
+test("an over-budget image is degraded before it is omitted, and the invariant holds", async () => {
+  const normalized = await imageRead.prepareImageForModel(largePng, "image/png", { convert: null });
+  assert.equal(normalized.mime, "image/jpeg");
+  const dataUrl = imageRead.dataUrlFromBuffer(normalized.buffer, normalized.mime);
+  const messages = [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "look" },
+        { type: "image_url", image_url: { url: dataUrl } },
+      ],
+    },
+  ];
+  // One byte under the normalized size: the ladder must step in, and the
+  // smallest rung (q50, 768px) is far below it, so the image survives.
+  const budget = normalized.buffer.length - 1;
+  const out = (await imageRead.enforceImageBudget(messages, { budget, convert: null })) as {
+    content: { type: string; text?: string; image_url?: { url: string } }[];
+  }[];
+  const serialized = Buffer.byteLength(JSON.stringify(out), "utf8");
+  assert.ok(serialized <= budget, `serialized ${serialized} > budget ${budget}`);
+  assert.equal((out[0]?.content[1] as { type: string }).type, "image_url");
+  const finalUrl = (out[0]?.content[1] as { image_url?: { url: string } }).image_url?.url ?? "";
+  const finalBytes = Buffer.from(finalUrl.slice(finalUrl.indexOf(",") + 1), "base64");
+  assert.ok(finalBytes.length < normalized.buffer.length, "degraded image must be smaller");
+  const decoded = jpegjs.decode(finalBytes);
+  assert.ok(Math.max(decoded.width, decoded.height) <= imageRead.DEFAULT_MAX_EDGE);
+});
+
+test("an image that cannot fit the budget is replaced with the omit placeholder", async () => {
+  const dataUrl = imageRead.dataUrlFromBuffer(largePng, "image/png");
+  const make = () => ({
+    role: "user",
+    content: [
+      { type: "text", text: "look" },
+      { type: "image_url", image_url: { url: dataUrl } },
+    ],
+  });
+  const out = (await imageRead.enforceImageBudget([make(), make()], {
+    budget: 50 * 1024,
+    convert: null,
+  })) as { content: { type: string; text?: string }[] }[];
+  const serialized = Buffer.byteLength(JSON.stringify(out), "utf8");
+  assert.ok(serialized <= 50 * 1024, `serialized ${serialized} > budget`);
+  for (const msg of out) {
+    const imageParts = (msg.content as { type: string }[]).filter((p) => p.type === "image_url");
+    assert.equal(imageParts.length, 0);
+    const notes = (msg.content as { type: string; text?: string }[]).filter(
+      (p) => p.type === "text" && p.text === "[image omitted: budget]",
+    );
+    assert.equal(notes.length, 1);
+  }
+});
+
+test("http(s) image urls are never compressed or omitted", async () => {
+  const dataUrl = imageRead.dataUrlFromBuffer(largePng, "image/png");
+  const messages = [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "remote" },
+        { type: "image_url", image_url: { url: "https://example.com/pixel.png" } },
+      ],
+    },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "inline" },
+        { type: "image_url", image_url: { url: dataUrl } },
+      ],
+    },
+  ];
+  const out = (await imageRead.enforceImageBudget(messages, {
+    budget: 50 * 1024,
+    convert: null,
+  })) as { content: { type: string; text?: string; image_url?: { url: string } }[] }[];
+  const first = out[0]?.content[1] as { image_url?: { url: string } };
+  assert.equal(first.image_url?.url, "https://example.com/pixel.png");
+  const secondParts = out[1]?.content as { type: string; text?: string }[];
+  assert.equal(
+    secondParts.some((p) => p.type === "text" && p.text === "[image omitted: budget]"),
+    true,
+  );
+});
+
+test("a small image under the default budget passes through byte-identical", async () => {
+  const small = noisePng(32, 32);
+  const dataUrl = imageRead.dataUrlFromBuffer(small, "image/png");
+  const messages = [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "tiny" },
+        { type: "image_url", image_url: { url: dataUrl } },
+      ],
+    },
+  ];
+  const out = await imageRead.enforceImageBudget(messages, { convert: null });
+  assert.equal(out, messages);
+  const parts = (out[0] as { content: { image_url?: { url: string } }[] }).content;
+  assert.equal(parts[1]?.image_url?.url, dataUrl);
 });

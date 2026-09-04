@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
@@ -19,7 +20,10 @@ const imageRead = require(path.join(path.dirname(fileURLToPath(import.meta.url))
 
 const PNG = (require("pngjs") as { PNG: new (opts: { width: number; height: number }) => { data: Buffer; width: number; height: number } }).PNG;
 const pngSyncWrite = (require("pngjs") as { PNG: { sync: { write: (png: unknown) => Buffer } } }).PNG.sync.write;
-const jpegjs = require("jpeg-js") as { decode: (buf: Buffer) => { width: number; height: number } };
+const jpegjs = require("jpeg-js") as {
+  decode: (buf: Buffer) => { width: number; height: number };
+  encode: (image: { data: Buffer; width: number; height: number }, quality: number) => { data: Buffer };
+};
 
 const WEBP_MAGIC = Buffer.from("RIFF");
 
@@ -210,4 +214,111 @@ test("a small image under the default budget passes through byte-identical", asy
   assert.equal(out, messages);
   const parts = (out[0] as { content: { image_url?: { url: string } }[] }).content;
   assert.equal(parts[1]?.image_url?.url, dataUrl);
+});
+
+// Synthetic bytes no decoder accepts: normalization and the degrade ladder
+// no-op, so the budget pass exercises omission deterministically. Lengths are
+// aligned with the observed incident scale without embedding real payloads.
+function fakeImageDataUrl(sizeBytes: number): string {
+  return imageRead.dataUrlFromBuffer(randomBytes(sizeBytes), "image/png");
+}
+
+type ImageContent = { type: string; text?: string; image_url?: { url: string } };
+
+function imageMessage(text: string, dataUrl: string) {
+  return {
+    role: "user",
+    content: [
+      { type: "text", text },
+      { type: "image_url", image_url: { url: dataUrl } },
+    ] as ImageContent[],
+  };
+}
+
+function hasOmitNote(parts: ImageContent[] | undefined): boolean {
+  return (parts ?? []).some((p) => p.type === "text" && p.text === "[image omitted: budget]");
+}
+
+function hasImage(parts: ImageContent[] | undefined): boolean {
+  return (parts ?? []).some((p) => p.type === "image_url");
+}
+
+test("budget pressure omits the oldest images first and keeps the newest intact", async () => {
+  const dataUrl = fakeImageDataUrl(100 * 1024);
+  const messages = [imageMessage("old 0", dataUrl), imageMessage("old 1", dataUrl), imageMessage("new 2", dataUrl)];
+  const s0 = Buffer.byteLength(JSON.stringify(messages), "utf8");
+  // Fits after exactly two omissions: the oldest two are dropped, the
+  // newest image survives.
+  const budget = s0 - 2 * dataUrl.length + 400;
+  const out = (await imageRead.enforceImageBudget(messages, { budget, convert: null })) as {
+    content: ImageContent[];
+  }[];
+  const serialized = Buffer.byteLength(JSON.stringify(out), "utf8");
+  assert.ok(serialized <= budget, `serialized ${serialized} > budget ${budget}`);
+  assert.equal(hasOmitNote(out[0]?.content), true, "oldest image must be omitted first");
+  assert.equal(hasOmitNote(out[1]?.content), true, "second-oldest image must be omitted second");
+  assert.equal(hasOmitNote(out[2]?.content), false, "newest image must not be omitted");
+  assert.equal(hasImage(out[2]?.content), true, "newest image must be kept");
+  assert.equal((out[2]?.content[1] as { image_url?: { url: string } }).image_url?.url, dataUrl);
+});
+
+// Smooth gradients re-encode far smaller at q70 than q85, so a degrade step
+// always shrinks them (pure noise would not — generation loss inflates it).
+function gradientJpeg(width: number, height: number, quality: number): Buffer {
+  const data = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const o = (y * width + x) * 4;
+      const v = Math.floor(((x + y) * 255) / (width + height));
+      data[o] = v;
+      data[o + 1] = v;
+      data[o + 2] = v;
+      data[o + 3] = 255;
+    }
+  }
+  return Buffer.from(jpegjs.encode({ data, width, height }, quality).data);
+}
+
+test("budget degrade steps the oldest image down first and keeps the newest untouched", async () => {
+  const older = gradientJpeg(800, 600, 85);
+  const newer = gradientJpeg(1600, 1200, 85);
+  assert.ok(newer.length > older.length, "fixture needs the newer image larger");
+  const olderUrl = imageRead.dataUrlFromBuffer(older, "image/jpeg");
+  const newerUrl = imageRead.dataUrlFromBuffer(newer, "image/jpeg");
+  const messages = [imageMessage("old", olderUrl), imageMessage("new", newerUrl)];
+  const s0 = Buffer.byteLength(JSON.stringify(messages), "utf8");
+  const out = (await imageRead.enforceImageBudget(messages, { budget: s0 - 1, convert: null })) as {
+    content: ImageContent[];
+  }[];
+  const serialized = Buffer.byteLength(JSON.stringify(out), "utf8");
+  assert.ok(serialized <= s0 - 1, `serialized ${serialized} > budget ${s0 - 1}`);
+  assert.equal(hasOmitNote(out[0]?.content), false, "degrade must fit without omission");
+  assert.equal(hasOmitNote(out[1]?.content), false, "degrade must fit without omission");
+  const firstUrl = (out[0]?.content[1] as { image_url?: { url: string } }).image_url?.url ?? "";
+  const secondUrl = (out[1]?.content[1] as { image_url?: { url: string } }).image_url?.url ?? "";
+  assert.ok(firstUrl.length < olderUrl.length, "oldest image must be degraded first");
+  assert.ok(
+    secondUrl.length === newerUrl.length && secondUrl.endsWith(newerUrl.slice(-64)),
+    "newest image must keep its quality",
+  );
+});
+
+test("the default budget clamps an incident-scale payload by omitting oldest images first", async () => {
+  // Locks the post-incident budget: the fusion gateway edge allows 10 MiB but
+  // its upstream rejected a real ~9.2 MB payload with 413 (request
+  // a16ed054-4bac-49fd-89b9-cd75c38c797a), so the default must stay below it.
+  assert.equal(imageRead.MAX_REQUEST_MESSAGE_BYTES, 8 * 1024 * 1024);
+  const dataUrl = fakeImageDataUrl(1250 * 1024);
+  const messages = Array.from({ length: 8 }, (_, i) => imageMessage(`turn ${i}`, dataUrl));
+  const out = (await imageRead.enforceImageBudget(messages, { convert: null })) as {
+    content: ImageContent[];
+  }[];
+  const serialized = Buffer.byteLength(JSON.stringify(out), "utf8");
+  assert.ok(serialized <= imageRead.MAX_REQUEST_MESSAGE_BYTES, `serialized ${serialized} > default budget`);
+  for (let i = 0; i < 4; i++) {
+    assert.equal(hasOmitNote(out[i]?.content), true, `message ${i} (oldest) must be omitted`);
+  }
+  for (let i = 4; i < 8; i++) {
+    assert.equal(hasImage(out[i]?.content), true, `message ${i} (newest) must keep its image`);
+  }
 });

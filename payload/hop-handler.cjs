@@ -6,6 +6,7 @@ var https = require("https");
 var { URL } = require("url");
 var path = require("path");
 var { toOpenAIMessages } = require("./openai-messages.cjs");
+var { enrichImageReads } = require("./image-read.cjs");
 var { applyOpenBotVersionHeader } = require("./version.cjs");
 var requestLog = require("./request-log.cjs");
 
@@ -568,6 +569,7 @@ async function handleCompletions(req, res) {
     body.model = route.model.slug;
     if (Array.isArray(body.messages)) {
       body.messages = toOpenAIMessages(body.messages);
+      body.messages = await enrichImageReads(body.messages);
     }
     applyMaxTokens(body, route.model);
     applyMaps(body, {

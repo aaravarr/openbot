@@ -11,6 +11,8 @@ OpenBot is a box supervisor. Mutations that wrap or unwrap the host or start or 
 
 Prefer Computer JSON files when wrap is already custom. That is faster than the control UI. Hop reads the plan, secrets, live maps (`payload/provider-maps.cjs` only), and log settings **per request**.
 
+Hop request behavior: when a conversation has a Read-style tool call targeting an image file (`.png`/`.jpg`/`.jpeg`/`.webp`/`.gif`) and its tool result carries no image data, the hop reads the file and injects a standard OpenAI `image_url` user message after that tool result (20 MB cap; missing/oversize files are skipped). Details and guards: [reference.md](reference.md) § "Hop image-read injection".
+
 Never print, commit, or paste API keys. Show `secrets.json` shape with `"<stored locally>"` only.
 
 ## When to use

@@ -190,6 +190,13 @@ On each `POST /v1/chat/completions`, after `toOpenAIMessages` converts host part
   MIME comes from the extension. Multiple images in one turn each get their own user message, each placed right after its own tool result.
 - **Guards**: missing / unreadable / non-file / over **20 MB** → skip that image, log a warning to stderr, and leave the tool result as-is. Never throw, never block the chat request. Text reads (non-image paths) and non-Read tools pass through untouched.
 
+### Image compression & request byte budget
+
+The upstream gateway has a hard **10 MiB** request-body limit; injected base64 inflates images by ~33%. Before dispatch, `payload/image-read.cjs` compresses every data-URI image and enforces a **9 MiB** budget on `body.messages`:
+
+- **Compress**: images ≤ **600 KB** pass through untouched (keeps small PNGs sharp). Larger png/jpeg are re-encoded to **JPEG q≈85, long edge ≤1568** (alpha flattened onto white), via pure-JS `pngjs` + `jpeg-js` (no native deps). webp/gif cannot be decoded in pure JS: the box is probed once for ImageMagick `convert` / `ffmpeg` and used if present, otherwise they pass through (stderr note). The compressed result is used only when smaller than the original.
+- **Budget**: if the serialized messages still exceed 9 MiB, the largest image is repeatedly down-stepped (quality q85→q70→q50, then size 1568→1024→768). If it still does not fit, the least-important image (last in document order) is replaced with the text `[image omitted: budget]`, preserving order — the request never 413s. Each step logs one stderr line with before/after bytes.
+
 ## `POST /api/save` kinds
 
 `src/parse/ui.ts`. Base `http://127.0.0.1:9280`. Header `Content-Type: application/json`. Each kind runs `reconcile`.

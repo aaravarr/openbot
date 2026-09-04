@@ -256,6 +256,10 @@ function extractUsageFromSse(text) {
   return last;
 }
 
+// When the serialized body exceeds maxBytes, the display value keeps only a
+// preview, but the full redacted text is returned alongside so copy buttons
+// (via requestFull/responseFull) can copy the complete body. Callers pass an
+// already-redacted body, so `text` (and therefore `full`) never holds secrets.
 function safeCloneBody(body, maxBytes) {
   var text;
   try {
@@ -268,6 +272,7 @@ function safeCloneBody(body, maxBytes) {
   return {
     value: { _truncated: true, _originalBytes: bytes, preview: text.slice(0, PREVIEW_CHARS) },
     truncated: true,
+    full: text,
   };
 }
 
@@ -439,12 +444,16 @@ function recordHopInner(input) {
       var reqCloned = safeCloneBody(redact(src.requestBody, secrets), settings.maxBodyCaptureBytes);
       bodyFile.request = reqCloned.value;
       requestTruncated = reqCloned.truncated;
+      // Keep the full redacted text for copy buttons; display still uses the preview.
+      if (reqCloned.truncated) bodyFile.requestFull = reqCloned.full;
       hasRequest = true;
     }
     if (responseValue !== undefined) {
       var resCloned = safeCloneBody(redact(responseValue, secrets), settings.maxBodyCaptureBytes);
       bodyFile.response = resCloned.value;
       responseTruncated = resCloned.truncated;
+      // Keep the full redacted text for copy buttons; display still uses the preview.
+      if (resCloned.truncated) bodyFile.responseFull = resCloned.full;
       hasResponse = true;
     }
     if (hasRequest || hasResponse) {
@@ -597,6 +606,8 @@ function getRequest(id) {
     var detail = Object.assign({}, row);
     if (Object.prototype.hasOwnProperty.call(bodies, "request")) detail.request = bodies.request;
     if (Object.prototype.hasOwnProperty.call(bodies, "response")) detail.response = bodies.response;
+    if (Object.prototype.hasOwnProperty.call(bodies, "requestFull")) detail.requestFull = bodies.requestFull;
+    if (Object.prototype.hasOwnProperty.call(bodies, "responseFull")) detail.responseFull = bodies.responseFull;
     return detail;
   } catch (err) {
     return null;

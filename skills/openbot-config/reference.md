@@ -155,7 +155,21 @@ On each `POST /v1/chat/completions`:
 
 Runtime wrap (`payload/runtime.cjs`) `loadPlan()` / `readMode()` also hit disk per turn. A JSON edit while custom wrap is live applies on the **next** Grok Bot message. It does not wrap a stock host.
 
-## Hop image-read injection (hop path only)
+## Image handling on the custom hop path
+
+The custom path (hop + custom wrap runtime, both share `payload/openai-messages.cjs`) never drops an image. The official tap path is untouched.
+
+### Host image parts (user attachments)
+
+`toOpenAIMessages` converts a host `{ "type": "image", … }` part into a standard OpenAI `image_url` content part instead of the old `"[image]"` placeholder. The part's field shape is unspecified, so it probes tolerantly:
+
+1. `data` / `base64` (raw base64) — paired with a `mime` / `mimeType` field, or sniffed from magic bytes (png/jpeg/webp/gif).
+2. `url` — `http(s)://` or `data:` URI, used as-is.
+3. `path` / `file` — a local file, read from disk and sniffed to a `data:image/<mime>;base64,…` URI.
+
+Any hit becomes `{ "type": "image_url", "image_url": { "url": … } }`. If **all** probes fail, it falls back to the old `"[image]"` placeholder. Guards: missing / unreadable / non-file / over **20 MB** → fall back, never throw.
+
+### Read tool-call image injection (hop path only)
 
 On each `POST /v1/chat/completions`, after `toOpenAIMessages` converts host parts to OpenAI messages, the hop dispatch path (and **only** the hop path — never the official tap) runs an image-read enrichment pass:
 

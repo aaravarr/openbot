@@ -30,6 +30,33 @@ function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+// Sniff an image mime from magic bytes; "" when unknown. Shared with the
+// host-part conversion in openai-messages.cjs.
+function sniffImageMime(buffer) {
+  if (!Buffer.isBuffer(buffer)) return "";
+  var b = buffer;
+  if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 &&
+      b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a) {
+    return "image/png";
+  }
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (b.length >= 12 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+      b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) {
+    return "image/webp";
+  }
+  if (b.length >= 6 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38 &&
+      (b[4] === 0x37 || b[4] === 0x39) && b[5] === 0x61) {
+    return "image/gif";
+  }
+  return "";
+}
+
+function dataUrlFromBuffer(buffer, mime) {
+  return "data:" + mime + ";base64," + buffer.toString("base64");
+}
+
 function imageExtOf(filePath) {
   if (typeof filePath !== "string") return "";
   var match = filePath.match(IMAGE_EXT_RE);
@@ -106,7 +133,7 @@ async function readImageDataUrl(filePath) {
   }
   var ext = imageExtOf(filePath);
   var mime = MIME_BY_EXT[ext] || "image/png";
-  return { ok: true, dataUrl: "data:" + mime + ";base64," + buf.toString("base64") };
+  return { ok: true, dataUrl: dataUrlFromBuffer(buf, mime) };
 }
 
 // Build tool_call_id -> { filePath } for assistant tool_calls that are image
@@ -173,4 +200,6 @@ exports.isImageReadToolName = isImageReadToolName;
 exports.filePathFromArgs = filePathFromArgs;
 exports.contentHasImageData = contentHasImageData;
 exports.imageExtOf = imageExtOf;
+exports.sniffImageMime = sniffImageMime;
+exports.dataUrlFromBuffer = dataUrlFromBuffer;
 exports.MAX_IMAGE_BYTES = MAX_IMAGE_BYTES;

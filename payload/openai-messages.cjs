@@ -55,7 +55,7 @@ function tryReadImageFile(filePath) {
 
 function imageUrlFromPart(part) {
   if (!isRecord(part)) return "";
-  var mimeHint = typeof part.mimeType === "string" ? part.mimeType : (typeof part.mime === "string" ? part.mime : "");
+  var mimeHint = typeof part.mimeType === "string" ? part.mimeType : (typeof part.mime_type === "string" ? part.mime_type : (typeof part.mime === "string" ? part.mime : ""));
   // 1. payload fields, most specific first. Each may be a data: URI, bare
   //    base64, raw bytes (Buffer/TypedArray), a nested record, or an array.
   var payloads = [part.image, part.data, part.base64];
@@ -64,8 +64,15 @@ function imageUrlFromPart(part) {
     var entry = imageEntryFromAny(payloads[i], mimeHint);
     if (entry) return entry.url;
   }
-  // 2. url: http(s) or data: URI, used as-is.
+  // 2. url: http(s) or data: URI, used as-is (URL objects via toString()).
   var url = part.url;
+  if (typeof URL !== "undefined" && url instanceof URL) {
+    try {
+      url = url.toString();
+    } catch (err) {
+      url = "";
+    }
+  }
   if (typeof url === "string" && (isHttpUrl(url) || isDataUrl(url))) return url;
   // 3. local path/file -> read from disk.
   var filePath = typeof part.path === "string" && part.path ? part.path : (typeof part.file === "string" ? part.file : "");

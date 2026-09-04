@@ -279,6 +279,7 @@ function looksLikeImageUrlExt(value) {
 function mimeHintFromRecord(record) {
   if (!isRecord(record)) return "";
   var hint = typeof record.mimeType === "string" ? record.mimeType : "";
+  if (!hint && typeof record.mime_type === "string") hint = record.mime_type;
   if (!hint && typeof record.mime === "string") hint = record.mime;
   if (!hint && isRecord(record.source) && typeof record.source.media_type === "string") {
     hint = record.source.media_type;
@@ -336,6 +337,14 @@ function imageEntryFromValue(value, mimeHint) {
 // strings/buffers resolved directly. Never throws; unknown shapes yield null.
 function imageEntryFromAny(value, hint) {
   if (value === undefined || value === null) return null;
+  // URL objects (observed as `image` payloads) resolve to their href string.
+  if (typeof URL !== "undefined" && value instanceof URL) {
+    try {
+      return imageEntryFromValue(value.toString(), hint);
+    } catch (err) {
+      return null;
+    }
+  }
   if (typeof value === "string" || Buffer.isBuffer(value) || ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
     return imageEntryFromValue(value, hint);
   }

@@ -6,7 +6,12 @@ var https = require("https");
 var { URL } = require("url");
 var path = require("path");
 var { toOpenAIMessages } = require("./openai-messages.cjs");
-var { enrichImageReads, enforceImageBudget } = require("./image-read.cjs");
+var {
+  enrichImageReads,
+  enforceImageBudget,
+  MAX_REQUEST_WIRE_BYTES,
+  WIRE_HEADROOM_BYTES,
+} = require("./image-read.cjs");
 var { applyOpenBotVersionHeader } = require("./version.cjs");
 var requestLog = require("./request-log.cjs");
 
@@ -241,6 +246,46 @@ function applyMaps(body, ctx) {
   }
   if (maps && typeof maps.applyProviderReasoningControls === "function") {
     maps.applyProviderReasoningControls(body, ctx);
+  }
+}
+
+// Serialized size of the outbound body WITHOUT its messages: tools, model,
+// stream and every other envelope field. The image governance pass subtracts
+// this from its wire budget, so the 4 MiB limit is enforced on the full
+// outbound wire (messages + tools + envelope), not on messages alone — the
+// 2026-09-04 incident body passed a messages-only check by a few KB and still
+// 413'd once the ~230 KB of tools were added on top.
+function outboundEnvelopeBytes(body) {
+  try {
+    var envelope = {};
+    for (var key in body) {
+      if (Object.prototype.hasOwnProperty.call(body, key) && key !== "messages") {
+        envelope[key] = body[key];
+      }
+    }
+    envelope.messages = [];
+    return Buffer.byteLength(JSON.stringify(envelope), "utf8");
+  } catch (err) {
+    return 0;
+  }
+}
+
+// Advisory only: after governance, max_tokens and the provider parameter maps
+// have been applied, so this is the wire the upstream actually receives. The
+// governance budget already reserved WIRE_HEADROOM_BYTES for these additions;
+// if this still fires, the body carries oversized non-image content no image
+// pass can shrink, and the log names it instead of letting a 413 explain it.
+function noteWireBytes(body) {
+  try {
+    var bytes = Buffer.byteLength(JSON.stringify(body), "utf8");
+    if (bytes > MAX_REQUEST_WIRE_BYTES) {
+      process.stderr.write(
+        "openbot-hop outbound wire is " + bytes + " bytes, over the " +
+        MAX_REQUEST_WIRE_BYTES + " byte budget (non-image content too large)\n",
+      );
+    }
+  } catch (err) {
+    /* advisory only, never throw into the chat path */
   }
 }
 
@@ -570,7 +615,9 @@ async function handleCompletions(req, res) {
     if (Array.isArray(body.messages)) {
       body.messages = toOpenAIMessages(body.messages);
       body.messages = await enrichImageReads(body.messages);
-      body.messages = await enforceImageBudget(body.messages);
+      body.messages = await enforceImageBudget(body.messages, {
+        extraWireBytes: outboundEnvelopeBytes(body) + WIRE_HEADROOM_BYTES,
+      });
     }
     applyMaxTokens(body, route.model);
     applyMaps(body, {
@@ -579,6 +626,7 @@ async function handleCompletions(req, res) {
       maxMode: false,
       parameters: hopParameters(route.model),
     });
+    noteWireBytes(body);
     fields.requestBody = body;
     fields.stream = body.stream === true;
     var key = loadKey(route.provider.id);
@@ -661,6 +709,7 @@ exports.completionsUrl = completionsUrl;
 exports.hopParameters = hopParameters;
 exports.hopReasoning = hopReasoning;
 exports.applyMaxTokens = applyMaxTokens;
+exports.outboundEnvelopeBytes = outboundEnvelopeBytes;
 exports.looksLikeEventStream = looksLikeEventStream;
 exports.UPSTREAM_429_RETRY = UPSTREAM_429_RETRY;
 exports.parseRetryAfterMs = parseRetryAfterMs;

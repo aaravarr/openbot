@@ -12,8 +12,8 @@
 // This pass runs in payload/hop-handler.cjs AFTER `toOpenAIMessages`, and only
 // there. The official tap path never reaches it. After enrichment,
 // `enforceImageBudget` governs the outbound body: byte-level dedup, a
-// per-image history-turn size target, a total image-bytes budget, and finally
-// the 8 MiB request budget — see "Active image governance" below.
+// per-image history-turn size target, a current-turn image cap, and finally
+// the 4 MiB outbound-wire budget — see "Active image governance" below.
 
 var fs = require("fs");
 var os = require("os");
@@ -61,51 +61,74 @@ function loadImageLibs() {
 
 var MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20 MB: reject absurdly large single images
 
-// Injected images are compressed so the outbound request stays inside the
-// upstream provider's body limit. The fusion gateway edge allows 10 MiB, but
-// its upstream rejected a real ~9.2 MB payload with 413 "Request Entity Too
-// Large" (incident 2026-09-04, request a16ed054), so the binding limit lives
-// below the gateway edge. Budget is 8 MiB on the serialized messages, measured
-// in UTF-8 bytes, leaving >1 MiB of margin under that observed failure.
-var MAX_REQUEST_MESSAGE_BYTES = 8 * 1024 * 1024;
+// The outbound wire is held under this limit. Three rounds of on-the-box
+// forensics pinned the upstream limit: the fusion gateway edge allows 10 MiB
+// (the old assumption), a ~9.2 MB body came back 413 while 4.43 MB succeeded
+// (incident 2026-09-04, request a16ed054), and post-#53 bodies of 4.6-4.8 MB
+// still 413'd — so the binding upstream limit lives in [4.43, 4.6) MB of wire
+// and 8 MiB was measured against the wrong line. 4 MiB full-wire keeps every
+// request under the proven-success ceiling with >0.2 MB of margin.
+// The budget is measured on the FULL outbound wire — messages plus tools plus
+// the rest of the request envelope — not on messages alone: the incident body
+// crept just under a messages-only check and still 413'd once the ~230 KB of
+// tools were added on top.
+var MAX_REQUEST_WIRE_BYTES = 4 * 1024 * 1024;
+
+// A little envelope grows AFTER image governance runs (max_tokens, provider
+// parameter maps — together well under a hundred bytes). The hop adds this
+// headroom on top of the measured envelope so the wire the upstream actually
+// receives stays inside MAX_REQUEST_WIRE_BYTES.
+var WIRE_HEADROOM_BYTES = 4 * 1024;
 
 // Plain-text placeholders. No protocol fields are invented: each replaced
 // image part simply becomes a text part the model can read.
 var BUDGET_OMIT_PLACEHOLDER = "[image omitted: budget]";
 var DEDUP_OMIT_PLACEHOLDER = "[image omitted: identical copy appears later in conversation]";
-var TOTAL_IMAGE_OMIT_PLACEHOLDER = "[image omitted: image budget]";
+var CURRENT_TURN_IMAGE_OMIT_PLACEHOLDER = "[image omitted: current turn over image budget]";
 
-// --- Active image governance (runs before the 8 MiB budget above) -----------
+// --- Active image governance (runs before the 4 MiB wire budget above) ------
 //
 // The 2026-09-04 incident (request a16ed054-4bac-49fd-89b9-cd75c38c797a) never
-// tripped the 8 MiB budget: the body carried 1,146 messages with 45 injected
-// data-URI JPEGs (all user role) worth ~8.3 MB of base64 on top of ~0.6 MB of
-// text, and only ~26 of the 45 were distinct - the same screenshot had been
-// re-read and re-injected turn after turn (one image x17, one x4, one x2), so
-// the payload crept to just under the budget line and the upstream 413'd it.
-// Upstream samples: success observed at <=4.43 MB, failure at >=9.45 MB,
-// nothing in between. The budget alone is therefore the last resort; the
-// passes below shrink the request before the budget check ever runs.
+// tripped the then-8 MiB budget: the body carried 1,146 messages with 45
+// injected data-URI JPEGs (all user role) worth ~8.3 MB of base64 on top of
+// ~0.6 MB of text and ~0.23 MB of tools, and only ~26 of the 45 were distinct
+// - the same screenshot had been re-read and re-injected turn after turn (one
+// image x17, one x4, one x2), so the payload crept to just under the
+// messages-only budget line and the upstream 413'd it (omitted_placeholders=0:
+// the budget never fired). With the upstream limit now pinned to [4.43, 4.6)
+// MB of wire, the budget alone is the last resort; the passes below shrink
+// the request before the budget check runs, in this order:
+//
+//   dedup -> per-image history quota -> current-turn cap -> 4 MiB wire net
 //
 // HISTORY_IMAGE_TARGET_BYTES: every history-turn image larger than this is
 // re-encoded down the JPEG ladder until it fits (or the ladder bottoms out).
-// Calibrated at 128 KB decoded (~171 KB of base64): after dedup the incident's
-// 26 distinct images cap at ~4.4 MB of base64 before the total budget trims
-// the oldest further, while keeping enough resolution for a vision model to
-// still read a screenshot. Current-turn images are exempt (they are the
-// reason the request is being made).
-var HISTORY_IMAGE_TARGET_BYTES = 128 * 1024;
+// Calibrated at 88 KB decoded (~118 KB of data-URL) against the 4.2 MB
+// worst-case target for the incident shape: 26 distinct history images at the
+// target (26 x ~120 KB) + ~0.6 MB text + ~0.23 MB tools + the ~38 KB
+// current-turn image + envelope ~= 4.0 MB <= 4.2 MB, itself >0.2 MB under the
+// proven 4.43 MB success sample. (The first cut, 128 KB, capped that same
+// shape at ~5.3 MB and missed; 96 KB still left the worst case at ~4.3 MB.)
+// Real screenshots usually compress well below the target on the first ladder
+// rung (q70, long edge 1568), so this binds hardest on photo-like images.
+// Current-turn images are exempt here (they are the reason the request is
+// being made).
+var HISTORY_IMAGE_TARGET_BYTES = 88 * 1024;
 
-// TOTAL_IMAGE_BUDGET_BYTES: hard cap on the summed data-URL bytes of all live
-// images in the request, enforced oldest-history-first (squeeze, then omit).
-// Calibration, incident 2026-09-04 (a16ed054): 45 injected images, only ~26
-// distinct, ~0.6 MB text plus ~0.23 MB tools, ~8.3 MB of image base64 — even
-// byte-deduped the distinct images alone carried ~4.6 MB. Capping live image
-// bytes at 3.25 MiB holds that same shape at ~0.85 MB non-image + 3.25 MiB
-// images ≈ 4.1–4.3 MB, below the largest observed upstream success (4.43 MB)
-// even when the ladder cannot shrink a single image further. The 8 MiB request
-// budget above stays as the final safety net.
-var TOTAL_IMAGE_BUDGET_BYTES = 3.25 * 1024 * 1024;
+// CURRENT_TURN_IMAGE_BUDGET_BYTES: hard cap on the summed data-URL bytes of
+// the CURRENT turn's live images - the last real user message, its attached
+// image parts, and the Read injections the hop places after it. Over the cap,
+// current-turn images step down the existing degrade chain (oldest first
+// inside the turn), then are omitted oldest-first; the last live current-turn
+// image is never dropped - a fresh screenshot is the model's evidence, and a
+// single-image turn always keeps exactly one copy. Calibrated at 3 MiB inside
+// the 4 MiB wire budget: a maxed-out turn (3 MiB) plus the incident's ~0.84 MB
+// of text/tools/envelope stays at ~3.9 MB wire, under the 4.43 MB success
+// sample before any history image is even counted, and the wire net below
+// then trims history (never the current turn, short of the last resort) to
+// close the remaining gap. History images are governed by the per-image quota
+// above, not by this cap.
+var CURRENT_TURN_IMAGE_BUDGET_BYTES = 3 * 1024 * 1024;
 
 // Images at or below this size pass through untouched (keeps small PNGs sharp).
 var SMALL_IMAGE_BYTES = 600 * 1024;
@@ -548,7 +571,10 @@ async function convertWithCommand(cmd, buffer, mime, opts) {
 // Compress one image. Small images pass through; larger png/jpeg are re-encoded
 // to JPEG (q85, long edge <= 1568, alpha flattened onto white). webp/gif use a
 // system converter when present, otherwise pass through. Always keeps the
-// smaller of original vs compressed.
+// smaller of original vs compressed. `options.cacheKey` (the source-bytes hash
+// an image entry carries) routes the re-encode through the cross-request cache;
+// only honored when quality/maxEdge are at their defaults, so custom encodes
+// can never collide with a cached default-rung result.
 async function prepareImageForModel(buffer, mime, options) {
   options = options || {};
   var quality = numberOr(options.quality, DEFAULT_QUALITY);
@@ -560,7 +586,11 @@ async function prepareImageForModel(buffer, mime, options) {
     return { buffer: buffer, mime: mime };
   }
 
-  var jpeg = encodeToJpeg(buffer, mime, { quality: quality, maxEdge: maxEdge });
+  var cacheable = typeof options.cacheKey === "string" && options.cacheKey &&
+    quality === DEFAULT_QUALITY && maxEdge === DEFAULT_MAX_EDGE;
+  var jpeg = cacheable
+    ? cachedEncodeToJpeg(buffer, mime, -1, { quality: quality, maxEdge: maxEdge }, options.cacheKey)
+    : encodeToJpeg(buffer, mime, { quality: quality, maxEdge: maxEdge });
   if (jpeg && jpeg.length < buffer.length) {
     return { buffer: jpeg, mime: "image/jpeg" };
   }
@@ -633,16 +663,6 @@ function serializedBytes(messages) {
   } catch (err) {
     return 0;
   }
-}
-
-async function encodeToJpegOrConvert(buffer, mime, level, convertFn) {
-  var jpeg = encodeToJpeg(buffer, mime, level);
-  if (jpeg) return { buffer: jpeg, mime: "image/jpeg" };
-  if (convertFn) {
-    var conv = await convertFn(buffer, mime, level);
-    if (conv && Buffer.isBuffer(conv.buffer)) return { buffer: conv.buffer, mime: conv.mime || "image/jpeg" };
-  }
-  return null;
 }
 
 // Re-encode results are cached across requests, keyed by source bytes (SHA-1),
@@ -726,9 +746,9 @@ function omitToBudget(images, messages, budget) {
   }
 }
 
-// --- Active governance: dedup -> per-image history target -> total image
-// budget. All three run before the 8 MiB request budget above, so the budget
-// check stays a last-resort net rather than the day-to-day clamp. -------------
+// --- Active governance: dedup -> per-image history target -> current-turn
+// cap. All three run before the 4 MiB wire budget above, so the budget check
+// stays a last-resort net rather than the day-to-day clamp. -------------------
 
 // User messages injected by enrichImageReads carry this label as their first
 // text part. Turn classification skips them, so several same-turn injections
@@ -762,19 +782,41 @@ function imagePayloadBytes(img) {
   return typeof url === "string" ? url.length : 0;
 }
 
-function totalImagePayloadBytes(images) {
+function sumImagePayload(images, filter) {
   var sum = 0;
   for (var i = 0; i < images.length; i++) {
-    if (!images[i].omitted) sum += imagePayloadBytes(images[i]);
+    var img = images[i];
+    if (img.omitted) continue;
+    if (filter && !filter(img)) continue;
+    sum += imagePayloadBytes(img);
   }
   return sum;
+}
+
+function totalImagePayloadBytes(images) {
+  return sumImagePayload(images, null);
+}
+
+function currentTurnImagePayloadBytes(images) {
+  return sumImagePayload(images, function (img) { return !img.history; });
+}
+
+function liveCurrentTurnCount(images) {
+  var count = 0;
+  for (var i = 0; i < images.length; i++) {
+    if (!images[i].omitted && !images[i].history) count += 1;
+  }
+  return count;
 }
 
 // Byte-level dedup. Each image's decoded bytes are hashed; byte-identical
 // copies are collapsed to the MOST RECENT occurrence (closest to the current
 // turn, semantically the most relevant), and every earlier copy becomes a
 // plain-text placeholder. Same screenshot re-read turn after turn used to
-// inject one more full copy per turn; now only the latest copy is sent.
+// inject one more full copy per turn; now only the latest copy is sent. Runs
+// before any compression or budget check, so repeated history images never
+// reach the ladder and never ride under a budget line: a user-attached image
+// (current turn) also wins over an identical history copy this way.
 function dedupImagesByHash(images) {
   var lastByHash = new Map();
   var replaced = 0;
@@ -806,51 +848,60 @@ async function compressImageToTarget(img, target, convertFn, note) {
   }
 }
 
-// Total-image budget, phase 1: walk the ladder over live history images,
-// oldest first, until the summed image payload fits.
-async function degradeHistoryToTotalBudget(images, budget, convertFn) {
+// Current-turn cap, phase 1: squeeze the current turn's live images down the
+// existing degrade chain, oldest first, until the summed payload fits the cap.
+async function degradeCurrentTurnToBudget(images, budget, convertFn) {
   for (var li = 0; li < DEGRADE_LEVELS.length; li++) {
-    if (totalImagePayloadBytes(images) <= budget) return;
+    if (currentTurnImagePayloadBytes(images) <= budget) return;
     var order = images.filter(function (img) {
-      return img.history && !img.omitted && (img.appliedLevel === undefined || img.appliedLevel < li);
+      return !img.history && !img.omitted && (img.appliedLevel === undefined || img.appliedLevel < li);
     });
     for (var k = 0; k < order.length; k++) {
-      if (totalImagePayloadBytes(images) <= budget) return;
+      if (currentTurnImagePayloadBytes(images) <= budget) return;
       var img = order[k];
       var res = await encodeImageRung(img, li, DEGRADE_LEVELS[li], convertFn);
-      if (applyImageResult(img, res, "image-read degraded")) img.appliedLevel = li;
+      if (applyImageResult(img, res, "image-read current-turn degraded")) img.appliedLevel = li;
     }
   }
 }
 
-// Total-image budget, phase 2: omit live history images oldest first. Current
-// turn images are never touched by this pass; the 8 MiB request budget (which
-// may omit anything) stays the final net.
-function omitHistoryToTotalBudget(images, budget) {
+// Current-turn cap, phase 2: omit current-turn images oldest-first while the
+// cap is still exceeded AND more than one live image remains in the turn —
+// the newest copy of what the user just sent is the model's evidence and is
+// never dropped, so a single-image current turn always keeps its image.
+function omitCurrentTurnToBudget(images, budget) {
   for (var i = 0; i < images.length; i++) {
-    if (totalImagePayloadBytes(images) <= budget) return;
+    if (currentTurnImagePayloadBytes(images) <= budget) return;
     var img = images[i];
-    if (img.omitted || !img.history) continue;
-    img.contentArray[img.index] = { type: "text", text: TOTAL_IMAGE_OMIT_PLACEHOLDER };
+    if (img.omitted || img.history) continue;
+    if (liveCurrentTurnCount(images) <= 1) return;
+    img.contentArray[img.index] = { type: "text", text: CURRENT_TURN_IMAGE_OMIT_PLACEHOLDER };
     img.omitted = true;
-    logLine("image-read omitted: total image budget exceeded");
+    logLine("image-read omitted: current turn over image budget");
   }
 }
 
 // Compress injected data-URI images, then hold the request inside the
 // governance limits. Order: byte-level dedup -> per-image history target ->
-// total image payload budget -> 8 MiB request budget (degrade then omit,
-// oldest first). http(s) image URLs are left untouched (they cost a few
-// bytes, not image bytes). Never throws; a broken image degrades to a
-// placeholder instead of failing the request. The system converter is probed
-// at most once per process and only when an image pass runs — pure-text
+// current-turn image cap -> outbound-wire budget (degrade then omit, oldest
+// first). The wire budget is measured by the caller: `options.extraWireBytes`
+// carries the serialized size of everything the outbound body carries besides
+// messages (tools, model, stream and the other envelope fields), so the
+// invariant is on the full wire the upstream receives, not on messages alone.
+// http(s) image URLs are left untouched (they cost a few bytes, not image
+// bytes). Never throws; a broken image degrades to a placeholder instead of
+// failing the request. The system converter is probed at most once per
+// process and only when an image pass runs — pure-text and under-limit
 // requests never spawn it.
 async function enforceImageBudget(messages, options) {
   if (!Array.isArray(messages)) return messages;
   options = options || {};
-  var budget = numberOr(options.budget, MAX_REQUEST_MESSAGE_BYTES);
+  var wireBudget = numberOr(options.budget, MAX_REQUEST_WIRE_BYTES);
   var historyTarget = numberOr(options.historyTarget, HISTORY_IMAGE_TARGET_BYTES);
-  var totalImageBudget = numberOr(options.totalImageBudget, TOTAL_IMAGE_BUDGET_BYTES);
+  var currentTurnBudget = numberOr(options.currentTurnBudget, CURRENT_TURN_IMAGE_BUDGET_BYTES);
+  var extraWireBytes = Number(options.extraWireBytes);
+  if (!Number.isFinite(extraWireBytes) || extraWireBytes < 0) extraWireBytes = 0;
+  var budget = wireBudget - extraWireBytes;
 
   var images = collectDataUriImages(messages);
   if (images.length === 0) return messages;
@@ -865,7 +916,7 @@ async function enforceImageBudget(messages, options) {
   for (var i = 0; i < images.length; i++) {
     var img = images[i];
     if (img.omitted) continue;
-    var res = await prepareImageForModel(img.buffer, img.mime, { convert: options.convert });
+    var res = await prepareImageForModel(img.buffer, img.mime, { convert: options.convert, cacheKey: img.hash });
     applyImageResult(img, res, "image-read compressed");
   }
 
@@ -886,14 +937,18 @@ async function enforceImageBudget(messages, options) {
     }
   }
 
-  // 4. Total image payload budget: degrade then omit, oldest history first.
-  if (totalImagePayloadBytes(images) > totalImageBudget) {
-    var totalConvertFn = options.convert !== undefined ? options.convert : await getSystemConvertFn();
-    await degradeHistoryToTotalBudget(images, totalImageBudget, totalConvertFn);
-    omitHistoryToTotalBudget(images, totalImageBudget);
+  // 4. Current-turn cap: squeeze the turn's own images down the degrade chain
+  // (oldest first inside the turn), then omit oldest-first. The last live
+  // current-turn image is never dropped here; the wire net below stays the
+  // final resort for anything that still does not fit.
+  if (currentTurnImagePayloadBytes(images) > currentTurnBudget) {
+    var turnConvertFn = options.convert !== undefined ? options.convert : await getSystemConvertFn();
+    await degradeCurrentTurnToBudget(images, currentTurnBudget, turnConvertFn);
+    omitCurrentTurnToBudget(images, currentTurnBudget);
   }
 
-  // 5. Request budget: final safety net, unchanged semantics (PR #53).
+  // 5. Wire budget: final safety net over messages + extraWireBytes, unchanged
+  // degrade-then-omit semantics and oldest-first sacrifice order (PR #53).
   if (serializedBytes(messages) > budget) {
     var convertFn = options.convert !== undefined ? options.convert : await getSystemConvertFn();
     await degradeToBudget(images, messages, budget, convertFn);
@@ -1035,14 +1090,16 @@ exports.dataUrlFromBuffer = dataUrlFromBuffer;
 exports.currentTurnStartIndex = currentTurnStartIndex;
 exports.dedupImagesByHash = dedupImagesByHash;
 exports.totalImagePayloadBytes = totalImagePayloadBytes;
+exports.currentTurnImagePayloadBytes = currentTurnImagePayloadBytes;
 exports.MAX_IMAGE_BYTES = MAX_IMAGE_BYTES;
 exports.SMALL_IMAGE_BYTES = SMALL_IMAGE_BYTES;
-exports.MAX_REQUEST_MESSAGE_BYTES = MAX_REQUEST_MESSAGE_BYTES;
+exports.MAX_REQUEST_WIRE_BYTES = MAX_REQUEST_WIRE_BYTES;
+exports.WIRE_HEADROOM_BYTES = WIRE_HEADROOM_BYTES;
 exports.HISTORY_IMAGE_TARGET_BYTES = HISTORY_IMAGE_TARGET_BYTES;
-exports.TOTAL_IMAGE_BUDGET_BYTES = TOTAL_IMAGE_BUDGET_BYTES;
+exports.CURRENT_TURN_IMAGE_BUDGET_BYTES = CURRENT_TURN_IMAGE_BUDGET_BYTES;
 exports.BUDGET_OMIT_PLACEHOLDER = BUDGET_OMIT_PLACEHOLDER;
 exports.DEDUP_OMIT_PLACEHOLDER = DEDUP_OMIT_PLACEHOLDER;
-exports.TOTAL_IMAGE_OMIT_PLACEHOLDER = TOTAL_IMAGE_OMIT_PLACEHOLDER;
+exports.CURRENT_TURN_IMAGE_OMIT_PLACEHOLDER = CURRENT_TURN_IMAGE_OMIT_PLACEHOLDER;
 exports.isInjectedImageMessage = isInjectedImageMessage;
 // "vendor" | "node_modules" | "unavailable" — probes the lazy loader once.
 exports.imageLibsSource = function () {

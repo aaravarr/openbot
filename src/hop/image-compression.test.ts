@@ -12,11 +12,10 @@ const imageRead = require(path.join(path.dirname(fileURLToPath(import.meta.url))
     mime: string,
     options?: { quality?: number; maxEdge?: number; convert?: unknown },
   ) => Promise<{ buffer: Buffer; mime: string }>;
-  enforceImageBudget: (messages: unknown, options?: { budget?: number; convert?: unknown }) => Promise<unknown[]>;
+  enforceImageBudget: (messages: unknown, options?: { budget?: number; convert?: unknown; extraWireBytes?: number }) => Promise<unknown[]>;
   dataUrlFromBuffer: (buffer: Buffer, mime: string) => string;
-  MAX_REQUEST_MESSAGE_BYTES: number;
+  MAX_REQUEST_WIRE_BYTES: number;
   DEFAULT_MAX_EDGE: number;
-  TOTAL_IMAGE_OMIT_PLACEHOLDER: string;
 };
 
 const PNG = (require("pngjs") as { PNG: new (opts: { width: number; height: number }) => { data: Buffer; width: number; height: number } }).PNG;
@@ -60,7 +59,7 @@ test.before(() => {
 });
 
 test("a large PNG is re-encoded to a much smaller JPEG with long edge <= 1568", async () => {
-  assert.ok(largePng.length > imageRead.MAX_REQUEST_MESSAGE_BYTES / 512);
+  assert.ok(largePng.length > imageRead.MAX_REQUEST_WIRE_BYTES / 512);
   const result = await imageRead.prepareImageForModel(largePng, "image/png");
   assert.equal(result.mime, "image/jpeg");
   assert.ok(result.buffer.length < largePng.length / 3, `${result.buffer.length} vs ${largePng.length}`);
@@ -246,11 +245,6 @@ function hasOmitNote(parts: ImageContent[] | undefined): boolean {
   return (parts ?? []).some((p) => p.type === "text" && p.text === "[image omitted: budget]");
 }
 
-function hasAnyOmitNote(parts: ImageContent[] | undefined): boolean {
-  return hasOmitNote(parts) ||
-    (parts ?? []).some((p) => p.type === "text" && p.text === imageRead.TOTAL_IMAGE_OMIT_PLACEHOLDER);
-}
-
 function hasImage(parts: ImageContent[] | undefined): boolean {
   return (parts ?? []).some((p) => p.type === "image_url");
 }
@@ -325,14 +319,15 @@ test("budget degrade steps the oldest image down first and keeps the newest unto
   );
 });
 
-test("the default budget clamps an incident-scale payload by omitting oldest images first", async () => {
-  // Locks the post-incident budget: the fusion gateway edge allows 10 MiB but
-  // its upstream rejected a real ~9.2 MB payload with 413 (request
-  // a16ed054-4bac-49fd-89b9-cd75c38c797a), so the default must stay below it.
-  // The total image budget clamps first (oldest history omitted until the
-  // summed data-URL bytes fit), so the payload lands far under 8 MiB even
-  // though these synthetic bytes cannot be re-encoded.
-  assert.equal(imageRead.MAX_REQUEST_MESSAGE_BYTES, 8 * 1024 * 1024);
+test("the default wire budget clamps an incident-scale payload by omitting oldest images first", async () => {
+  // Locks the post-incident budget: the upstream limit is pinned to
+  // [4.43, 4.6) MB of wire (success at 4.43 MB; 4.6-4.8 MB bodies still 413'd;
+  // request a16ed054-4bac-49fd-89b9-cd75c38c797a), so the full-wire net sits
+  // at 4 MiB. These synthetic bytes cannot be re-encoded and every image is
+  // distinct, so the wire net is the only layer that can act: it omits the
+  // oldest history images first until the serialized messages fit inside the
+  // wire budget.
+  assert.equal(imageRead.MAX_REQUEST_WIRE_BYTES, 4 * 1024 * 1024);
   const messages = Array.from({ length: 8 }, (_, i) =>
     imageMessage(`turn ${i}`, fakeImageDataUrl(1250 * 1024)),
   );
@@ -340,14 +335,16 @@ test("the default budget clamps an incident-scale payload by omitting oldest ima
     content: ImageContent[];
   }[];
   const serialized = Buffer.byteLength(JSON.stringify(out), "utf8");
-  assert.ok(serialized <= imageRead.MAX_REQUEST_MESSAGE_BYTES, `serialized ${serialized} > default budget`);
-  assert.ok(serialized <= 4.5 * 1024 * 1024, `serialized ${serialized} > 4.5 MiB success zone`);
-  for (let i = 0; i < 7; i++) {
+  assert.ok(serialized <= imageRead.MAX_REQUEST_WIRE_BYTES, `serialized ${serialized} > default wire budget`);
+  for (let i = 0; i < 6; i++) {
     assert.equal(
-      hasAnyOmitNote(out[i]?.content),
+      hasOmitNote(out[i]?.content),
       true,
-      `message ${i} (oldest history) must be omitted by the image budget`,
+      `message ${i} (oldest history) must be omitted by the wire budget`,
     );
+  }
+  for (let i = 6; i < 8; i++) {
+    assert.equal(hasImage(out[i]?.content), true, `message ${i} must keep its image`);
   }
   assert.equal(hasImage(out[7]?.content), true, "newest (current-turn) image must be kept");
   assert.equal(

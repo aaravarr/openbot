@@ -16,6 +16,7 @@ const imageRead = require(path.join(path.dirname(fileURLToPath(import.meta.url))
   dataUrlFromBuffer: (buffer: Buffer, mime: string) => string;
   MAX_REQUEST_MESSAGE_BYTES: number;
   DEFAULT_MAX_EDGE: number;
+  TOTAL_IMAGE_OMIT_PLACEHOLDER: string;
 };
 
 const PNG = (require("pngjs") as { PNG: new (opts: { width: number; height: number }) => { data: Buffer; width: number; height: number } }).PNG;
@@ -143,15 +144,21 @@ test("an over-budget image is degraded before it is omitted, and the invariant h
 });
 
 test("an image that cannot fit the budget is replaced with the omit placeholder", async () => {
-  const dataUrl = imageRead.dataUrlFromBuffer(largePng, "image/png");
-  const make = () => ({
-    role: "user",
-    content: [
-      { type: "text", text: "look" },
-      { type: "image_url", image_url: { url: dataUrl } },
-    ],
-  });
-  const out = (await imageRead.enforceImageBudget([make(), make()], {
+  // Byte-distinct, sub-image-budget fixtures: the point is the final omit
+  // pass, so the total image budget must not bind here (byte-level dedup also
+  // collapses identical copies before the budget pass ever runs).
+  const make = (flipByte: number) => {
+    const bytes = noisePng(400, 300);
+    bytes[flipByte] = (bytes[flipByte] ?? 0) ^ 0xff;
+    return {
+      role: "user",
+      content: [
+        { type: "text", text: "look" },
+        { type: "image_url", image_url: { url: imageRead.dataUrlFromBuffer(bytes, "image/png") } },
+      ],
+    };
+  };
+  const out = (await imageRead.enforceImageBudget([make(100), make(200)], {
     budget: 50 * 1024,
     convert: null,
   })) as { content: { type: string; text?: string }[] }[];
@@ -239,14 +246,29 @@ function hasOmitNote(parts: ImageContent[] | undefined): boolean {
   return (parts ?? []).some((p) => p.type === "text" && p.text === "[image omitted: budget]");
 }
 
+function hasAnyOmitNote(parts: ImageContent[] | undefined): boolean {
+  return hasOmitNote(parts) ||
+    (parts ?? []).some((p) => p.type === "text" && p.text === imageRead.TOTAL_IMAGE_OMIT_PLACEHOLDER);
+}
+
 function hasImage(parts: ImageContent[] | undefined): boolean {
   return (parts ?? []).some((p) => p.type === "image_url");
 }
 
 test("budget pressure omits the oldest images first and keeps the newest intact", async () => {
-  const dataUrl = fakeImageDataUrl(100 * 1024);
-  const messages = [imageMessage("old 0", dataUrl), imageMessage("old 1", dataUrl), imageMessage("new 2", dataUrl)];
+  // Byte-distinct same-size images (see the omit test above: dedup collapses
+  // identical copies first, so budget-order fixtures must be distinct).
+  const make = (flipByte: number) => {
+    const bytes = randomBytes(100 * 1024);
+    bytes[flipByte] = (bytes[flipByte] ?? 0) ^ 0xff;
+    return imageMessage("look", imageRead.dataUrlFromBuffer(bytes, "image/png"));
+  };
+  const messages = [make(0), make(1), make(2)];
   const s0 = Buffer.byteLength(JSON.stringify(messages), "utf8");
+  const dataUrl = ((messages[0] as { content: { image_url?: { url: string } }[] }).content[1]
+    ?.image_url?.url) ?? "";
+  const newestUrl = ((messages[2] as { content: { image_url?: { url: string } }[] }).content[1]
+    ?.image_url?.url) ?? "";
   // Fits after exactly two omissions: the oldest two are dropped, the
   // newest image survives.
   const budget = s0 - 2 * dataUrl.length + 400;
@@ -259,7 +281,7 @@ test("budget pressure omits the oldest images first and keeps the newest intact"
   assert.equal(hasOmitNote(out[1]?.content), true, "second-oldest image must be omitted second");
   assert.equal(hasOmitNote(out[2]?.content), false, "newest image must not be omitted");
   assert.equal(hasImage(out[2]?.content), true, "newest image must be kept");
-  assert.equal((out[2]?.content[1] as { image_url?: { url: string } }).image_url?.url, dataUrl);
+  assert.equal((out[2]?.content[1] as { image_url?: { url: string } }).image_url?.url, newestUrl);
 });
 
 // Smooth gradients re-encode far smaller at q70 than q85, so a degrade step
@@ -307,18 +329,30 @@ test("the default budget clamps an incident-scale payload by omitting oldest ima
   // Locks the post-incident budget: the fusion gateway edge allows 10 MiB but
   // its upstream rejected a real ~9.2 MB payload with 413 (request
   // a16ed054-4bac-49fd-89b9-cd75c38c797a), so the default must stay below it.
+  // The total image budget clamps first (oldest history omitted until the
+  // summed data-URL bytes fit), so the payload lands far under 8 MiB even
+  // though these synthetic bytes cannot be re-encoded.
   assert.equal(imageRead.MAX_REQUEST_MESSAGE_BYTES, 8 * 1024 * 1024);
-  const dataUrl = fakeImageDataUrl(1250 * 1024);
-  const messages = Array.from({ length: 8 }, (_, i) => imageMessage(`turn ${i}`, dataUrl));
+  const messages = Array.from({ length: 8 }, (_, i) =>
+    imageMessage(`turn ${i}`, fakeImageDataUrl(1250 * 1024)),
+  );
   const out = (await imageRead.enforceImageBudget(messages, { convert: null })) as {
     content: ImageContent[];
   }[];
   const serialized = Buffer.byteLength(JSON.stringify(out), "utf8");
   assert.ok(serialized <= imageRead.MAX_REQUEST_MESSAGE_BYTES, `serialized ${serialized} > default budget`);
-  for (let i = 0; i < 4; i++) {
-    assert.equal(hasOmitNote(out[i]?.content), true, `message ${i} (oldest) must be omitted`);
+  assert.ok(serialized <= 4.5 * 1024 * 1024, `serialized ${serialized} > 4.5 MiB success zone`);
+  for (let i = 0; i < 7; i++) {
+    assert.equal(
+      hasAnyOmitNote(out[i]?.content),
+      true,
+      `message ${i} (oldest history) must be omitted by the image budget`,
+    );
   }
-  for (let i = 4; i < 8; i++) {
-    assert.equal(hasImage(out[i]?.content), true, `message ${i} (newest) must keep its image`);
-  }
+  assert.equal(hasImage(out[7]?.content), true, "newest (current-turn) image must be kept");
+  assert.equal(
+    (out[7]?.content[1] as { image_url?: { url: string } }).image_url?.url,
+    ((messages[7] as { content: { image_url?: { url: string } }[] }).content[1]?.image_url?.url) ?? "",
+    "current-turn image must survive byte-identical",
+  );
 });

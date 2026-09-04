@@ -1,7 +1,80 @@
 "use strict";
 
+var fs = require("fs");
+var { MAX_IMAGE_BYTES, sniffImageMime, dataUrlFromBuffer } = require("./image-read.cjs");
+
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+// --- Host image part -> OpenAI image_url ------------------------------------
+//
+// Grok Bot's host may attach an image part with an unspecified field shape.
+// Probe tolerantly: raw base64 (`data`/`base64`, with a `mime`/`mimeType` field
+// or sniffed from magic bytes), a `url` (http(s) or data: URI, used as-is), or
+// a local `path`/`file` (read from disk, mime sniffed). On success we emit a
+// standard `{ type: "image_url", image_url: { url } }` content part; on any
+// failure we fall back to the old `"[image]"` placeholder so a broken image
+// never fails the request.
+
+function isHttpUrl(value) {
+  return typeof value === "string" && /^https?:\/\//i.test(value);
+}
+
+function isDataUrl(value) {
+  return typeof value === "string" && /^data:/i.test(value);
+}
+
+function tryDecodeBase64(value) {
+  try {
+    return Buffer.from(value, "base64");
+  } catch (err) {
+    return null;
+  }
+}
+
+function tryReadImageFile(filePath) {
+  var stat;
+  try {
+    stat = fs.statSync(filePath);
+  } catch (err) {
+    return "";
+  }
+  if (!stat.isFile() || stat.size > MAX_IMAGE_BYTES) return "";
+  var buf;
+  try {
+    buf = fs.readFileSync(filePath);
+  } catch (err) {
+    return "";
+  }
+  if (buf.length > MAX_IMAGE_BYTES) return "";
+  var mime = sniffImageMime(buf);
+  if (!mime) return "";
+  return dataUrlFromBuffer(buf, mime);
+}
+
+function imageUrlFromPart(part) {
+  if (!isRecord(part)) return "";
+  // 1. raw base64 (data/base64), optionally with a mime/mimeType field.
+  var raw = typeof part.data === "string" && part.data ? part.data : (typeof part.base64 === "string" ? part.base64 : "");
+  if (raw) {
+    if (isDataUrl(raw)) return raw;
+    var buf = tryDecodeBase64(raw);
+    if (!buf || buf.length === 0 || buf.length > MAX_IMAGE_BYTES) return "";
+    var mime = typeof part.mime === "string" ? part.mime : (typeof part.mimeType === "string" ? part.mimeType : "");
+    if (!/^image\//i.test(mime)) mime = sniffImageMime(buf);
+    if (!/^image\//i.test(mime)) return "";
+    return dataUrlFromBuffer(buf, mime);
+  }
+  // 2. url: http(s) or data: URI, used as-is.
+  var url = part.url;
+  if (typeof url === "string" && (isHttpUrl(url) || isDataUrl(url))) return url;
+  // 3. local path/file -> read from disk.
+  var filePath = typeof part.path === "string" && part.path ? part.path : (typeof part.file === "string" ? part.file : "");
+  if (filePath) {
+    return tryReadImageFile(filePath);
+  }
+  return "";
 }
 
 function toolCallIdOf(value) {
@@ -121,7 +194,9 @@ function contentToText(content) {
     } else if (p.type === "text") {
       bits.push(p.text || "");
     } else if (p.type === "image") {
-      bits.push("[image]");
+      bits.push(imageUrlFromPart(p) || "[image]");
+    } else if (p.type === "image_url") {
+      bits.push(isRecord(p.image_url) && typeof p.image_url.url === "string" ? p.image_url.url : "[image]");
     } else if (p.type === "tool-result") {
       bits.push(resultText(p));
     } else if (p.type === "tool-call") {
@@ -133,11 +208,22 @@ function contentToText(content) {
   return bits.join("\n");
 }
 
+function userContent(text, images) {
+  if (!images.length) return text;
+  var content = [];
+  if (text) content.push({ type: "text", text: text });
+  for (var i = 0; i < images.length; i++) {
+    content.push(images[i]);
+  }
+  return content;
+}
+
 function convertParts(role, message, index) {
   var content = Array.isArray(message.content) ? message.content : [message.content];
   var texts = [];
   var calls = [];
   var results = [];
+  var images = [];
   for (var i = 0; i < content.length; i++) {
     var p = content[i];
     if (p == null) {
@@ -155,7 +241,23 @@ function convertParts(role, message, index) {
       continue;
     }
     if (p.type === "image") {
-      texts.push("[image]");
+      var imageUrl = imageUrlFromPart(p);
+      if (imageUrl) {
+        images.push({ type: "image_url", image_url: { url: imageUrl } });
+      } else {
+        texts.push("[image]");
+      }
+      continue;
+    }
+    if (p.type === "image_url") {
+      // Already-OpenAI image content (e.g. a second toOpenAIMessages pass on
+      // the runtime->hop leg) must be preserved, not flattened into text.
+      var existingUrl = isRecord(p.image_url) && typeof p.image_url.url === "string" ? p.image_url.url : "";
+      if (existingUrl) {
+        images.push({ type: "image_url", image_url: { url: existingUrl } });
+      } else {
+        texts.push("[image]");
+      }
       continue;
     }
     if (p.type === "tool-call") {
@@ -188,7 +290,7 @@ function convertParts(role, message, index) {
     }
     out.push(row);
   } else if (role !== "tool" && (text || results.length === 0)) {
-    out.push({ role: role, content: text });
+    out.push({ role: role, content: userContent(text, images) });
   }
 
   for (var r = 0; r < results.length; r++) {
@@ -205,7 +307,7 @@ function convertParts(role, message, index) {
   }
 
   if (out.length === 0) {
-    out.push({ role: role === "tool" ? "tool" : role || "user", content: text });
+    out.push({ role: role === "tool" ? "tool" : role || "user", content: userContent(text, images) });
   }
   return out;
 }

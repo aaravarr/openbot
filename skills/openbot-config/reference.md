@@ -155,6 +155,41 @@ On each `POST /v1/chat/completions`:
 
 Runtime wrap (`payload/runtime.cjs`) `loadPlan()` / `readMode()` also hit disk per turn. A JSON edit while custom wrap is live applies on the **next** Grok Bot message. It does not wrap a stock host.
 
+## Image handling on the custom hop path
+
+The custom path (hop + custom wrap runtime, both share `payload/openai-messages.cjs`) never drops an image. The official tap path is untouched.
+
+### Host image parts (user attachments)
+
+`toOpenAIMessages` converts a host `{ "type": "image", … }` part into a standard OpenAI `image_url` content part instead of the old `"[image]"` placeholder. The part's field shape is unspecified, so it probes tolerantly:
+
+1. `data` / `base64` (raw base64) — paired with a `mime` / `mimeType` field, or sniffed from magic bytes (png/jpeg/webp/gif).
+2. `url` — `http(s)://` or `data:` URI, used as-is.
+3. `path` / `file` — a local file, read from disk and sniffed to a `data:image/<mime>;base64,…` URI.
+
+Any hit becomes `{ "type": "image_url", "image_url": { "url": … } }`. If **all** probes fail, it falls back to the old `"[image]"` placeholder. Guards: missing / unreadable / non-file / over **20 MB** → fall back, never throw.
+
+### Read tool-call image injection (hop path only)
+
+On each `POST /v1/chat/completions`, after `toOpenAIMessages` converts host parts to OpenAI messages, the hop dispatch path (and **only** the hop path — never the official tap) runs an image-read enrichment pass:
+
+- **Detect**: an assistant `tool_calls` entry whose `function.name` is case-insensitively `read` or a `read_image`-style variant (`read_image`, `read-image`, `read image`, `readImage`, …), and whose `function.arguments` (JSON) has a `path` or `file_path` value ending in `.png`, `.jpg`, `.jpeg`, `.webp`, or `.gif` (case-insensitive).
+- **Match**: the `role: "tool"` result with the same `tool_call_id`. If that result already contains image data (`image_url` or a `data:` URI), do nothing (no double-inject).
+- **Inject**: read the file from disk and insert a follow-up `role: "user"` message **immediately after that tool result**:
+
+  ```json
+  {
+    "role": "user",
+    "content": [
+      { "type": "text", "text": "[Image attached from Read: <path>]" },
+      { "type": "image_url", "image_url": { "url": "data:<mime>;base64,<bytes>" } }
+    ]
+  }
+  ```
+
+  MIME comes from the extension. Multiple images in one turn each get their own user message, each placed right after its own tool result.
+- **Guards**: missing / unreadable / non-file / over **20 MB** → skip that image, log a warning to stderr, and leave the tool result as-is. Never throw, never block the chat request. Text reads (non-image paths) and non-Read tools pass through untouched.
+
 ## `POST /api/save` kinds
 
 `src/parse/ui.ts`. Base `http://127.0.0.1:9280`. Header `Content-Type: application/json`. Each kind runs `reconcile`.

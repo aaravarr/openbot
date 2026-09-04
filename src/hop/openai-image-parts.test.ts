@@ -203,3 +203,24 @@ test("an unusable image field still falls back to the [image] placeholder", () =
   assert.equal(out.length, 1);
   assert.equal(out[0]?.content, "[image]");
 });
+
+test("host image part with a URL object in the image field is used as-is", () => {
+  const out = toOpenAIMessages([
+    { role: "user", content: [{ type: "image", image: new URL("https://example.com/pixel.png") }] },
+  ]);
+  const parts = partsOf(out);
+  assert.equal(parts[0]?.type, "image_url");
+  assert.equal(parts[0]?.image_url?.url, "https://example.com/pixel.png");
+});
+
+test("host image part with a mime_type alias is trusted like mimeType", () => {
+  // Non-sniffable bytes: only a valid image mime hint lets them through,
+  // proving the mime_type alias is consulted (parity with mimeType).
+  const raw = Buffer.from("hello").toString("base64");
+  const out = toOpenAIMessages([
+    { role: "user", content: [{ type: "image", image: raw, mime_type: "image/png" }] },
+  ]);
+  const parts = partsOf(out);
+  assert.equal(parts[0]?.type, "image_url");
+  assert.equal(parts[0]?.image_url?.url, `data:image/png;base64,${raw}`);
+});

@@ -12,6 +12,80 @@ var requestLog = require("./request-log.cjs");
 var TIMEOUT_MS = Number(process.env.OPENBOT_HOP_TIMEOUT || "1800000");
 var HIGH_AGENT_MAX_TOKENS = 65536;
 
+/** Policy for retrying upstream HTTP 429 before any client bytes are sent. */
+var UPSTREAM_429_RETRY = {
+  maxRetries: 3,
+  baseDelayMs: 500,
+  factor: 2,
+  maxDelayMs: 8000,
+  budgetMs: 30000,
+};
+
+function headerValue(headers, name) {
+  if (!headers) return "";
+  var lower = name.toLowerCase();
+  var keys = Object.keys(headers);
+  for (var i = 0; i < keys.length; i++) {
+    if (String(keys[i]).toLowerCase() === lower) {
+      var value = headers[keys[i]];
+      if (Array.isArray(value)) return value.length ? String(value[0]) : "";
+      if (value === undefined || value === null) return "";
+      return String(value);
+    }
+  }
+  return "";
+}
+
+function parseRetryAfterMs(headers, nowMs) {
+  var raw = headerValue(headers, "retry-after").trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) {
+    return Math.max(0, Number(raw) * 1000);
+  }
+  var when = Date.parse(raw);
+  if (Number.isNaN(when)) return null;
+  return Math.max(0, when - (Number.isFinite(nowMs) ? nowMs : Date.now()));
+}
+
+function exponentialBackoffMs(attemptIndex) {
+  var exp = UPSTREAM_429_RETRY.baseDelayMs * Math.pow(UPSTREAM_429_RETRY.factor, attemptIndex);
+  var capped = Math.min(UPSTREAM_429_RETRY.maxDelayMs, exp);
+  var jittered = capped * (0.5 + Math.random() * 0.5);
+  return Math.max(0, Math.floor(jittered));
+}
+
+function delayBefore429RetryMs(attemptIndex, headers, nowMs, budgetStartedMs) {
+  var retryAfter = parseRetryAfterMs(headers, nowMs);
+  var delay = retryAfter === null ? exponentialBackoffMs(attemptIndex) : retryAfter;
+  var elapsed = Math.max(0, (Number.isFinite(nowMs) ? nowMs : Date.now()) - budgetStartedMs);
+  var remaining = UPSTREAM_429_RETRY.budgetMs - elapsed;
+  if (remaining <= 0) return null;
+  return Math.min(delay, remaining);
+}
+
+function sleepMs(ms) {
+  var wait = Math.max(0, Number(ms) || 0);
+  if (wait === 0) return Promise.resolve();
+  return new Promise(function (resolve) {
+    setTimeout(resolve, wait);
+  });
+}
+
+function canRetryUpstream429(status, attemptIndex, clientRes, budgetStartedMs, nowMs) {
+  if (status !== 429) return false;
+  if (attemptIndex >= UPSTREAM_429_RETRY.maxRetries) return false;
+  if (clientRes && clientRes.headersSent) return false;
+  var now = Number.isFinite(nowMs) ? nowMs : Date.now();
+  if (now - budgetStartedMs >= UPSTREAM_429_RETRY.budgetMs) return false;
+  return true;
+}
+
+function retryAfterForwardHeaders(upstreamHeaders) {
+  var raw = headerValue(upstreamHeaders, "retry-after");
+  if (!raw) return undefined;
+  return { "Retry-After": raw };
+}
+
 function planPath() {
   return process.env.OPENBOT_PLAN || "/home/box/sand-data/openbot-plan.json";
 }
@@ -230,7 +304,7 @@ function collectResponse(res) {
   });
 }
 
-function postUpstream(urlStr, body, key, inbound) {
+function postUpstreamOnce(urlStr, body, key, inbound) {
   return new Promise(function (resolve, reject) {
     var req = openUpstream(urlStr, body, key, inbound);
     req.setTimeout(TIMEOUT_MS, function () {
@@ -245,18 +319,37 @@ function postUpstream(urlStr, body, key, inbound) {
   });
 }
 
-function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
+async function postUpstream(urlStr, body, key, inbound) {
+  var budgetStartedMs = Date.now();
+  var attemptIndex = 0;
+  while (true) {
+    var out = await postUpstreamOnce(urlStr, body, key, inbound);
+    if (!canRetryUpstream429(out.status, attemptIndex, null, budgetStartedMs)) {
+      return out;
+    }
+    var nowMs = Date.now();
+    var delay = delayBefore429RetryMs(attemptIndex, out.headers, nowMs, budgetStartedMs);
+    if (delay === null) return out;
+    await sleepMs(delay);
+    attemptIndex += 1;
+  }
+}
+
+function pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeReq) {
   return new Promise(function (resolve, reject) {
     var req = openUpstream(urlStr, body, key, inbound);
+    if (activeReq) activeReq.current = req;
     var settled = false;
     function fail(err) {
       if (settled) return;
       settled = true;
+      if (activeReq && activeReq.current === req) activeReq.current = null;
       reject(err);
     }
     function ok(value) {
       if (settled) return;
       settled = true;
+      if (activeReq && activeReq.current === req) activeReq.current = null;
       resolve(value);
     }
     req.setTimeout(TIMEOUT_MS, function () {
@@ -264,21 +357,22 @@ function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
       fail(new Error("openbot-hop: upstream timeout"));
     });
     req.on("error", fail);
-    clientRes.on("close", function () {
-      if (!clientRes.writableEnded) req.destroy();
-    });
     req.on("response", function (res) {
+      var status = res.statusCode || 502;
+      // 429 is decided by status before any client byte. Collect and return
+      // without writeHead so the caller can retry while headersSent is false.
+      if (status === 429) {
+        collectResponse(res).then(ok, fail);
+        return;
+      }
       if (!looksLikeEventStream(res.headers, true)) {
         collectResponse(res).then(function (out) {
-          if (!clientRes.headersSent) {
-            send(clientRes, out.status, out.raw, headerContentType(out.headers) || "application/json");
-          }
-          ok(out);
+          ok(Object.assign({ forwarded: false }, out));
         }, fail);
         return;
       }
       var ctype = headerContentType(res.headers) || "text/event-stream";
-      clientRes.writeHead(res.statusCode || 200, {
+      clientRes.writeHead(status || 200, {
         "Content-Type": ctype,
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
@@ -291,7 +385,7 @@ function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
       });
       res.on("end", function () {
         if (!clientRes.writableEnded) clientRes.end();
-        ok({ status: res.statusCode || 200, headers: res.headers, raw: Buffer.concat(chunks) });
+        ok({ status: status || 200, headers: res.headers, raw: Buffer.concat(chunks), forwarded: true });
       });
       res.on("error", fail);
     });
@@ -299,12 +393,68 @@ function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
   });
 }
 
-function send(res, status, payload, contentType) {
+async function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
+  var budgetStartedMs = Date.now();
+  var attemptIndex = 0;
+  var activeReq = { current: null };
+  function onClientClose() {
+    if (!clientRes.writableEnded && activeReq.current) activeReq.current.destroy();
+  }
+  clientRes.on("close", onClientClose);
+  try {
+    while (true) {
+      var out = await pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeReq);
+      if (out.forwarded) return out;
+      if (!canRetryUpstream429(out.status, attemptIndex, clientRes, budgetStartedMs)) {
+        if (!clientRes.headersSent) {
+          send(
+            clientRes,
+            out.status,
+            out.raw,
+            headerContentType(out.headers) || "application/json",
+            retryAfterForwardHeaders(out.headers),
+          );
+        }
+        return out;
+      }
+      var nowMs = Date.now();
+      var delay = delayBefore429RetryMs(attemptIndex, out.headers, nowMs, budgetStartedMs);
+      if (delay === null) {
+        if (!clientRes.headersSent) {
+          send(
+            clientRes,
+            out.status,
+            out.raw,
+            headerContentType(out.headers) || "application/json",
+            retryAfterForwardHeaders(out.headers),
+          );
+        }
+        return out;
+      }
+      await sleepMs(delay);
+      attemptIndex += 1;
+    }
+  } finally {
+    clientRes.removeListener("close", onClientClose);
+  }
+}
+
+function send(res, status, payload, contentType, extraHeaders) {
   var body = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
-  res.writeHead(status, {
+  var headers = {
     "Content-Type": contentType || "application/json",
     "Content-Length": String(body.length),
-  });
+  };
+  if (extraHeaders && typeof extraHeaders === "object") {
+    var keys = Object.keys(extraHeaders);
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (extraHeaders[k] !== undefined && extraHeaders[k] !== null) {
+        headers[k] = String(extraHeaders[k]);
+      }
+    }
+  }
+  res.writeHead(status, headers);
   res.end(body);
 }
 
@@ -450,7 +600,13 @@ async function handleCompletions(req, res) {
         status: out.status,
         responseRaw: Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw),
       });
-      send(res, out.status, out.raw, headerContentType(out.headers) || "application/json");
+      send(
+        res,
+        out.status,
+        out.raw,
+        headerContentType(out.headers) || "application/json",
+        retryAfterForwardHeaders(out.headers),
+      );
     }
   } catch (err) {
     var failed = { error: { message: "hop failed" } };
@@ -503,3 +659,7 @@ exports.hopParameters = hopParameters;
 exports.hopReasoning = hopReasoning;
 exports.applyMaxTokens = applyMaxTokens;
 exports.looksLikeEventStream = looksLikeEventStream;
+exports.UPSTREAM_429_RETRY = UPSTREAM_429_RETRY;
+exports.parseRetryAfterMs = parseRetryAfterMs;
+exports.delayBefore429RetryMs = delayBefore429RetryMs;
+exports.canRetryUpstream429 = canRetryUpstream429;

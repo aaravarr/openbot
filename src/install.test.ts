@@ -88,6 +88,7 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
       OPENBOT_DEST: path.join(sandData, "openbot"),
       OPENBOT_COMMIT: "cafed00d",
       OPENBOT_TUNNEL: "off",
+      OPENBOT_SKIP_NPM_INSTALL: "1",
     },
   });
 

@@ -1,7 +1,13 @@
 "use strict";
 
 var fs = require("fs");
-var { MAX_IMAGE_BYTES, sniffImageMime, dataUrlFromBuffer } = require("./image-read.cjs");
+var {
+  MAX_IMAGE_BYTES,
+  sniffImageMime,
+  dataUrlFromBuffer,
+  experimentalContentRaw,
+  imageEntryFromAny,
+} = require("./image-read.cjs");
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -10,12 +16,14 @@ function isRecord(value) {
 // --- Host image part -> OpenAI image_url ------------------------------------
 //
 // Grok Bot's host may attach an image part with an unspecified field shape.
-// Probe tolerantly: raw base64 (`data`/`base64`, with a `mime`/`mimeType` field
-// or sniffed from magic bytes), a `url` (http(s) or data: URI, used as-is), or
-// a local `path`/`file` (read from disk, mime sniffed). On success we emit a
-// standard `{ type: "image_url", image_url: { url } }` content part; on any
-// failure we fall back to the old `"[image]"` placeholder so a broken image
-// never fails the request.
+// Probe tolerantly: the `image` field (the observed attachment shape is
+// `{type:"image", image:<dataURL|raw bytes>, mimeType}`), then raw base64
+// (`data`/`base64`, with a `mime`/`mimeType` field or sniffed from magic
+// bytes), a `url` (http(s) or data: URI, used as-is), or a local `path`/`file`
+// (read from disk, mime sniffed). On success we emit a standard
+// `{ type: "image_url", image_url: { url } }` content part; on any failure we
+// fall back to the old `"[image]"` placeholder so a broken image never fails
+// the request.
 
 function isHttpUrl(value) {
   return typeof value === "string" && /^https?:\/\//i.test(value);
@@ -23,14 +31,6 @@ function isHttpUrl(value) {
 
 function isDataUrl(value) {
   return typeof value === "string" && /^data:/i.test(value);
-}
-
-function tryDecodeBase64(value) {
-  try {
-    return Buffer.from(value, "base64");
-  } catch (err) {
-    return null;
-  }
 }
 
 function tryReadImageFile(filePath) {
@@ -55,16 +55,14 @@ function tryReadImageFile(filePath) {
 
 function imageUrlFromPart(part) {
   if (!isRecord(part)) return "";
-  // 1. raw base64 (data/base64), optionally with a mime/mimeType field.
-  var raw = typeof part.data === "string" && part.data ? part.data : (typeof part.base64 === "string" ? part.base64 : "");
-  if (raw) {
-    if (isDataUrl(raw)) return raw;
-    var buf = tryDecodeBase64(raw);
-    if (!buf || buf.length === 0 || buf.length > MAX_IMAGE_BYTES) return "";
-    var mime = typeof part.mime === "string" ? part.mime : (typeof part.mimeType === "string" ? part.mimeType : "");
-    if (!/^image\//i.test(mime)) mime = sniffImageMime(buf);
-    if (!/^image\//i.test(mime)) return "";
-    return dataUrlFromBuffer(buf, mime);
+  var mimeHint = typeof part.mimeType === "string" ? part.mimeType : (typeof part.mime === "string" ? part.mime : "");
+  // 1. payload fields, most specific first. Each may be a data: URI, bare
+  //    base64, raw bytes (Buffer/TypedArray), a nested record, or an array.
+  var payloads = [part.image, part.data, part.base64];
+  for (var i = 0; i < payloads.length; i++) {
+    if (payloads[i] === undefined || payloads[i] === null) continue;
+    var entry = imageEntryFromAny(payloads[i], mimeHint);
+    if (entry) return entry.url;
   }
   // 2. url: http(s) or data: URI, used as-is.
   var url = part.url;
@@ -275,6 +273,11 @@ function convertParts(role, message, index) {
   var text = texts.join("\n");
   var existingCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
   var toolCalls = calls.length ? calls : existingCalls;
+  // Harness experimental content is carried verbatim onto tool rows (Layer C):
+  // the runtime leg's first conversion must keep it so the hop-side pass can
+  // map it to image content. Message-level values attach to the first tool
+  // row only, so one value is never injected twice.
+  var carriedMessageExperimental = false;
 
   if (role === "assistant" || toolCalls.length) {
     var assistant = { role: "assistant", content: text };
@@ -287,6 +290,10 @@ function convertParts(role, message, index) {
     var id = toolCallIdOf(message);
     if (id) {
       row.tool_call_id = id;
+    }
+    var carriedHere = experimentalContentRaw(message);
+    if (carriedHere !== undefined) {
+      row.experimental_content = carriedHere;
     }
     out.push(row);
   } else if (role !== "tool" && (text || results.length === 0)) {
@@ -302,6 +309,14 @@ function convertParts(role, message, index) {
     var toolId = toolCallIdOf(part) || toolCallIdOf(message);
     if (toolId) {
       toolRow.tool_call_id = toolId;
+    }
+    var carried = experimentalContentRaw(part);
+    if (carried === undefined && !carriedMessageExperimental) {
+      carried = experimentalContentRaw(message);
+      carriedMessageExperimental = true;
+    }
+    if (carried !== undefined) {
+      toolRow.experimental_content = carried;
     }
     out.push(toolRow);
   }
@@ -334,6 +349,10 @@ function convertOne(message, index) {
       tool_calls: message.tool_calls,
       toolCallId: message.toolCallId,
       tool_call_id: message.tool_call_id,
+      experimental_content: message.experimental_content,
+      experimentalContent: message.experimentalContent,
+      experimental_contents: message.experimental_contents,
+      experimentalContents: message.experimentalContents,
     }, index);
   }
 
@@ -343,6 +362,10 @@ function convertOne(message, index) {
     var id = toolCallIdOf(message);
     if (id) {
       row.tool_call_id = id;
+    }
+    var carried = experimentalContentRaw(message);
+    if (carried !== undefined) {
+      row.experimental_content = carried;
     }
   }
   if (role === "assistant" && Array.isArray(message.tool_calls) && message.tool_calls.length) {

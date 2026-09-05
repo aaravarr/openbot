@@ -10,6 +10,7 @@ import {
 } from "./parse/argv.ts";
 import { observe } from "./supervisor/observe.ts";
 import { dryRunWrap, reconcile } from "./supervisor/reconcile.ts";
+import { guardCustom } from "./supervisor/guard.ts";
 import { nodeFs, nodeProcs } from "./supervisor/procs.ts";
 import { loadSecrets, parseProviderId, saveSecrets, upsertSecret } from "./supervisor/secrets.ts";
 import { catalogFromPlanJson } from "./supervisor/plan.ts";
@@ -140,6 +141,12 @@ async function main(argv: string[]): Promise<number> {
     const snapshot = await observe(deps);
     printStatus(snapshot, parsed.json);
     return 0;
+  }
+
+  if (parsed.command.kind === "guard") {
+    const result = await guardCustom(deps);
+    console.log(JSON.stringify(result, null, 2));
+    return result.ok ? 0 : 1;
   }
 
   if (parsed.command.kind === "tunnel") {

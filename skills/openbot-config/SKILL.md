@@ -1,6 +1,6 @@
 ---
 name: openbot-config
-description: Configures OpenBot on the Computer from Grok Bot — providers, models, API keys, official vs custom wrap, Cloudflare tunnel, and request logs. Prefers editing /home/box/sand-data JSON (openbot-plan.json, secrets.json, openbot-logs.json, openbot-mode, openbot-expose) when wrap is already custom. Use when the user asks to set up OpenBot, switch models, add a key, go official, turn on tunnel, or edit those files.
+description: Configures OpenBot on the Computer from Grok Bot — providers, models, API keys, official vs custom wrap, Cloudflare tunnel, and request logs. Prefers editing /home/box/sand-data JSON (openbot-plan.json, secrets.json, openbot-logs.json, openbot-mode, openbot-expose) when wrap is already custom. Use when the user asks to set up OpenBot, switch models, add a key, go official, turn on tunnel, edit those files, or diagnose a surprise official/custom flip via openbot-audit.jsonl.
 ---
 
 # OpenBot config (Grok Bot on the Computer)
@@ -17,7 +17,7 @@ Never print, commit, or paste API keys. Show `secrets.json` shape with `"<stored
 
 ## When to use
 
-Apply this skill when the user wants to configure OpenBot: set up a provider, switch models or thinking, add or rotate a key, go official or custom, turn the tunnel on/off, change log settings, or edit `/home/box/sand-data` files (`openbot-plan.json`, `secrets.json`, `openbot-logs.json`, `openbot-mode`, `openbot-expose`).
+Apply this skill when the user wants to configure OpenBot: set up a provider, switch models or thinking, add or rotate a key, go official or custom, turn the tunnel on/off, change log settings, or edit `/home/box/sand-data` files (`openbot-plan.json`, `secrets.json`, `openbot-logs.json`, `openbot-mode`, `openbot-expose`). Also when diagnosing an unexpected flip to official or custom: read `openbot-audit.jsonl`.
 
 ## JSON vs API save vs CLI
 
@@ -34,7 +34,7 @@ Apply this skill when the user wants to configure OpenBot: set up a provider, sw
 | Official host tap (logging on while mode is official) | Prefer `PUT /api/logs/settings` so prune plus wrap/reconcile run | Same |
 | Wrap bytes change (host bounce) | Reconcile only. SIGTERM sand-host; **never** `kill -9`. Do not start `node host-main.cjs` without gateway tokens | Same |
 
-Do **not** write `openbot-mode` or `openbot-expose` by hand to change wrap or tunnel. File edit alone will not wrap/unwrap the host or start/stop cloudflared.
+Do **not** write `openbot-mode` or `openbot-expose` by hand to change wrap or tunnel. File edit alone will not wrap/unwrap the host or start/stop cloudflared. (Only exception: repairing a corrupted `openbot-mode` token to `custom`, followed by a reconcile — see Official / custom below.)
 
 JSON-enough requires **all** of: `openbot-mode` is `custom`, `/home/box/sand-host/host-main.cjs` starts with `/* openbot-stock-wrap */`, and `127.0.0.1:9280` answers.
 
@@ -42,12 +42,13 @@ JSON-enough requires **all** of: `openbot-mode` is `custom`, `/home/box/sand-hos
 
 Default sand-data is `/home/box/sand-data/` (override with `OPENBOT_SAND_DATA` / `OPENBOT_PLAN` / `OPENBOT_MODE` / `OPENBOT_SECRETS`).
 
-1. Read `openbot-mode` (`official` or `custom`, plus newline).
+1. Read `openbot-mode` (`official` or `custom`, plus newline). The UI reads it strictly: only the literal token `official` means official — missing, empty, or garbage reads as **custom**.
 2. Read `openbot-plan.json` if present. Official still keeps this file.
 3. Head the host: `head -n 1 /home/box/sand-host/host-main.cjs` — custom (or official+logging tap) is `/* openbot-stock-wrap */`.
 4. If port 9280 is up: `GET http://127.0.0.1:9280/api/state`. Use `snapshot.alignment` (`ok` vs `needs-reinstall`), `snapshot.wrap`, `activeModelId`, providers/models, `keyedProviders` (ids that have a secret — not the secret), `logSettings`, `snapshot.tunnel`.
 5. Do not dump `secrets.json` into chat. You may check that a provider id exists under `providers` without printing values.
 6. Do not treat `openbot-requests.jsonl` as config. Do not hand-edit `openbot-model-catalog.json`. Do not invent a URL in `openbot-tunnel.json`.
+7. When mode or wrap changed unexpectedly, read `/home/box/sand-data/openbot-audit.jsonl`: one JSON line per reconcile write to the mode file, plan, wrapped host, or known backup, with `action`, `from`, `to`, and `source`.
 
 CLI (install tree is usually `/home/box/sand-data/openbot`):
 
@@ -87,6 +88,16 @@ OPENBOT_API_KEY='<from user>' node --experimental-strip-types /home/box/sand-dat
 ```
 
 If 9280 is down, start it through CLI/reconcile, not by adopting a foreign listener.
+
+**Diagnose a surprise flip to official**: read `/home/box/sand-data/openbot-audit.jsonl`. Every reconcile write to `openbot-mode`, the plan, the wrapped host, or the known backup appends one best-effort JSON line:
+
+```json
+{"ts":"2026-09-05T12:00:00.000Z","action":"mode","from":"official","to":"custom","source":"ui:save:upsert-provider"}
+```
+
+`action` is `mode` | `plan` | `wrap` | `backup`; `from`/`to` are short state descriptors; `source` names the caller (`ui:save:<kind>`, `ui:logs-settings`, `cli:install` / `cli:official` / `cli:tunnel`, or `unknown`). Audit write failures are swallowed — they never break reconcile.
+
+**Repair a corrupted `openbot-mode`**: missing, empty, or garbage reads as **custom**, never official (user-owned state must not silently fall back to official). Write `custom` into the file, then reconcile from the control page (`POST /api/save`), and check `openbot-audit.jsonl` to see what changed it.
 
 ### Add or rotate a key
 
@@ -138,7 +149,7 @@ Off: `"expose":"off"`. CLI: `openbot tunnel on`, `openbot tunnel off`, `openbot 
 
 ### Logs
 
-`openbot-logs.json`: `loggingEnabled` (default false), `logBodies` (false), `logBodiesOnError` (true), `logRetentionDays` (7; 1–365), `maxBodyCaptureBytes` (65536; 1024–1048576), `maxRecords` (200; 1–10000).
+`openbot-logs.json`: `loggingEnabled` (default false), `logBodies` (false), `logBodiesOnError` (true), `logRetentionDays` (7; 1–365), `maxBodyCaptureBytes` (65536; 1024–1048576), `maxRecords` (2000; 1–10000).
 
 Custom wrap: a JSON edit is enough for hop logging. **Official** host tap may keep wrap marked (`tapSession`) — prefer `PUT http://127.0.0.1:9280/api/logs/settings` so prune and reconcile side effects run.
 
@@ -161,4 +172,5 @@ After wrap or mode change, tell the user: **send a new Grok Bot message**. If wr
 - Delete the plan file on Official (Official is a wrap mode, not a catalog reset)
 - Patch the Mac asar or write Mac Grok Bot paths
 - Hand-edit `openbot-model-catalog.json` (refresh with `POST /api/model-catalog/refresh`)
+- Hand-edit or truncate `openbot-audit.jsonl` (append-only log owned by reconcile)
 - Patch `host-main.cjs.pre-openbot` as the wrap source

@@ -23,6 +23,7 @@ Default root: `/home/box/sand-data/` (see env below).
 |---|---|---|
 | `openbot-plan.json` | JSON | Compiled custom plan (`planToJson(compileCustomPlan)`). Trailing newline. |
 | `openbot-mode` | text | `official` or `custom` plus newline. Do not delete the plan on official. |
+| `openbot-audit.jsonl` | JSONL, append-only | Audit trail of reconcile writes to mode / plan / wrap / backup (see below). Best-effort; diagnostics only. |
 | `secrets.json` | JSON, **0600** | `{ "providers": { "<providerId>": "<stored locally>" } }` |
 | `openbot-expose` | text | `loopback` or `cloudflare-quick` plus newline. Written by reconcile. |
 | `openbot-logs.json` | JSON | LogSettings (see below). Trailing newline. |
@@ -122,8 +123,25 @@ Hop `loadKey(providerId)` reads this file **per request**. Missing key → hop *
 
 ## `openbot-mode` and `openbot-expose`
 
-- Mode file: `official\n` or `custom\n`. Source of truth for wrap mode. Reconcile writes it (`writeMode`). Do not flip this file to wrap or unwrap.
+- Mode file: `official\n` or `custom\n`. Source of truth for wrap mode. Reconcile writes it (`writeMode`). Do not flip this file to wrap or unwrap. The UI reads it **strictly**: only the literal token `official` (after trimming) means official; missing, empty, or garbage resolves to **custom** — never official (users own custom state and often have zero official quota, so an unreadable mode file must never reconcile chat back to official). Repair a corrupted token by writing `custom` and reconciling from the control page (`POST /api/save`); check `openbot-audit.jsonl` to see what changed it.
 - Expose file: `loopback\n` or `cloudflare-quick\n`. Tokens `cloudflare` / `on` / `cf` parse to `cloudflare-quick`; `off` / `loopback` / `no` / `false` parse to `loopback`. Tailscale is not in this release.
+
+## `openbot-audit.jsonl`
+
+Append-only audit trail next to `openbot-mode`. Every reconcile write to the mode file, the plan file, the wrapped host file, or the known backup appends one line. Writes are best-effort: an audit failure is swallowed and never breaks or blocks a reconcile. Diagnostics only — do not hand-edit.
+
+```json
+{"ts":"2026-09-05T12:00:00.000Z","action":"mode","from":"official","to":"custom","source":"ui:save:upsert-provider"}
+```
+
+- `action`: `mode` | `plan` | `wrap` | `backup`
+- `from` / `to`: short state descriptors
+  - mode: `official`, `custom`, `absent`, or the previous garbage token it replaces
+  - wrap: `stock-unmarked`, `openbot-marked`, `foreign-opengrok`
+  - backup / plan: `absent` / `present`
+- `source`: the caller — `ui:save:<kind>` (UI `POST /api/save`), `ui:logs-settings` (UI `PUT /api/logs/settings`), `cli:install` / `cli:official` / `cli:tunnel` (CLI), or `unknown`
+
+Use it when diagnosing "the box fell back to official": the `mode` and `wrap` lines show who changed what, from what, to what, and when.
 
 ## `openbot-logs.json`
 
@@ -134,7 +152,7 @@ Hop `loadKey(providerId)` reads this file **per request**. Missing key → hop *
   "logBodiesOnError": true,
   "logRetentionDays": 7,
   "maxBodyCaptureBytes": 65536,
-  "maxRecords": 200
+  "maxRecords": 2000
 }
 ```
 
@@ -216,7 +234,7 @@ The upstream limit was pinned in three on-the-box rounds: the fusion gateway edg
 
 ## `POST /api/save` kinds
 
-`src/parse/ui.ts`. Base `http://127.0.0.1:9280`. Header `Content-Type: application/json`. Each kind runs `reconcile`.
+`src/parse/ui.ts`. Base `http://127.0.0.1:9280`. Header `Content-Type: application/json`. Each kind runs `reconcile` (recorded in `openbot-audit.jsonl` as `source: "ui:save:<kind>"`).
 
 | kind | Body fields | Notes |
 |---|---|---|

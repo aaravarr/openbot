@@ -3,7 +3,7 @@ import test from "node:test";
 import { OPENBOT_MARKER, OPENGROK_MARKER, SERVICE_PORT } from "../domain/types.ts";
 import { wrapHostSource } from "../host/wrap.ts";
 import { customBoxFromProvider, officialBox, parseUpstreamOrigin } from "../parse/argv.ts";
-import { boxPathsFrom, parseAbsPath } from "./paths.ts";
+import { boxPathsFrom, joinAbs, parseAbsPath } from "./paths.ts";
 import { type FsDeps, type ProcDeps, parseOwnedPid } from "./procs.ts";
 import { reconcile } from "./reconcile.ts";
 
@@ -376,4 +376,82 @@ test("official with logging off still restores stock and does not wrap identity"
   assert.equal(result.kind, "ok");
   assert.equal(ctx.fs.read(ctx.paths.hostMain), STOCK);
   assert.equal(ctx.fs.read(ctx.paths.hostMain)?.includes(OPENBOT_MARKER), false);
+});
+
+type AuditRow = { ts: string; action: string; from: string; to: string; source: string };
+
+function auditRows(ctx: ReturnType<typeof setup>): AuditRow[] {
+  const raw = ctx.fs.read(joinAbs(ctx.paths.sandData, "openbot-audit.jsonl")) ?? "";
+  return raw
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as AuditRow);
+}
+
+test("custom reconcile appends backup, wrap, mode, and plan audit lines", async () => {
+  const ctx = setup(STOCK);
+  const result = await reconcile(zhipu(ctx.paths), ctx.deps, { source: "test:custom" });
+  assert.equal(result.kind, "ok");
+  const rows = auditRows(ctx);
+  assert.deepEqual(rows.map((row) => row.action), ["backup", "wrap", "mode", "plan"]);
+  assert.equal(rows.every((row) => row.source === "test:custom"), true);
+  assert.equal(rows.every((row) => typeof row.ts === "string" && !Number.isNaN(Date.parse(row.ts))), true);
+  const wrap = rows.find((row) => row.action === "wrap");
+  assert.equal(wrap?.from, "stock-unmarked");
+  assert.equal(wrap?.to, "openbot-marked");
+  const backup = rows.find((row) => row.action === "backup");
+  assert.equal(backup?.from, "absent");
+  assert.equal(backup?.to, "present");
+  const mode = rows.find((row) => row.action === "mode");
+  assert.equal(mode?.from, "absent");
+  assert.equal(mode?.to, "custom");
+});
+
+test("official restore appends wrap and mode audit lines", async () => {
+  const wrapped = wrapHostSource({ source: STOCK, runtimePath: "/tmp/runtime.cjs" });
+  assert.equal(wrapped.kind, "wrapped");
+  if (wrapped.kind !== "wrapped") {
+    return;
+  }
+  const ctx = setup(wrapped.source);
+  ctx.fs.write(ctx.paths.knownBackup, STOCK);
+  const result = await reconcile(officialBox(ctx.paths), ctx.deps, { source: "test:official" });
+  assert.equal(result.kind, "ok");
+  const rows = auditRows(ctx);
+  assert.deepEqual(rows.map((row) => row.action), ["mode", "wrap"]);
+  const wrap = rows[1];
+  assert.equal(wrap?.from, "openbot-marked");
+  assert.equal(wrap?.to, "stock-unmarked");
+  assert.equal(rows[0]?.from, "absent");
+  assert.equal(rows[0]?.to, "official");
+});
+
+test("audit writes record the previous mode value they replace", async () => {
+  const ctx = setup(STOCK);
+  ctx.fs.write(ctx.paths.mode, "junk\n");
+  const result = await reconcile(zhipu(ctx.paths), ctx.deps, { source: "test:repair" });
+  assert.equal(result.kind, "ok");
+  const mode = auditRows(ctx).find((row) => row.action === "mode");
+  assert.equal(mode?.from, "junk");
+  assert.equal(mode?.to, "custom");
+});
+
+test("an audit write failure never breaks reconcile", async () => {
+  const ctx = setup(STOCK);
+  const auditFile = joinAbs(ctx.paths.sandData, "openbot-audit.jsonl");
+  const base = ctx.deps.fs;
+  const broken: FsDeps = {
+    ...base,
+    write(path, body, mode) {
+      if (path === auditFile) {
+        throw new Error("audit disk full");
+      }
+      base.write(path, body, mode);
+    },
+  };
+  const result = await reconcile(zhipu(ctx.paths), { ...ctx.deps, fs: broken }, { source: "test:broken" });
+  assert.equal(result.kind, "ok");
+  assert.equal(ctx.fs.read(ctx.paths.mode)?.trim(), "custom");
+  assert.equal(ctx.fs.exists(auditFile), false);
+  assert.equal(ctx.fs.read(ctx.paths.hostMain)?.includes(OPENBOT_MARKER), true);
 });

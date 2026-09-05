@@ -22,6 +22,7 @@ export type CliCommand =
   | { readonly kind: "census-only" }
   | { readonly kind: "dry-run" }
   | { readonly kind: "official" }
+  | { readonly kind: "guard" }
   | { readonly kind: "tunnel"; readonly action: "on" | "off" | "status" }
   | {
       readonly kind: "install";
@@ -113,6 +114,9 @@ export function parseInstallCommand(input: {
   }
   if (argv.includes("status")) {
     return { command: { kind: "status" }, paths, json };
+  }
+  if (argv.includes("guard")) {
+    return { command: { kind: "guard" }, paths, json };
   }
   const tunnelAt = argv.indexOf("tunnel");
   if (tunnelAt >= 0) {

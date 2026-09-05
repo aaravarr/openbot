@@ -120,6 +120,22 @@ test("tunnel on is a tunnel command", () => {
   }
 });
 
+test("guard is an undocumented word command", () => {
+  const parsed = parseInstallCommand({
+    argv: ["guard"],
+    env: {},
+    repoRoot: "/tmp/openbot",
+  });
+  assert.equal(parsed.command.kind, "guard");
+  const withFlags = parseInstallCommand({
+    argv: ["guard", "--json"],
+    env: {},
+    repoRoot: "/tmp/openbot",
+  });
+  assert.equal(withFlags.command.kind, "guard");
+  assert.equal(withFlags.json, true);
+});
+
 test("cli file URL resolves to the directory that contains src/", () => {
   const metaUrl = pathToFileURL("/tmp/openbot-pkg/src/cli.ts").href;
   assert.equal(repoRootFromMeta(metaUrl), "/tmp/openbot-pkg");

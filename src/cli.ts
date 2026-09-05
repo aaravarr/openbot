@@ -10,6 +10,7 @@ import {
 } from "./parse/argv.ts";
 import { observe } from "./supervisor/observe.ts";
 import { dryRunWrap, reconcile } from "./supervisor/reconcile.ts";
+import { guardCustom } from "./supervisor/guard.ts";
 import { nodeFs, nodeProcs } from "./supervisor/procs.ts";
 import { loadSecrets, parseProviderId, saveSecrets, upsertSecret } from "./supervisor/secrets.ts";
 import { catalogFromPlanJson } from "./supervisor/plan.ts";
@@ -142,6 +143,12 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
+  if (parsed.command.kind === "guard") {
+    const result = await guardCustom(deps);
+    console.log(JSON.stringify(result, null, 2));
+    return result.ok ? 0 : 1;
+  }
+
   if (parsed.command.kind === "tunnel") {
     if (parsed.command.action === "status") {
       const snapshot = await observe(deps);
@@ -149,13 +156,16 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     const expose: Expose = parsed.command.action === "on" ? { kind: "cloudflare-quick" } : loopbackExpose();
-    const result = await reconcile(boxFromDisk(deps, expose), deps, { reloadService: true });
+    const result = await reconcile(boxFromDisk(deps, expose), deps, { reloadService: true, source: "cli:tunnel" });
     printResult(result, parsed.json);
     return result.kind === "ok" ? 0 : 1;
   }
 
   if (parsed.command.kind === "official") {
-    const result = await reconcile(officialBox(parsed.paths, savedExpose), deps, { reloadService: true });
+    const result = await reconcile(officialBox(parsed.paths, savedExpose), deps, {
+      reloadService: true,
+      source: "cli:official",
+    });
     printResult(result, parsed.json);
     return result.kind === "ok" ? 0 : 1;
   }
@@ -180,7 +190,7 @@ async function main(argv: string[]): Promise<number> {
       modelSlug: custom.modelSlug,
       expose,
     });
-    const result = await reconcile(box, deps, { reloadService: true });
+    const result = await reconcile(box, deps, { reloadService: true, source: "cli:install" });
     if (result.kind === "ok") {
       const store = loadSecrets(deps.fs, parsed.paths.secrets);
       saveSecrets(
@@ -193,7 +203,7 @@ async function main(argv: string[]): Promise<number> {
     return result.kind === "ok" ? 0 : 1;
   }
 
-  const result = await reconcile(boxFromDisk(deps, expose), deps, { reloadService: true });
+  const result = await reconcile(boxFromDisk(deps, expose), deps, { reloadService: true, source: "cli:install" });
   printResult(result, parsed.json);
   return result.kind === "ok" ? 0 : 1;
 }

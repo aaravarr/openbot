@@ -117,8 +117,14 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
-function wrapMode(raw: string | undefined): "official" | "custom" {
-  return raw?.trim() === "custom" ? "custom" : "official";
+/**
+ * Strict read of the mode file. Only the literal token "official" means
+ * official; anything else (missing, empty, garbage) means custom. Users own
+ * custom state and often have zero official quota, so an unreadable mode file
+ * must never reconcile chat back to official.
+ */
+export function wrapMode(raw: string | undefined): "official" | "custom" {
+  return raw?.trim() === "official" ? "official" : "custom";
 }
 
 function tunnelForUi(tunnel: TunnelObserved): TunnelObserved & { qr?: string } {
@@ -249,6 +255,7 @@ async function handleLogsApi(req: http.IncomingMessage, res: http.ServerResponse
           const result = await reconcile(
             officialBox(current.paths, readExposeFile(current.fs, current.paths.expose)),
             current,
+            { source: "ui:logs-settings" },
           );
           if (result.kind === "refused") {
             wrapError = result.error.kind;
@@ -387,7 +394,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         expose: readExposeFile(current.fs, current.paths.expose),
         mode: wrapMode(current.fs.read(current.paths.mode)),
       });
-      const result = await reconcile(parsed.desired, current);
+      const result = await reconcile(parsed.desired, current, { source: `ui:save:${parsed.kind}` });
       if (result.kind === "refused") {
         sendJson(res, 409, result);
         return;

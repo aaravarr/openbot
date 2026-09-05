@@ -117,8 +117,14 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
-function wrapMode(raw: string | undefined): "official" | "custom" {
-  return raw?.trim() === "custom" ? "custom" : "official";
+/**
+ * Strict read of the mode file. Only the literal token "official" means
+ * official; anything else (missing, empty, garbage) means custom. Users own
+ * custom state and often have zero official quota, so an unreadable mode file
+ * must never reconcile chat back to official.
+ */
+export function wrapMode(raw: string | undefined): "official" | "custom" {
+  return raw?.trim() === "official" ? "official" : "custom";
 }
 
 function tunnelForUi(tunnel: TunnelObserved): TunnelObserved & { qr?: string } {

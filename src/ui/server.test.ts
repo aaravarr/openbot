@@ -9,7 +9,7 @@ process.env.OPENBOT_REPO = "/tmp/openbot-repo";
 process.env.OPENBOT_SAND_DATA = "/tmp/openbot-sand-data";
 process.env.OPENBOT_HOST_MAIN = "/tmp/openbot-sand-host/host-main.cjs";
 
-const { handleRequest } = await import("./server.ts");
+const { handleRequest, wrapMode } = await import("./server.ts");
 
 function listen(): Promise<{ server: http.Server; port: number }> {
   return new Promise((resolve) => {
@@ -57,6 +57,19 @@ function request(
     req.end();
   });
 }
+
+test("wrapMode is strict: only an exact official mode file means official", () => {
+  assert.equal(wrapMode("official\n"), "official");
+  assert.equal(wrapMode(" official \n"), "official");
+  // User-owned state must not silently fall back to official.
+  assert.equal(wrapMode("custom\n"), "custom");
+  assert.equal(wrapMode(undefined), "custom");
+  assert.equal(wrapMode(""), "custom");
+  assert.equal(wrapMode("   \n"), "custom");
+  assert.equal(wrapMode("garbage"), "custom");
+  assert.equal(wrapMode("OFFICIAL"), "custom");
+  assert.equal(wrapMode("official-mode"), "custom");
+});
 
 test("a throwing handler returns a structured 500 and the server keeps serving", async () => {
   const { server, port } = await listen();

@@ -249,6 +249,7 @@ async function handleLogsApi(req: http.IncomingMessage, res: http.ServerResponse
           const result = await reconcile(
             officialBox(current.paths, readExposeFile(current.fs, current.paths.expose)),
             current,
+            { source: "ui:logs-settings" },
           );
           if (result.kind === "refused") {
             wrapError = result.error.kind;
@@ -387,7 +388,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         expose: readExposeFile(current.fs, current.paths.expose),
         mode: wrapMode(current.fs.read(current.paths.mode)),
       });
-      const result = await reconcile(parsed.desired, current);
+      const result = await reconcile(parsed.desired, current, { source: `ui:save:${parsed.kind}` });
       if (result.kind === "refused") {
         sendJson(res, 409, result);
         return;

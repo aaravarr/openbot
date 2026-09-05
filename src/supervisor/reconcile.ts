@@ -2,6 +2,7 @@ import {
   LOOPBACK,
   OPENBOT_MARKER,
   SERVICE_PORT,
+  type AbsPath,
   type DesiredState,
   type Snapshot,
 } from "../domain/types.ts";
@@ -10,6 +11,7 @@ import { peelOpengrokToStock, proveWrap, stripWrap, wrapHostSource } from "../ho
 import { observe, wrapFromSource, type SupervisorDeps } from "./observe.ts";
 import { compileCustomPlan, planToJson } from "./plan.ts";
 import { parseOwnedPid, writeTemp } from "./procs.ts";
+import { joinAbs } from "./paths.ts";
 import { reconcileExpose } from "./tunnel.ts";
 
 export type ReconcileError =
@@ -28,6 +30,8 @@ export type ReconcileResult =
 export type ReconcileOpts = {
   /** CLI install copies a new tree. Restart the owned loopback process so it loads that tree. */
   readonly reloadService?: boolean;
+  /** Who asked for this reconcile; recorded on every audit line. */
+  readonly source?: string;
 };
 
 export type SharedEnv = {
@@ -64,8 +68,55 @@ function sharedEnv(deps: SupervisorDeps): SharedEnv {
   };
 }
 
-function writeMode(deps: SupervisorDeps, kind: "official" | "custom"): void {
+export type AuditAction = "backup" | "mode" | "plan" | "wrap";
+
+type AuditEntry = {
+  readonly ts: string;
+  readonly action: AuditAction;
+  readonly from: string;
+  readonly to: string;
+  readonly source: string;
+};
+
+function auditPath(deps: SupervisorDeps): AbsPath {
+  return joinAbs(deps.paths.sandData, "openbot-audit.jsonl");
+}
+
+function fileState(deps: SupervisorDeps, path: AbsPath): string {
+  return deps.fs.read(path) === undefined ? "absent" : "present";
+}
+
+/**
+ * Best-effort audit trail for user-owned state (mode, plan, wrap, backup).
+ * An audit failure is swallowed: it must never break or block a reconcile.
+ */
+function appendAudit(
+  deps: SupervisorDeps,
+  opts: ReconcileOpts,
+  action: AuditAction,
+  from: string,
+  to: string,
+): void {
+  try {
+    const entry: AuditEntry = {
+      ts: new Date().toISOString(),
+      action,
+      from,
+      to,
+      source: opts.source ?? "unknown",
+    };
+    const path = auditPath(deps);
+    const existing = deps.fs.read(path);
+    deps.fs.write(path, `${existing ?? ""}${JSON.stringify(entry)}\n`, 0o644);
+  } catch {
+    /* audit is best-effort */
+  }
+}
+
+function writeMode(deps: SupervisorDeps, kind: "official" | "custom", opts: ReconcileOpts): void {
+  const from = deps.fs.read(deps.paths.mode)?.trim() ?? "absent";
   deps.fs.write(deps.paths.mode, `${kind}\n`, 0o644);
+  appendAudit(deps, opts, "mode", from, kind);
 }
 
 async function bounceHostIfNeeded(deps: SupervisorDeps, wrapBytesChanged: boolean): Promise<void> {
@@ -192,10 +243,11 @@ function sourceForMarkedWrap(source: string): string {
   return source;
 }
 
-function restoreOfficialHost(deps: SupervisorDeps, source: string): boolean {
+function restoreOfficialHost(deps: SupervisorDeps, source: string, opts: ReconcileOpts): boolean {
   const peeled = peelOpengrokToStock(source);
   if (peeled.kind === "stock" && peeled.source !== source) {
     deps.fs.write(deps.paths.hostMain, peeled.source, 0o644);
+    appendAudit(deps, opts, "wrap", wrapFromSource(source).kind, wrapFromSource(peeled.source).kind);
     return true;
   }
   if (!source.includes(OPENBOT_MARKER)) {
@@ -207,10 +259,15 @@ function restoreOfficialHost(deps: SupervisorDeps, source: string): boolean {
     return false;
   }
   deps.fs.write(deps.paths.hostMain, restored, 0o644);
+  appendAudit(deps, opts, "wrap", wrapFromSource(source).kind, wrapFromSource(restored).kind);
   return true;
 }
 
-function installCustomWrap(deps: SupervisorDeps, source: string): ReconcileResult | { changed: boolean } {
+function installCustomWrap(
+  deps: SupervisorDeps,
+  source: string,
+  opts: ReconcileOpts,
+): ReconcileResult | { changed: boolean } {
   if (source.includes(OPENBOT_MARKER)) {
     return { changed: false };
   }
@@ -222,7 +279,9 @@ function installCustomWrap(deps: SupervisorDeps, source: string): ReconcileResul
     return { changed: false };
   }
   deps.fs.mkdirp(deps.paths.sandData);
+  const backupBefore = fileState(deps, deps.paths.knownBackup);
   deps.fs.write(deps.paths.knownBackup, source, 0o644);
+  appendAudit(deps, opts, "backup", backupBefore, "present");
   // Node treats the last suffix as the module type. A name ending in
   // .openbot-check makes `node --check` fail on current Node.
   const tmp = writeTemp(deps.fs, deps.paths.sandData, "host-main.openbot-check.cjs", proof.source);
@@ -232,6 +291,7 @@ function installCustomWrap(deps: SupervisorDeps, source: string): ReconcileResul
     return { kind: "refused", error: { kind: "syntax-check-failed", stderr: check.stderr } };
   }
   deps.fs.write(deps.paths.hostMain, proof.source, 0o644);
+  appendAudit(deps, opts, "wrap", wrapFromSource(source).kind, wrapFromSource(proof.source).kind);
   return { changed: true };
 }
 
@@ -293,7 +353,7 @@ export async function reconcile(
   let wrapBytesChanged = false;
 
   if (desired.kind === "official") {
-    writeMode(deps, "official");
+    writeMode(deps, "official", opts);
     if (loggingEnabledFromDisk(deps)) {
       const toWrap = sourceForMarkedWrap(source);
       const census = censusHost(toWrap);
@@ -303,13 +363,13 @@ export async function reconcile(
           error: { kind: "census-refused", reason: `cannot wrap a ${census.kind} host` },
         };
       }
-      const wrapped = installCustomWrap(deps, toWrap);
+      const wrapped = installCustomWrap(deps, toWrap, opts);
       if ("kind" in wrapped) {
         return wrapped;
       }
       wrapBytesChanged = wrapped.changed || raw !== toWrap;
     } else {
-      wrapBytesChanged = restoreOfficialHost(deps, raw);
+      wrapBytesChanged = restoreOfficialHost(deps, raw, opts);
     }
     const service = await ensureService(deps, before.uiListen.kind, opts);
     if (service) {
@@ -326,13 +386,15 @@ export async function reconcile(
     };
   }
 
-  const wrapped = installCustomWrap(deps, source);
+  const wrapped = installCustomWrap(deps, source, opts);
   if ("kind" in wrapped) {
     return wrapped;
   }
   wrapBytesChanged = wrapped.changed || raw !== source;
-  writeMode(deps, "custom");
+  writeMode(deps, "custom", opts);
+  const planBefore = fileState(deps, deps.paths.plan);
   deps.fs.write(deps.paths.plan, planToJson(compileCustomPlan(desired)), 0o644);
+  appendAudit(deps, opts, "plan", planBefore, "present");
 
   const service = await ensureService(deps, before.uiListen.kind, opts);
   if (service) {

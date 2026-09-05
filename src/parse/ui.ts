@@ -442,12 +442,16 @@ export function parseUiProviderSave(
   paths: BoxPaths,
   catalog: Catalog = emptyCatalog(),
   opts: UiSaveOpts = {},
-): UiSave {
-  return applyUiCommand({
-    command: parseUiCommand(input),
-    catalog,
-    paths,
-    expose: opts.expose,
-    mode: opts.mode,
-  });
+): UiSave & { readonly kind: UiCommand["kind"] } {
+  const command = parseUiCommand(input);
+  return {
+    kind: command.kind,
+    ...applyUiCommand({
+      command,
+      catalog,
+      paths,
+      expose: opts.expose,
+      mode: opts.mode,
+    }),
+  };
 }

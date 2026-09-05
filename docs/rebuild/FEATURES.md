@@ -167,7 +167,7 @@ Snapshot = { wrap, hopListen, uiListen, host, alignment, tunnel }
 
 - `LogSettings`: `loggingEnabled` (default **false**), `logBodies` (false),
   `logBodiesOnError` (true), `logRetentionDays` (7; 1–365), `maxBodyCaptureBytes`
-  (65 536; 1 024–1 048 576), `maxRecords` (200; 1–10 000). Stored in `openbot-logs.json`;
+  (65 536; 1 024–1 048 576), `maxRecords` (2 000; 1–10 000). Stored in `openbot-logs.json`;
   saving prunes the log immediately.
 - `LogRecord`: `id, startedAt, completedAt, ok, status, latencyMs?, model?, providerId?,
   providerName?, inboundEndpoint?, upstreamEndpoint?` (query/credentials stripped)`, stream,

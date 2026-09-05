@@ -14,7 +14,7 @@ var DEFAULTS = {
   logBodiesOnError: true,
   logRetentionDays: 7,
   maxBodyCaptureBytes: 65536,
-  maxRecords: 200,
+  maxRecords: 2000,
 };
 
 function isRecord(value) {

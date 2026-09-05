@@ -188,7 +188,7 @@ test("missing settings file uses defaults with logging off", () => {
     assert.equal(settings.logBodiesOnError, true);
     assert.equal(settings.logRetentionDays, 7);
     assert.equal(settings.maxBodyCaptureBytes, 65536);
-    assert.equal(settings.maxRecords, 200);
+    assert.equal(settings.maxRecords, 2000);
     assert.equal(existsSync(path.join(dir, "openbot-logs.json")), false);
   });
 });

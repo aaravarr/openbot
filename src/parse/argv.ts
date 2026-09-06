@@ -16,13 +16,14 @@ import {
 import { parseModelId, parseModelSlug } from "../supervisor/plan.ts";
 import { boxPathsFrom, parseAbsPath, type BoxPaths } from "../supervisor/paths.ts";
 import { parseProviderId, parseSecretBytes } from "../supervisor/secrets.ts";
+import { clampIntervalMinutes, DEFAULT_GUARD_INTERVAL_MINUTES } from "../supervisor/guard-daemon.ts";
 
 export type CliCommand =
   | { readonly kind: "status" }
   | { readonly kind: "census-only" }
   | { readonly kind: "dry-run" }
   | { readonly kind: "official" }
-  | { readonly kind: "guard" }
+  | { readonly kind: "guard"; readonly action: "once" | "daemon" | "stop"; readonly intervalMinutes: number }
   | { readonly kind: "tunnel"; readonly action: "on" | "off" | "status" }
   | {
       readonly kind: "install";
@@ -81,6 +82,18 @@ export function parseExposeToken(raw: string | undefined): Expose | undefined {
   throw new Error("OpenBot: --tunnel is cloudflare or off");
 }
 
+/** `--interval` minutes for the guard daemon: default 5, clamped to 1-60. */
+export function clampGuardInterval(raw: string | undefined): number {
+  if (raw === undefined) {
+    return DEFAULT_GUARD_INTERVAL_MINUTES;
+  }
+  const value = Number(raw);
+  if (raw.trim() === "" || !Number.isFinite(value)) {
+    throw new Error("OpenBot: --interval needs a number of minutes");
+  }
+  return clampIntervalMinutes(value);
+}
+
 export function parseInstallCommand(input: {
   argv: readonly string[];
   env: NodeJS.ProcessEnv;
@@ -116,7 +129,14 @@ export function parseInstallCommand(input: {
     return { command: { kind: "status" }, paths, json };
   }
   if (argv.includes("guard")) {
-    return { command: { kind: "guard" }, paths, json };
+    const intervalMinutes = clampGuardInterval(takeFlag(argv, "--interval"));
+    if (hasFlag(argv, "--stop")) {
+      return { command: { kind: "guard", action: "stop", intervalMinutes }, paths, json };
+    }
+    if (hasFlag(argv, "--daemon")) {
+      return { command: { kind: "guard", action: "daemon", intervalMinutes }, paths, json };
+    }
+    return { command: { kind: "guard", action: "once", intervalMinutes }, paths, json };
   }
   const tunnelAt = argv.indexOf("tunnel");
   if (tunnelAt >= 0) {

@@ -11,6 +11,7 @@ import {
 import { observe } from "./supervisor/observe.ts";
 import { dryRunWrap, reconcile } from "./supervisor/reconcile.ts";
 import { guardCustom } from "./supervisor/guard.ts";
+import { runGuardDaemon, stopGuardDaemon } from "./supervisor/guard-daemon.ts";
 import { nodeFs, nodeProcs } from "./supervisor/procs.ts";
 import { loadSecrets, parseProviderId, saveSecrets, upsertSecret } from "./supervisor/secrets.ts";
 import { catalogFromPlanJson } from "./supervisor/plan.ts";
@@ -144,6 +145,32 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (parsed.command.kind === "guard") {
+    if (parsed.command.action === "stop") {
+      const stopped = stopGuardDaemon(deps);
+      console.log(stopped ? "OpenBot: guard daemon stopped." : "OpenBot: guard daemon is not running.");
+      return 0;
+    }
+    if (parsed.command.action === "daemon") {
+      const signal = new AbortController();
+      const onSignal = (): void => {
+        signal.abort();
+      };
+      process.once("SIGTERM", onSignal);
+      process.once("SIGINT", onSignal);
+      try {
+        const outcome = await runGuardDaemon(deps, {
+          intervalMinutes: parsed.command.intervalMinutes,
+          signal: signal.signal,
+        });
+        if (outcome.kind === "already-running") {
+          console.error(`OpenBot: guard daemon already running (pid ${outcome.pid}).`);
+        }
+        return 0;
+      } finally {
+        process.removeListener("SIGTERM", onSignal);
+        process.removeListener("SIGINT", onSignal);
+      }
+    }
     const result = await guardCustom(deps);
     console.log(JSON.stringify(result, null, 2));
     return result.ok ? 0 : 1;

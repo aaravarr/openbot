@@ -68,7 +68,7 @@ function sharedEnv(deps: SupervisorDeps): SharedEnv {
   };
 }
 
-export type AuditAction = "backup" | "mode" | "plan" | "wrap";
+export type AuditAction = "backup" | "mode" | "plan" | "wrap" | "guard";
 
 type AuditEntry = {
   readonly ts: string;
@@ -111,6 +111,15 @@ function appendAudit(
   } catch {
     /* audit is best-effort */
   }
+}
+
+/**
+ * One summary audit line for a guard repair, through the same append-only
+ * mechanism as every reconcile write. `from` names what had drifted
+ * (for example `mode-drift+wrap-drift`); `to` is always `custom`.
+ */
+export function appendGuardAudit(deps: SupervisorDeps, opts: ReconcileOpts, from: string, to: string): void {
+  appendAudit(deps, opts, "guard", from, to);
 }
 
 function writeMode(deps: SupervisorDeps, kind: "official" | "custom", opts: ReconcileOpts): void {

@@ -189,4 +189,16 @@ if [[ "${OPENBOT_SKIP_NPM_INSTALL:-}" != "1" ]] && ! payload_vendor_compression_
   fi
 fi
 
-exec node --experimental-strip-types src/cli.ts install --host-main "$HOST" --sand-data "$DATA"
+node --experimental-strip-types src/cli.ts install --host-main "$HOST" --sand-data "$DATA"
+
+# Start the in-project guard daemon when the box is custom so drift heals
+# without an external scheduler. It never starts on official, never writes the
+# official mode token, and never reconciles an official desired state. A live
+# daemon makes a second start a no-op (pidfile lock), so re-running install
+# stays idempotent. nohup + detached stdio keep the daemon alive after this
+# script exits.
+if [[ "$(tr -d '[:space:]' <"$DATA/openbot-mode" 2>/dev/null)" == "custom" ]]; then
+  nohup node --experimental-strip-types src/cli.ts guard --daemon \
+    --host-main "$HOST" --sand-data "$DATA" </dev/null >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+fi

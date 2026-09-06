@@ -31,6 +31,8 @@ export type BoxPaths = {
   readonly tunnelLog: AbsPath;
   readonly tunnelCache: AbsPath;
   readonly tunnelBin: AbsPath;
+  readonly guardPid: AbsPath;
+  readonly guardLog: AbsPath;
 };
 
 export function parseAbsPath(raw: string): AbsPath {
@@ -80,6 +82,8 @@ export function boxPathsFrom(input: {
     tunnelLog: joinAbs(sandData, "openbot-tunnel.log"),
     tunnelCache: joinAbs(sandData, "openbot-tunnel.json"),
     tunnelBin: joinAbs(sandData, "bin/cloudflared"),
+    guardPid: joinAbs(sandData, "openbot-guard.pid"),
+    guardLog: joinAbs(sandData, "openbot-guard.log"),
   };
 }
 

@@ -204,23 +204,32 @@ export type LogStats = {
 
 export type LogFacetOption = { value: string; count: number };
  
-/** One aggregated usage row from GET /api/logs/usage (grouped by day and/or model). */
+/** One aggregated usage row from GET /api/logs/usage (`byDay` / `byModel` share this shape). */
 export type LogUsageRow = {
-  day?: string;
-  date?: string;
-  model?: string;
+  key: string;
+  requests: number;
+  ok: number;
+  fail: number;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
-  requestCount: number;
+  cachedTokens: number;
+  reasoningTokens: number;
   avgLatencyMs?: number;
-  approximate?: boolean;
+  avgFirstTokenMs?: number;
 };
- 
-/** Normalized usage payload; `approximate` renders as the “约” marker in the UI. */
+
+/** Usage payload from GET /api/logs/usage; `approximate` renders as the “约” marker in the UI. */
 export type LogUsage = {
-  rows: LogUsageRow[];
   approximate: boolean;
+  scanned: number;
+  total: number;
+  from: string;
+  to: string;
+  byDay: LogUsageRow[];
+  byModel: LogUsageRow[];
+  /** Legacy alias kept for loose compat with older payloads; prefer byDay/byModel. */
+  rows?: LogUsageRow[];
 };
 
 export type LogFacets = {

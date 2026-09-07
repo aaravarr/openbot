@@ -260,41 +260,76 @@ function numOrZero(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
  
-/** Backend shape is still settling, so accept a bare row array or { rows | items | data }. */
+function numOrUndefined(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Canonical usage row: `byDay` / `byModel` entries use `key` + `requests`.
+ * Older shapes used `day` / `date` / `model` + `requestCount`; accept those too.
+ */
+function normalizeUsageRow(row: unknown): LogUsageRow {
+  const r = (typeof row === "object" && row !== null ? row : {}) as Record<string, unknown>;
+  const promptTokens = numOrZero(r.promptTokens ?? r.prompt_tokens);
+  const completionTokens = numOrZero(r.completionTokens ?? r.completion_tokens);
+  const totalRaw = r.totalTokens ?? r.total_tokens;
+  const totalTokens =
+    typeof totalRaw === "number" && Number.isFinite(totalRaw) ? totalRaw : promptTokens + completionTokens;
+  const latencyRaw = r.avgLatencyMs ?? r.avgLatency ?? r.latencyMs;
+  const firstTokenRaw = r.avgFirstTokenMs ?? r.firstTokenMs ?? r.avgFirstToken ?? r.firstToken;
+  const keyRaw = r.key ?? r.day ?? r.date ?? r.model;
+  return {
+    key: typeof keyRaw === "string" ? keyRaw : "",
+    requests: numOrZero(r.requests ?? r.requestCount ?? r.count),
+    ok: numOrZero(r.ok),
+    fail: numOrZero(r.fail),
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    cachedTokens: numOrZero(r.cachedTokens ?? r.cached_tokens),
+    reasoningTokens: numOrZero(r.reasoningTokens ?? r.reasoning_tokens),
+    avgLatencyMs: numOrUndefined(latencyRaw),
+    avgFirstTokenMs: numOrUndefined(firstTokenRaw),
+  };
+}
+
+function parseUsageRows(value: unknown): LogUsageRow[] {
+  if (!Array.isArray(value)) return [];
+  return (value as unknown[]).map(normalizeUsageRow);
+}
+
+/**
+ * The real backend shape is `{ approximate, scanned, total, from, to, byDay, byModel }`
+ * and `byDay` / `byModel` win. Older shapes (a bare row array or
+ * `{ rows | items | data }`) are folded into `byDay` so the board never
+ * renders blank against a stale backend.
+ */
 function normalizeLogUsage(data: unknown): LogUsage {
   const obj = (typeof data === "object" && data !== null ? data : {}) as Record<string, unknown>;
-  const rawRows: unknown[] = Array.isArray(data)
-    ? data
-    : Array.isArray(obj.rows)
-      ? (obj.rows as unknown[])
-      : Array.isArray(obj.items)
-        ? (obj.items as unknown[])
-        : Array.isArray(obj.data)
-          ? (obj.data as unknown[])
-          : [];
-  const rows: LogUsageRow[] = rawRows.map((row) => {
-    const r = (typeof row === "object" && row !== null ? row : {}) as Record<string, unknown>;
-    const promptTokens = numOrZero(r.promptTokens ?? r.prompt_tokens);
-    const completionTokens = numOrZero(r.completionTokens ?? r.completion_tokens);
-    const totalRaw = r.totalTokens ?? r.total_tokens;
-    const totalTokens =
-      typeof totalRaw === "number" && Number.isFinite(totalRaw) ? totalRaw : promptTokens + completionTokens;
-    const latencyRaw = r.avgLatencyMs ?? r.avgLatency ?? r.latencyMs;
-    return {
-      day: typeof r.day === "string" ? (r.day as string) : undefined,
-      date: typeof r.date === "string" ? (r.date as string) : undefined,
-      model: typeof r.model === "string" ? (r.model as string) : undefined,
-      promptTokens,
-      completionTokens,
-      totalTokens,
-      requestCount: numOrZero(r.requestCount ?? r.requests ?? r.count),
-      avgLatencyMs: typeof latencyRaw === "number" && Number.isFinite(latencyRaw) ? latencyRaw : undefined,
-      approximate: r.approximate === true,
-    };
-  });
+  let byDay = parseUsageRows(obj.byDay);
+  let byModel = parseUsageRows(obj.byModel);
+  if (byDay.length === 0 && byModel.length === 0) {
+    const rawRows: unknown[] = Array.isArray(data)
+      ? data
+      : Array.isArray(obj.rows)
+        ? (obj.rows as unknown[])
+        : Array.isArray(obj.items)
+          ? (obj.items as unknown[])
+          : Array.isArray(obj.data)
+            ? (obj.data as unknown[])
+            : [];
+    byDay = rawRows.map(normalizeUsageRow);
+  }
+  const totalRequests = byDay.reduce((sum, row) => sum + row.requests, 0);
   return {
-    rows,
-    approximate: obj.approximate === true || rows.some((row) => row.approximate === true),
+    approximate: obj.approximate === true,
+    scanned: numOrZero(obj.scanned),
+    total: typeof obj.total === "number" && Number.isFinite(obj.total) ? obj.total : totalRequests,
+    from: typeof obj.from === "string" ? obj.from : "",
+    to: typeof obj.to === "string" ? obj.to : "",
+    byDay,
+    byModel,
+    rows: [...byDay],
   };
 }
 

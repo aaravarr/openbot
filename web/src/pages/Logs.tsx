@@ -919,35 +919,61 @@ type UsageGroup = {
   completionTokens: number;
   totalTokens: number;
   requestCount: number;
+  ok: number;
+  fail: number;
   avgLatencyMs?: number;
+  avgFirstTokenMs?: number;
 }
- 
-/** Aggregate raw usage rows by an arbitrary key; latency is request-weighted. */
+
+/** Aggregate usage rows by an arbitrary key; latencies are request-weighted. */
 function groupUsage(rows: LogUsageRow[], pick: (row: LogUsageRow) => string): UsageGroup[] {
-  const acc = new Map<string, UsageGroup & { latSum: number; latN: number }>();
+  const acc = new Map<string, UsageGroup & { latSum: number; latN: number; firstSum: number; firstN: number }>();
   for (const row of rows) {
     const key = pick(row).trim() || "未知";
     let g = acc.get(key);
     if (!g) {
-      g = { key, promptTokens: 0, completionTokens: 0, totalTokens: 0, requestCount: 0, latSum: 0, latN: 0 };
+      g = { key, promptTokens: 0, completionTokens: 0, totalTokens: 0, requestCount: 0, ok: 0, fail: 0, latSum: 0, latN: 0, firstSum: 0, firstN: 0 };
       acc.set(key, g);
     }
     g.promptTokens += row.promptTokens;
     g.completionTokens += row.completionTokens;
     g.totalTokens += row.totalTokens;
-    g.requestCount += row.requestCount;
+    g.requestCount += row.requests;
+    g.ok += row.ok;
+    g.fail += row.fail;
     if (row.avgLatencyMs !== undefined) {
-      const weight = Math.max(1, row.requestCount);
+      const weight = Math.max(1, row.requests);
       g.latSum += row.avgLatencyMs * weight;
       g.latN += weight;
     }
+    if (row.avgFirstTokenMs !== undefined) {
+      const weight = Math.max(1, row.requests);
+      g.firstSum += row.avgFirstTokenMs * weight;
+      g.firstN += weight;
+    }
   }
-  const groups = [...acc.values()].map(({ latSum, latN, ...rest }) => ({
+  const groups = [...acc.values()].map(({ latSum, latN, firstSum, firstN, ...rest }) => ({
     ...rest,
     avgLatencyMs: latN > 0 ? latSum / latN : undefined,
+    avgFirstTokenMs: firstN > 0 ? firstSum / firstN : undefined,
   }));
   groups.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
   return groups;
+}
+
+/** Backend `byDay` / `byModel` rows arrive pre-aggregated; no grouping needed. */
+function toUsageGroup(row: LogUsageRow): UsageGroup {
+  return {
+    key: row.key,
+    promptTokens: row.promptTokens,
+    completionTokens: row.completionTokens,
+    totalTokens: row.totalTokens,
+    requestCount: row.requests,
+    ok: row.ok,
+    fail: row.fail,
+    avgLatencyMs: row.avgLatencyMs,
+    avgFirstTokenMs: row.avgFirstTokenMs,
+  };
 }
  
 /** Approximate counts render with the “约” marker. */
@@ -973,13 +999,16 @@ function UsageTable({
   keyLabel,
   groups,
   approximate,
+  showOkFail,
 }: {
   caption: string;
   keyLabel: string;
   groups: UsageGroup[];
   approximate: boolean;
+  showOkFail?: boolean;
 }) {
   const maxTotal = groups.reduce((max, g) => Math.max(max, g.totalTokens), 0);
+  const showFirstToken = groups.some((g) => g.avgFirstTokenMs !== undefined);
   return (
     <div>
       <span className="section-label">{caption}</span>
@@ -989,10 +1018,13 @@ function UsageTable({
             <tr>
               <th>{keyLabel}</th>
               <th className="num">请求数</th>
+              {showOkFail ? <th className="num">成功</th> : null}
+              {showOkFail ? <th className="num">失败</th> : null}
               <th className="num">输入</th>
               <th className="num">输出</th>
               <th className="num">总计</th>
               <th className="num">平均延迟</th>
+              {showFirstToken ? <th className="num">首 token</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -1000,6 +1032,8 @@ function UsageTable({
               <tr key={g.key}>
                 <td className="mono">{g.key}</td>
                 <td className="num mono">{usageCount(g.requestCount, approximate)}</td>
+                {showOkFail ? <td className="num mono">{usageCount(g.ok, approximate)}</td> : null}
+                {showOkFail ? <td className="num mono">{usageCount(g.fail, approximate)}</td> : null}
                 <td className="num mono">{usageCount(g.promptTokens, approximate)}</td>
                 <td className="num mono">{usageCount(g.completionTokens, approximate)}</td>
                 <td className="num mono">
@@ -1007,6 +1041,7 @@ function UsageTable({
                   <UsageBar value={g.totalTokens} max={maxTotal} />
                 </td>
                 <td className="num mono">{formatLatency(g.avgLatencyMs)}</td>
+                {showFirstToken ? <td className="num mono">{formatLatency(g.avgFirstTokenMs)}</td> : null}
               </tr>
             ))}
           </tbody>
@@ -1027,9 +1062,13 @@ function UsageSection({
   error: string | null;
   onRetry: () => void;
 }) {
-  const rows = usage?.rows ?? [];
+  const dayRows = usage?.byDay ?? [];
+  const modelRows = usage?.byModel ?? [];
   const approximate = usage?.approximate === true;
- 
+
+  // byDay / byModel are two groupings of the same requests: totals count each
+  // request once (day grouping wins), and fall back to legacy rows if needed.
+  const totalSource = dayRows.length > 0 ? dayRows : modelRows.length > 0 ? modelRows : (usage?.rows ?? []);
   const totals = useMemo(() => {
     let promptTokens = 0;
     let completionTokens = 0;
@@ -1037,13 +1076,13 @@ function UsageSection({
     let requestCount = 0;
     let latSum = 0;
     let latN = 0;
-    for (const row of rows) {
+    for (const row of totalSource) {
       promptTokens += row.promptTokens;
       completionTokens += row.completionTokens;
       totalTokens += row.totalTokens;
-      requestCount += row.requestCount;
+      requestCount += row.requests;
       if (row.avgLatencyMs !== undefined) {
-        const weight = Math.max(1, row.requestCount);
+        const weight = Math.max(1, row.requests);
         latSum += row.avgLatencyMs * weight;
         latN += weight;
       }
@@ -1055,28 +1094,36 @@ function UsageSection({
       requestCount,
       avgLatencyMs: latN > 0 ? latSum / latN : undefined,
     };
-  }, [rows]);
- 
-  const byDay = useMemo(() => groupUsage(rows, (row) => row.day ?? row.date ?? "未知"), [rows]);
-  const byModel = useMemo(() => groupUsage(rows, (row) => row.model ?? "未知"), [rows]);
- 
+  }, [totalSource]);
+
+  // The backend pre-aggregates both groupings; only regroup legacy fallbacks.
+  const legacyRows = usage?.rows ?? [];
+  const legacyByDay = useMemo(
+    () => (dayRows.length === 0 && legacyRows.length > 0 ? groupUsage(legacyRows, (row) => row.key || "未知") : []),
+    [dayRows.length, legacyRows],
+  );
+  const byDay = useMemo(() => dayRows.map(toUsageGroup), [dayRows]);
+  const byModel = useMemo(() => modelRows.map(toUsageGroup), [modelRows]);
+  const dayGroups = byDay.length > 0 ? byDay : legacyByDay;
+  const isEmpty = dayGroups.length === 0 && byModel.length === 0;
+
   return (
     <section className="card" aria-label="Token usage">
       <div className="card__head logs-toolbar">
-        <span className="card__label">Usage</span>
+        <span className="card__label">Usage{approximate ? " 约" : ""}</span>
         <span className="mono" style={{ fontSize: 12, color: "var(--muted)" }}>
-          按天 / 按模型聚合
+          按天 / 按模型聚合{approximate ? "（约）" : ""}
         </span>
         <span className="logs-toolbar__spacer" />
         <IconButton label="Refresh usage" icon={RefreshCw} onClick={onRetry} />
       </div>
-      {loading && rows.length === 0 ? (
+      {loading && isEmpty ? (
         <div className="card__body stack" style={{ gap: 8 }}>
           <div className="skel skel--line" style={{ width: "60%" }} />
           <div className="skel skel--line" style={{ width: "85%" }} />
           <div className="skel skel--block" />
         </div>
-      ) : error && rows.length === 0 ? (
+      ) : error && isEmpty ? (
         <div className="card__body stack" style={{ gap: 12 }}>
           <div className="notice notice--warn">
             <span className="text">用量统计暂不可用（{error}），日志列表不受影响。</span>
@@ -1087,7 +1134,7 @@ function UsageSection({
             </Button>
           </div>
         </div>
-      ) : rows.length === 0 ? (
+      ) : isEmpty ? (
         <div className="card__body">
           <EmptyState icon={ScrollText} title="暂无用量数据" body="产生请求后，这里会按天和按模型汇总 token 用量。" />
         </div>
@@ -1100,8 +1147,8 @@ function UsageSection({
             <div className="token-stat"><div className="k">总计</div><div className="v">{usageCount(totals.totalTokens, approximate)}</div></div>
             <div className="token-stat"><div className="k">平均延迟</div><div className="v">{formatLatency(totals.avgLatencyMs)}</div></div>
           </div>
-          <UsageTable caption="按天" keyLabel="日期" groups={byDay} approximate={approximate} />
-          <UsageTable caption="按模型" keyLabel="模型" groups={byModel} approximate={approximate} />
+          <UsageTable caption="按天" keyLabel="日期" groups={dayGroups} approximate={approximate} showOkFail />
+          <UsageTable caption="按模型" keyLabel="模型" groups={byModel} approximate={approximate} showOkFail />
           {approximate ? (
             <span style={{ fontSize: 12, color: "var(--muted)" }}>“约”表示该计数为近似值（后端采样或封顶计数）。</span>
           ) : null}

@@ -27,6 +27,34 @@ var UPSTREAM_429_RETRY = {
   budgetMs: 30000,
 };
 
+/** Retry policy for upstream 5xx and network-layer failures, while the
+ * response is still fully buffered (no client byte written yet). Small
+ * budget on purpose: the runtime adds its own bounded retries on top. */
+var UPSTREAM_5XX_RETRY = {
+  maxRetries: 2,
+  baseDelayMs: 500,
+  factor: 3,
+  maxDelayMs: 5000,
+  budgetMs: 10000,
+};
+
+function isRetryableUpstreamStatus(status) {
+  return status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+function isRetryableUpstreamError(err) {
+  if (!err) return false;
+  if (err instanceof Error && err.message === "openbot-hop: upstream timeout") return true;
+  var code = typeof err.code === "string" ? err.code : "";
+  if (code === "ECONNREFUSED") return true;
+  if (code === "ECONNRESET" || code === "ECONNABORTED" || code === "ETIMEDOUT") return true;
+  if (code === "EHOSTUNREACH" || code === "ENETUNREACH" || code === "EAI_AGAIN" || code === "EPIPE") return true;
+  var msg = typeof err.message === "string" ? err.message : "";
+  if (msg.indexOf("socket hang up") !== -1) return true;
+  if (msg.indexOf("ECONNRESET") !== -1 || msg.indexOf("ETIMEDOUT") !== -1) return true;
+  return false;
+}
+
 function headerValue(headers, name) {
   if (!headers) return "";
   var lower = name.toLowerCase();
@@ -54,17 +82,29 @@ function parseRetryAfterMs(headers, nowMs) {
 }
 
 function exponentialBackoffMs(attemptIndex) {
-  var exp = UPSTREAM_429_RETRY.baseDelayMs * Math.pow(UPSTREAM_429_RETRY.factor, attemptIndex);
-  var capped = Math.min(UPSTREAM_429_RETRY.maxDelayMs, exp);
+  var policy = arguments.length > 1 && arguments[1] ? arguments[1] : UPSTREAM_429_RETRY;
+  var exp = policy.baseDelayMs * Math.pow(policy.factor, attemptIndex);
+  var capped = Math.min(policy.maxDelayMs, exp);
   var jittered = capped * (0.5 + Math.random() * 0.5);
   return Math.max(0, Math.floor(jittered));
 }
 
 function delayBefore429RetryMs(attemptIndex, headers, nowMs, budgetStartedMs) {
   var retryAfter = parseRetryAfterMs(headers, nowMs);
-  var delay = retryAfter === null ? exponentialBackoffMs(attemptIndex) : retryAfter;
+  var policy = UPSTREAM_429_RETRY;
+  var delay = retryAfter === null ? exponentialBackoffMs(attemptIndex, policy) : retryAfter;
   var elapsed = Math.max(0, (Number.isFinite(nowMs) ? nowMs : Date.now()) - budgetStartedMs);
-  var remaining = UPSTREAM_429_RETRY.budgetMs - elapsed;
+  var remaining = policy.budgetMs - elapsed;
+  if (remaining <= 0) return null;
+  return Math.min(delay, remaining);
+}
+
+function delayBefore5xxRetryMs(attemptIndex, headers, nowMs, budgetStartedMs) {
+  var retryAfter = parseRetryAfterMs(headers, nowMs);
+  var policy = UPSTREAM_5XX_RETRY;
+  var delay = retryAfter === null ? exponentialBackoffMs(attemptIndex, policy) : retryAfter;
+  var elapsed = Math.max(0, (Number.isFinite(nowMs) ? nowMs : Date.now()) - budgetStartedMs);
+  var remaining = policy.budgetMs - elapsed;
   if (remaining <= 0) return null;
   return Math.min(delay, remaining);
 }
@@ -77,12 +117,45 @@ function sleepMs(ms) {
   });
 }
 
+/** Record how many upstream retries were spent on this attempt chain so the
+ * handler can surface it in the request log without changing the log API. */
+function tagHopRetries(err, attemptIndex) {
+  if (err && attemptIndex > 0) {
+    try {
+      err.hopRetries = attemptIndex;
+    } catch (ignored) {
+      /* frozen error objects just skip the annotation */
+    }
+  }
+  return err;
+}
+
 function canRetryUpstream429(status, attemptIndex, clientRes, budgetStartedMs, nowMs) {
   if (status !== 429) return false;
-  if (attemptIndex >= UPSTREAM_429_RETRY.maxRetries) return false;
+  var policy = UPSTREAM_429_RETRY;
+  if (attemptIndex >= policy.maxRetries) return false;
   if (clientRes && clientRes.headersSent) return false;
   var now = Number.isFinite(nowMs) ? nowMs : Date.now();
-  if (now - budgetStartedMs >= UPSTREAM_429_RETRY.budgetMs) return false;
+  if (now - budgetStartedMs >= policy.budgetMs) return false;
+  return true;
+}
+
+function canRetryUpstreamStatus(status, attemptIndex, clientRes, budgetStartedMs, nowMs) {
+  if (!isRetryableUpstreamStatus(status)) return false;
+  var policy = UPSTREAM_5XX_RETRY;
+  if (attemptIndex >= policy.maxRetries) return false;
+  if (clientRes && clientRes.headersSent) return false;
+  var now = Number.isFinite(nowMs) ? nowMs : Date.now();
+  if (now - budgetStartedMs >= policy.budgetMs) return false;
+  return true;
+}
+
+function canRetryUpstreamError(err, attemptIndex, clientRes, budgetStartedMs, nowMs) {
+  if (!isRetryableUpstreamError(err)) return false;
+  if (attemptIndex >= UPSTREAM_5XX_RETRY.maxRetries) return false;
+  if (clientRes && clientRes.headersSent) return false;
+  var now = Number.isFinite(nowMs) ? nowMs : Date.now();
+  if (now - budgetStartedMs >= UPSTREAM_5XX_RETRY.budgetMs) return false;
   return true;
 }
 
@@ -365,20 +438,71 @@ function postUpstreamOnce(urlStr, body, key, inbound) {
   });
 }
 
+/** Same shape as postUpstreamOnce, but a network-layer failure or a retryable
+ * status never rejects: it resolves with an attemptFailed marker so the retry
+ * loop can count it without aborting the chain. */
+async function postUpstreamAttempt(urlStr, body, key, inbound) {
+  try {
+    var out = await postUpstreamOnce(urlStr, body, key, inbound);
+    if (isRetryableUpstreamStatus(out.status)) {
+      return { attemptFailed: true, status: out.status, headers: out.headers, raw: out.raw };
+    }
+    return out;
+  } catch (err) {
+    if (!isRetryableUpstreamError(err)) throw err;
+    return { attemptFailed: true, status: 0, headers: {}, raw: Buffer.alloc(0), attemptError: err };
+  }
+}
+
 async function postUpstream(urlStr, body, key, inbound) {
   var budgetStartedMs = Date.now();
   var attemptIndex = 0;
+  var retriesSpent = 0;
   while (true) {
-    var out = await postUpstreamOnce(urlStr, body, key, inbound);
-    if (!canRetryUpstream429(out.status, attemptIndex, null, budgetStartedMs)) {
-      return out;
+    var out;
+    try {
+      out = await postUpstreamOnce(urlStr, body, key, inbound);
+    } catch (err) {
+      if (!canRetryUpstreamError(err, attemptIndex, null, budgetStartedMs)) {
+        throw tagHopRetries(err, attemptIndex);
+      }
+      out = { attemptFailed: true, status: 0, headers: {}, raw: Buffer.alloc(0), attemptError: err };
     }
-    var nowMs = Date.now();
-    var delay = delayBefore429RetryMs(attemptIndex, out.headers, nowMs, budgetStartedMs);
-    if (delay === null) return out;
-    await sleepMs(delay);
+    if (!out.attemptFailed) {
+      var retryKind = classifyUpstreamRetry(out.status, attemptIndex, null, budgetStartedMs);
+      if (retryKind === null) {
+        if (retriesSpent > 0) out.hopRetries = retriesSpent;
+        return out;
+      }
+      var delay = retryDelayMs(retryKind, attemptIndex, out.headers, Date.now(), budgetStartedMs);
+      if (delay === null) {
+        if (retriesSpent > 0) out.hopRetries = retriesSpent;
+        return out;
+      }
+      await sleepMs(delay);
+      attemptIndex += 1;
+      retriesSpent = attemptIndex;
+      continue;
+    }
+    var delayErr = delayBefore5xxRetryMs(attemptIndex, out.headers, Date.now(), budgetStartedMs);
+    if (delayErr === null) throw tagHopRetries(out.attemptError, attemptIndex);
+    await sleepMs(delayErr);
     attemptIndex += 1;
+    retriesSpent = attemptIndex;
   }
+}
+
+function classifyUpstreamRetry(status, attemptIndex, clientRes, budgetStartedMs, nowMs) {
+  if (canRetryUpstream429(status, attemptIndex, clientRes, budgetStartedMs, nowMs)) return "429";
+  if (isRetryableUpstreamStatus(status) && canRetryUpstreamStatus(status, attemptIndex, clientRes, budgetStartedMs, nowMs)) {
+    return "5xx";
+  }
+  return null;
+}
+
+function retryDelayMs(kind, attemptIndex, headers, nowMs, budgetStartedMs) {
+  if (kind === "429") return delayBefore429RetryMs(attemptIndex, headers, nowMs, budgetStartedMs);
+  return delayBefore5xxRetryMs(attemptIndex, headers, nowMs, budgetStartedMs);
 }
 
 function pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeReq) {
@@ -405,9 +529,10 @@ function pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeR
     req.on("error", fail);
     req.on("response", function (res) {
       var status = res.statusCode || 502;
-      // 429 is decided by status before any client byte. Collect and return
-      // without writeHead so the caller can retry while headersSent is false.
-      if (status === 429) {
+      // Retryable statuses are decided before any client byte. Collect and
+      // return without writeHead so the caller can retry while headersSent
+      // is false.
+      if (status === 429 || isRetryableUpstreamStatus(status)) {
         collectResponse(res).then(ok, fail);
         return;
       }
@@ -443,42 +568,53 @@ async function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
   var budgetStartedMs = Date.now();
   var attemptIndex = 0;
   var activeReq = { current: null };
+  var retriesSpent = 0;
   function onClientClose() {
     if (!clientRes.writableEnded && activeReq.current) activeReq.current.destroy();
   }
   clientRes.on("close", onClientClose);
   try {
     while (true) {
-      var out = await pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeReq);
-      if (out.forwarded) return out;
-      if (!canRetryUpstream429(out.status, attemptIndex, clientRes, budgetStartedMs)) {
+      var out;
+      try {
+        out = await pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeReq);
+      } catch (err) {
+        if (!canRetryUpstreamError(err, attemptIndex, clientRes, budgetStartedMs)) {
+          throw tagHopRetries(err, attemptIndex);
+        }
+        out = { attemptFailed: true, status: 0, headers: {}, raw: Buffer.alloc(0), attemptError: err };
+      }
+      if (out.attemptFailed) {
+        var delay = delayBefore5xxRetryMs(attemptIndex, out.headers, Date.now(), budgetStartedMs);
+        if (delay === null) throw tagHopRetries(out.attemptError, attemptIndex);
+        await sleepMs(delay);
+        attemptIndex += 1;
+        retriesSpent = attemptIndex;
+        continue;
+      }
+      if (out.forwarded) {
+        if (retriesSpent > 0) out.hopRetries = retriesSpent;
+        return out;
+      }
+      var retryKind = classifyUpstreamRetry(out.status, attemptIndex, clientRes, budgetStartedMs);
+      if (retryKind === null) {
+        if (retriesSpent > 0) out.hopRetries = retriesSpent;
         if (!clientRes.headersSent) {
-          send(
-            clientRes,
-            out.status,
-            out.raw,
-            headerContentType(out.headers) || "application/json",
-            retryAfterForwardHeaders(out.headers),
-          );
+          send(clientRes, out.status, out.raw, headerContentType(out.headers) || "application/json", retryAfterForwardHeaders(out.headers));
         }
         return out;
       }
-      var nowMs = Date.now();
-      var delay = delayBefore429RetryMs(attemptIndex, out.headers, nowMs, budgetStartedMs);
+      var delay = retryDelayMs(retryKind, attemptIndex, out.headers, Date.now(), budgetStartedMs);
       if (delay === null) {
+        if (retriesSpent > 0) out.hopRetries = retriesSpent;
         if (!clientRes.headersSent) {
-          send(
-            clientRes,
-            out.status,
-            out.raw,
-            headerContentType(out.headers) || "application/json",
-            retryAfterForwardHeaders(out.headers),
-          );
+          send(clientRes, out.status, out.raw, headerContentType(out.headers) || "application/json", retryAfterForwardHeaders(out.headers));
         }
         return out;
       }
       await sleepMs(delay);
       attemptIndex += 1;
+      retriesSpent = attemptIndex;
     }
   } finally {
     clientRes.removeListener("close", onClientClose);
@@ -537,6 +673,15 @@ function recordHopSafe(entry) {
 function errorMessage(err, fallback) {
   if (err && typeof err.message === "string" && err.message.trim()) return err.message;
   return fallback || "hop failed";
+}
+
+function errorMessageWithRetries(err, fallback) {
+  var base = errorMessage(err, fallback);
+  var count = err && typeof err.hopRetries === "number" ? err.hopRetries : 0;
+  if (count > 0) {
+    return base + " [upstream-retries=" + String(count) + "]";
+  }
+  return base;
 }
 
 async function handleCompletions(req, res) {
@@ -643,12 +788,14 @@ async function handleCompletions(req, res) {
       out = await pipeOrBufferUpstream(upstream, body, key, res, req);
       record({
         status: out.status,
+        error: retrySuffix(out),
         responseRaw: Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw),
       });
     } else {
       out = await postUpstream(upstream, body, key, req);
       record({
         status: out.status,
+        error: retrySuffix(out),
         responseRaw: Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw),
       });
       send(
@@ -663,13 +810,18 @@ async function handleCompletions(req, res) {
     var failed = { error: { message: "hop failed" } };
     record({
       status: 502,
-      error: errorMessage(err, "hop failed"),
+      error: errorMessageWithRetries(err, "hop failed"),
       responseBody: failed,
     });
     if (!res.headersSent) {
       sendJson(res, 502, failed);
     }
   }
+}
+
+function retrySuffix(out) {
+  var count = out && typeof out.hopRetries === "number" ? out.hopRetries : 0;
+  return count > 0 ? "upstream-retries=" + String(count) : undefined;
 }
 
 async function handleHopRequest(req, res) {
@@ -691,7 +843,7 @@ async function handleHopRequest(req, res) {
         completedAt: new Date().toISOString(),
         inboundEndpoint: "/v1/chat/completions",
         status: 502,
-        error: errorMessage(err, "hop failed"),
+        error: errorMessageWithRetries(err, "hop failed"),
         responseBody: { error: { message: "hop failed" } },
       });
     }
@@ -712,6 +864,14 @@ exports.applyMaxTokens = applyMaxTokens;
 exports.outboundEnvelopeBytes = outboundEnvelopeBytes;
 exports.looksLikeEventStream = looksLikeEventStream;
 exports.UPSTREAM_429_RETRY = UPSTREAM_429_RETRY;
+exports.UPSTREAM_5XX_RETRY = UPSTREAM_5XX_RETRY;
 exports.parseRetryAfterMs = parseRetryAfterMs;
 exports.delayBefore429RetryMs = delayBefore429RetryMs;
+exports.delayBefore5xxRetryMs = delayBefore5xxRetryMs;
 exports.canRetryUpstream429 = canRetryUpstream429;
+exports.canRetryUpstreamStatus = canRetryUpstreamStatus;
+exports.canRetryUpstreamError = canRetryUpstreamError;
+exports.isRetryableUpstreamStatus = isRetryableUpstreamStatus;
+exports.isRetryableUpstreamError = isRetryableUpstreamError;
+exports.classifyUpstreamRetry = classifyUpstreamRetry;
+exports.retryDelayMs = retryDelayMs;

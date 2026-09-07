@@ -22,6 +22,11 @@ var HOP_HOST = process.env.OPENBOT_HOP_HOST || "127.0.0.1";
 var HOP_PORT = Number(process.env.OPENBOT_HOP_PORT || "9280");
 var HIGH_AGENT_MAX_TOKENS = 65536;
 var MAX_SAFE_STRING = 32768;
+var HOP_RETRY = {
+  maxRetries: 2,
+  baseDelayMs: 1000,
+  factor: 3,
+};
 
 var mapToolCalls = openaiStream.mapToolCalls;
 var mapFinishReason = openaiStream.mapFinishReason;
@@ -277,6 +282,54 @@ function hopRequest(body) {
   });
 }
 
+function hopRetryDelayMs(attemptIndex) {
+  var exp = HOP_RETRY.baseDelayMs * Math.pow(HOP_RETRY.factor, attemptIndex);
+  return Math.min(5000, Math.max(0, exp));
+}
+
+function isRetryableHopStatus(status) {
+  return status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+function isRetryableHopError(err) {
+  if (!err) return false;
+  var code = typeof err.code === "string" ? err.code : "";
+  if (code === "ECONNREFUSED" || code === "ECONNRESET" || code === "ETIMEDOUT") return true;
+  if (code === "ECONNABORTED" || code === "EHOSTUNREACH" || code === "ENETUNREACH") return true;
+  var msg = typeof err.message === "string" ? err.message : "";
+  return msg.indexOf("socket hang up") !== -1 || msg.indexOf("ECONNRESET") !== -1 || msg.indexOf("ETIMEDOUT") !== -1;
+}
+
+/** Bounded retry around hopRequest. Callers must only call this before any
+ * byte of the response has been consumed: the promise resolves with the
+ * first response that has a usable (2xx) status, and 5xx statuses are read
+ * and discarded here so the next attempt can start cleanly. */
+async function hopRequestWithRetry(body) {
+  var attemptIndex = 0;
+  while (true) {
+    var res;
+    try {
+      res = await hopRequest(body);
+    } catch (err) {
+      if (attemptIndex >= HOP_RETRY.maxRetries || !isRetryableHopError(err)) {
+        throw err;
+      }
+      await new Promise(function (resolve) { setTimeout(resolve, hopRetryDelayMs(attemptIndex)); });
+      attemptIndex += 1;
+      continue;
+    }
+    var status = res.statusCode || 0;
+    if (status >= 200 && status < 300) {
+      return res;
+    }
+    if (attemptIndex >= HOP_RETRY.maxRetries || !isRetryableHopStatus(status)) {
+      return res;
+    }
+    await new Promise(function (resolve) { res.resume(); setTimeout(resolve, hopRetryDelayMs(attemptIndex)); });
+    attemptIndex += 1;
+  }
+}
+
 function swallow(p) {
   Promise.resolve(p).catch(function () {});
   return p;
@@ -361,7 +414,7 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
       if (openaiTools) body.tools = openaiTools;
       var voiceTool = findVoiceTool(tools) || findVoiceTool(openaiTools);
       log("stream messages=" + body.messages.length + " tools=" + ((body.tools && body.tools.length) || 0));
-      var res = await hopRequest(body);
+      var res = await hopRequestWithRetry(body);
       var status = res.statusCode || 0;
       if (status < 200 || status >= 300) {
         var raw = await readAll(res);
@@ -647,5 +700,10 @@ module.exports = {
   lookupMaxOutput: lookupMaxOutput,
   toOpenAIMessages: toOpenAIMessages,
   hopFullStream: hopFullStream,
+  hopRequest: hopRequest,
+  hopRequestWithRetry: hopRequestWithRetry,
+  isRetryableHopStatus: isRetryableHopStatus,
+  isRetryableHopError: isRetryableHopError,
+  hopRetryDelayMs: hopRetryDelayMs,
   HIGH_AGENT_MAX_TOKENS: HIGH_AGENT_MAX_TOKENS,
 };

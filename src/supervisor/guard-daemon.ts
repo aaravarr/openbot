@@ -2,6 +2,7 @@ import { guardCustom, type GuardResult } from "./guard.ts";
 import { type SupervisorDeps } from "./observe.ts";
 import { parseOwnedPid } from "./procs.ts";
 import { appendGuardAudit } from "./reconcile.ts";
+import { DEFAULT_HOP_FAILURE_THRESHOLD, runHopHealthCheck } from "./hop-health.ts";
 
 /**
  * The scheduled custom-state guard. It reuses guardCustom for every check and
@@ -23,6 +24,8 @@ export type GuardLogRow = {
   readonly ok: boolean;
   readonly modeRepaired: boolean;
   readonly wrapRepaired: boolean;
+  readonly hopStatus?: string | undefined;
+  readonly hopFailures?: number | undefined;
 };
 
 export type GuardDaemonOutcome =
@@ -36,6 +39,9 @@ export type GuardDaemonOpts = {
   /** Overridable for tests. Defaults to guardCustom with the daemon source. */
   readonly runOnce?: (deps: SupervisorDeps) => Promise<GuardResult>;
   readonly stderr?: (line: string) => void;
+  /** Probe-and-restart patrol for the runtime's hop address. Default on. */
+  readonly hopHealth?: boolean;
+  readonly hopFailureThreshold?: number;
 };
 
 export type GuardTickIo = {
@@ -92,7 +98,7 @@ function releaseOwnPidfile(deps: SupervisorDeps): void {
 
 export function appendGuardLogLine(
   deps: SupervisorDeps,
-  row: { detail: string; ok: boolean; modeRepaired: boolean; wrapRepaired: boolean },
+  row: { detail: string; ok: boolean; modeRepaired: boolean; wrapRepaired: boolean; hopStatus?: string | undefined; hopFailures?: number | undefined },
 ): void {
   try {
     const entry: GuardLogRow = { ts: new Date().toISOString(), ...row };
@@ -104,8 +110,18 @@ export function appendGuardLogLine(
   }
 }
 
-/** One loop pass: check, repair through guardCustom, record, keep going. */
+/** One loop pass: check, repair through guardCustom, record, keep going.
+ * Kept for the CLI one-shot path: no hop patrol, log rows unchanged. */
 export async function runGuardTick(deps: SupervisorDeps, io: GuardTickIo): Promise<void> {
+  await runGuardTickWithHopHealth(deps, { ...io, hopHealth: false });
+}
+
+/** All tick work: custom-state repair plus the hop patrol, kept independent
+ * so one failing half cannot swallow the other. */
+export async function runGuardTickWithHopHealth(
+  deps: SupervisorDeps,
+  io: GuardTickIo & { hopHealth?: boolean | undefined; hopFailureThreshold?: number | undefined },
+): Promise<void> {
   let result: GuardResult;
   try {
     result = await io.runOnce(deps);
@@ -124,7 +140,28 @@ export async function runGuardTick(deps: SupervisorDeps, io: GuardTickIo): Promi
   if (result.detail === "refused" || result.detail === "no-custom-state") {
     io.stderr(`openbot-guard: ${result.detail}; retrying on the next tick`);
   }
-  appendGuardLogLine(deps, result);
+  let hopStatus: string | undefined;
+  let hopFailures: number | undefined;
+  if (io.hopHealth !== false) {
+    try {
+      const hop = await runHopHealthCheck(deps, {
+        failureThreshold: io.hopFailureThreshold ?? DEFAULT_HOP_FAILURE_THRESHOLD,
+        source: GUARD_DAEMON_SOURCE,
+      });
+      hopStatus = hop.status;
+      hopFailures = hop.failures;
+      if (hop.status === "restarted") {
+        io.stderr(`openbot-guard: hop was down (${hop.target.host}:${hop.target.port}); restarted as pid ${hop.pid}`);
+      } else if (hop.status === "degraded") {
+        io.stderr(`openbot-guard: hop probe failed ${hop.failures}x (${hop.target.host}:${hop.target.port})`);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      io.stderr(`openbot-guard: hop health failed: ${message}`);
+      hopStatus = "error";
+    }
+  }
+  appendGuardLogLine(deps, { ...result, hopStatus, hopFailures });
 }
 
 function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
@@ -161,7 +198,12 @@ export async function runGuardDaemon(deps: SupervisorDeps, opts: GuardDaemonOpts
   const signal = opts.signal;
   try {
     while (signal?.aborted !== true) {
-      await runGuardTick(deps, { runOnce, stderr });
+      await runGuardTickWithHopHealth(deps, {
+        runOnce,
+        stderr,
+        hopHealth: opts.hopHealth,
+        hopFailureThreshold: opts.hopFailureThreshold,
+      });
       // If the signal fired during the tick, sleep resolves immediately and
       // the while condition ends the loop without scheduling real work.
       await sleep(intervalMs, signal);

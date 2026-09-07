@@ -33,7 +33,7 @@ const REPAIRED_MODE = guardResult({ detail: "repaired", modeRepaired: true });
 const REFUSED = guardResult({ detail: "refused", ok: false, reconcile: { kind: "refused", error: { kind: "foreign-hop" } } });
 const NO_CUSTOM = guardResult({ detail: "no-custom-state", ok: false });
 
-type FakeProcs = ProcDeps & { stopped: number[]; live: Set<number> };
+type FakeProcs = ProcDeps & { stopped: number[]; live: Set<number>; hopPortOpen?: boolean };
 
 function memoryFs(): FsDeps & { files: Record<string, string> } {
   const files: Record<string, string> = {};
@@ -61,13 +61,17 @@ function memoryFs(): FsDeps & { files: Record<string, string> } {
   };
 }
 
-function fakeProcs(fs: ReturnType<typeof memoryFs>): FakeProcs {
+function fakeProcs(fs: ReturnType<typeof memoryFs>, hopPortOpen = false): FakeProcs {
   const live = new Set<number>();
   const stopped: number[] = [];
   return {
     live,
     stopped,
+    hopPortOpen,
     async port() {
+      if (String(arguments[1]) === "9280") {
+        return this.hopPortOpen === true;
+      }
       return false;
     },
     readPidFile(path) {
@@ -106,14 +110,14 @@ function fakeProcs(fs: ReturnType<typeof memoryFs>): FakeProcs {
   };
 }
 
-function setup() {
+function setup(hopPortOpen = false) {
   const paths: BoxPaths = boxPathsFrom({
     repoRoot: "/tmp/openbot-guard-repo",
     sandData: "/tmp/openbot-guard-data",
     hostMain: "/tmp/openbot-guard-host/host-main.cjs",
   });
   const fs = memoryFs();
-  const procs = fakeProcs(fs);
+  const procs = fakeProcs(fs, hopPortOpen);
   return { deps: { paths, fs, procs }, fs, procs, paths };
 }
 
@@ -195,6 +199,7 @@ test("daemon writes its pid and releases it on shutdown", async (t) => {
     intervalMinutes: DEFAULT_GUARD_INTERVAL_MINUTES,
     signal: controller.signal,
     runOnce: async () => HEALTHY,
+    hopHealth: false,
   });
   await flush();
   assert.equal(ctx.fs.read(ctx.paths.guardPid), `${process.pid}\n`);
@@ -215,6 +220,7 @@ test("repaired tick writes one audit line with the daemon source plus a guard lo
     signal: controller.signal,
     runOnce: async () => REPAIRED_BOTH,
     stderr: (line) => stderr.push(line),
+    hopHealth: false,
   });
   await flush();
   controller.abort();
@@ -251,6 +257,7 @@ test("refused and no-custom-state ticks log to stderr and keep looping", async (
     signal: controller.signal,
     runOnce,
     stderr: (line) => stderr.push(line),
+    hopHealth: false,
   });
   await flush();
   t.mock.timers.tick(5 * 60_000);
@@ -287,6 +294,7 @@ test("a failing tick is logged and the loop keeps going", async (t) => {
       return HEALTHY;
     },
     stderr: (line) => stderr.push(line),
+    hopHealth: false,
   });
   await flush();
   t.mock.timers.tick(5 * 60_000);
@@ -353,6 +361,7 @@ test("a stale pidfile from a dead process does not block a start", async (t) => 
     intervalMinutes: DEFAULT_GUARD_INTERVAL_MINUTES,
     signal: controller.signal,
     runOnce,
+    hopHealth: false,
   });
   await flush();
   assert.equal(counter.calls, 1);
@@ -383,4 +392,41 @@ test("guard parses daemon, stop, and interval flags", () => {
 test("guard rejects a non-numeric interval", () => {
   assert.throws(() => parseInstallCommand({ argv: ["guard", "--daemon", "--interval", "soon"], env: {}, repoRoot: "/tmp/openbot" }), /--interval/);
   assert.throws(() => parseInstallCommand({ argv: ["guard", "--interval", ""], env: {}, repoRoot: "/tmp/openbot" }), /--interval/);
+});
+
+test("daemon ticks probe hop by default and record the patrol in the guard log", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const ctx = setup(true);
+  const controller = new AbortController();
+  const run = runGuardDaemon(ctx.deps, {
+    intervalMinutes: DEFAULT_GUARD_INTERVAL_MINUTES,
+    signal: controller.signal,
+    runOnce: async () => HEALTHY,
+  });
+  await flush();
+  controller.abort();
+  await run;
+  const rows = guardLogRows(ctx);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.hopStatus, "healthy");
+  assert.equal(rows[0]?.hopFailures, 0);
+});
+
+test("disabling the hop patrol keeps the tick hop-free", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const ctx = setup();
+  const controller = new AbortController();
+  const run = runGuardDaemon(ctx.deps, {
+    intervalMinutes: DEFAULT_GUARD_INTERVAL_MINUTES,
+    signal: controller.signal,
+    runOnce: async () => HEALTHY,
+    hopHealth: false,
+  });
+  await flush();
+  controller.abort();
+  await run;
+  const rows = guardLogRows(ctx);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.hopStatus, undefined);
+  assert.equal(rows[0]?.hopFailures, undefined);
 });

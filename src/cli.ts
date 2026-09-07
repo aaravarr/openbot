@@ -161,6 +161,10 @@ async function main(argv: string[]): Promise<number> {
         const outcome = await runGuardDaemon(deps, {
           intervalMinutes: parsed.command.intervalMinutes,
           signal: signal.signal,
+          hopHealth: process.env.OPENBOT_GUARD_HOP_HEALTH !== "0",
+          ...(Number(process.env.OPENBOT_GUARD_HOP_FAILURE_THRESHOLD || "2")
+            ? { hopFailureThreshold: Number(process.env.OPENBOT_GUARD_HOP_FAILURE_THRESHOLD) }
+            : {}),
         });
         if (outcome.kind === "already-running") {
           console.error(`OpenBot: guard daemon already running (pid ${outcome.pid}).`);

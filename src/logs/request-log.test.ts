@@ -311,7 +311,7 @@ test("logBodiesOnError keeps a body on error only", () => {
   });
 });
 
-test("prune keeps only maxRecords newest rows and deletes orphan bodies", () => {
+test("prune is retention-only: maxRecords no longer caps rows or bodies", () => {
   withSand((dir) => {
     log.saveSettings({ loggingEnabled: true, maxRecords: 3, logBodies: true, logBodiesOnError: true });
     const origin = Date.now();
@@ -326,13 +326,19 @@ test("prune keeps only maxRecords newest rows and deletes orphan bodies", () => 
       });
     }
     const listed = log.listRequests();
-    assert.equal(listed.total, 3);
+    assert.equal(listed.total, 5);
     assert.deepEqual(
       listed.items.map((row) => row.model),
-      ["m5", "m4", "m3"],
+      ["m5", "m4", "m3", "m2", "m1"],
     );
     const bodies = readdirSync(path.join(dir, "openbot-request-bodies")).sort();
-    assert.deepEqual(bodies, ["req-prune-03.json", "req-prune-04.json", "req-prune-05.json"]);
+    assert.deepEqual(bodies, [
+      "req-prune-01.json",
+      "req-prune-02.json",
+      "req-prune-03.json",
+      "req-prune-04.json",
+      "req-prune-05.json",
+    ]);
   });
 });
 

@@ -165,6 +165,110 @@ function retryAfterForwardHeaders(upstreamHeaders) {
   return { "Retry-After": raw };
 }
 
+// ---- Request source metadata (task: record every clue the hop sees). ----
+//
+// The OpenAI-compatible hop protocol carries no bot / group-chat identity,
+// so the best available clues are the inbound headers (User-Agent, x-*
+// SDK headers, forwarding headers) plus body-level conversation keys some
+// callers attach. Everything here is best-effort and redaction-safe (no
+// secrets: Authorization / api keys are never copied).
+function detectClientName(userAgent, headers) {
+  var ua = String(userAgent || "").toLowerCase();
+  if (ua.indexOf("claude-cli") !== -1 || ua.indexOf("claude-code") !== -1) return "Claude Code";
+  if (ua.indexOf("cursor") !== -1) return "Cursor";
+  if (ua.indexOf("opencode") !== -1) return "OpenCode";
+  if (ua.indexOf("cline") !== -1 || ua.indexOf("vscode") !== -1) return "Cline";
+  if (ua.indexOf("aider") !== -1) return "Aider";
+  if (ua.indexOf("windsurf") !== -1) return "Windsurf";
+  if (ua.indexOf("zed") !== -1) return "Zed";
+  if (ua.indexOf("apifox") !== -1) return "Apifox";
+  if (ua.indexOf("openbot") !== -1) return "OpenBot";
+  if (ua.indexOf("openai") !== -1 || ua.indexOf("stainless") !== -1) {
+    var lang = headerValue(headers, "x-stainless-lang");
+    return lang ? "OpenAI SDK (" + lang + ")" : "OpenAI SDK";
+  }
+  if (ua.indexOf("curl") !== -1) return "curl";
+  if (
+    ua.indexOf("mozilla") !== -1 ||
+    ua.indexOf("chrome") !== -1 ||
+    ua.indexOf("safari") !== -1 ||
+    ua.indexOf("edge") !== -1 ||
+    ua.indexOf("firefox") !== -1
+  ) {
+    return "Browser";
+  }
+  return "";
+}
+
+function parseClientVersion(userAgent) {
+  var ua = String(userAgent || "");
+  var m = ua.match(/\/v?(\d+\.\d[\w.\-]*)/);
+  return m ? m[1].slice(0, 40) : "";
+}
+
+function findConversationId(body) {
+  if (!isRecord(body)) return "";
+  var keys = ["conversationId", "conversation_id", "sessionId", "session_id", "chatId", "chat_id"];
+  for (var i = 0; i < keys.length; i++) {
+    var value = body[keys[i]];
+    if (typeof value === "string" && value && value.length <= 128) return value;
+  }
+  return "";
+}
+
+function inboundClientMeta(req, body) {
+  var headers = (req && req.headers) || {};
+  var userAgent = headerValue(headers, "user-agent");
+  var forwarded = headerValue(headers, "x-forwarded-for").split(",")[0].trim();
+  return {
+    userAgent: userAgent,
+    clientName: detectClientName(userAgent, headers),
+    clientVersion: parseClientVersion(userAgent),
+    conversationId: findConversationId(body),
+    origin: forwarded || headerValue(headers, "x-real-ip").trim(),
+    requestId: headerValue(headers, "x-request-id").slice(0, 128),
+  };
+}
+
+function hasSseContent(parsed) {
+  try {
+    if (requestLog && typeof requestLog.sseChunkHasContent === "function") {
+      return requestLog.sseChunkHasContent(parsed);
+    }
+  } catch (err) {
+    /* fall through to the permissive fallback */
+  }
+  return true;
+}
+
+// Incremental first-content scan for a live SSE forward: appends the chunk,
+// drains complete lines, and returns Date.now() the moment a data frame
+// carries real model output. Unparseable lines are skipped; the buffer is
+// capped so a pathological single line cannot grow it without bound.
+function noteFirstContent(state, chunk) {
+  state.buf += chunk.toString("utf8");
+  if (state.buf.length > 65536) state.buf = state.buf.slice(state.buf.length - 65536);
+  var nl = state.buf.indexOf("\n");
+  while (nl >= 0) {
+    var line = state.buf.slice(0, nl);
+    state.buf = state.buf.slice(nl + 1);
+    if (line.indexOf("data:") === 0) {
+      var data = line.slice(5).trim();
+      if (data && data !== "[DONE]") {
+        var parsed;
+        try {
+          parsed = JSON.parse(data);
+        } catch (err) {
+          parsed = undefined;
+        }
+        if (parsed !== undefined && hasSseContent(parsed)) return Date.now();
+      }
+    }
+    nl = state.buf.indexOf("\n");
+  }
+  return 0;
+}
+
 function planPath() {
   return process.env.OPENBOT_PLAN || "/home/box/sand-data/openbot-plan.json";
 }
@@ -458,12 +562,31 @@ async function postUpstream(urlStr, body, key, inbound) {
   var budgetStartedMs = Date.now();
   var attemptIndex = 0;
   var retriesSpent = 0;
+  // Per-attempt chain for the request log: every upstream try records its
+  // status / error / latency so retries are visible instead of collapsing
+  // into a single "upstream-retries=N" suffix.
+  var attempts = [];
+  function withAttempts(out) {
+    if (attempts.length) {
+      out.attempts = attempts;
+      out.attemptCount = attempts.length;
+    }
+    return out;
+  }
   while (true) {
+    var attemptStartedMs = Date.now();
     var out;
     try {
       out = await postUpstreamOnce(urlStr, body, key, inbound);
     } catch (err) {
       if (!canRetryUpstreamError(err, attemptIndex, null, budgetStartedMs)) {
+        attempts.push({
+          attempt: attemptIndex + 1,
+          status: 0,
+          error: errorMessage(err, "hop failed"),
+          latencyMs: Date.now() - attemptStartedMs,
+          decision: "final",
+        });
         throw tagHopRetries(err, attemptIndex);
       }
       out = { attemptFailed: true, status: 0, headers: {}, raw: Buffer.alloc(0), attemptError: err };
@@ -471,21 +594,55 @@ async function postUpstream(urlStr, body, key, inbound) {
     if (!out.attemptFailed) {
       var retryKind = classifyUpstreamRetry(out.status, attemptIndex, null, budgetStartedMs);
       if (retryKind === null) {
+        attempts.push({
+          attempt: attemptIndex + 1,
+          status: out.status,
+          latencyMs: Date.now() - attemptStartedMs,
+          decision: "final",
+        });
         if (retriesSpent > 0) out.hopRetries = retriesSpent;
-        return out;
+        return withAttempts(out);
       }
       var delay = retryDelayMs(retryKind, attemptIndex, out.headers, Date.now(), budgetStartedMs);
       if (delay === null) {
+        attempts.push({
+          attempt: attemptIndex + 1,
+          status: out.status,
+          latencyMs: Date.now() - attemptStartedMs,
+          decision: "final",
+        });
         if (retriesSpent > 0) out.hopRetries = retriesSpent;
-        return out;
+        return withAttempts(out);
       }
+      attempts.push({
+        attempt: attemptIndex + 1,
+        status: out.status,
+        latencyMs: Date.now() - attemptStartedMs,
+        decision: "retry",
+      });
       await sleepMs(delay);
       attemptIndex += 1;
       retriesSpent = attemptIndex;
       continue;
     }
     var delayErr = delayBefore5xxRetryMs(attemptIndex, out.headers, Date.now(), budgetStartedMs);
-    if (delayErr === null) throw tagHopRetries(out.attemptError, attemptIndex);
+    if (delayErr === null) {
+      attempts.push({
+        attempt: attemptIndex + 1,
+        status: out.status || 0,
+        error: errorMessage(out.attemptError, "hop failed"),
+        latencyMs: Date.now() - attemptStartedMs,
+        decision: "final",
+      });
+      throw tagHopRetries(out.attemptError, attemptIndex);
+    }
+    attempts.push({
+      attempt: attemptIndex + 1,
+      status: out.status || 0,
+      error: errorMessage(out.attemptError, "hop failed"),
+      latencyMs: Date.now() - attemptStartedMs,
+      decision: "retry",
+    });
     await sleepMs(delayErr);
     attemptIndex += 1;
     retriesSpent = attemptIndex;
@@ -550,13 +707,25 @@ function pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeR
       });
       if (typeof clientRes.flushHeaders === "function") clientRes.flushHeaders();
       var chunks = [];
+      var scanState = { buf: "" };
+      var firstContentAt = 0;
       res.on("data", function (c) {
         chunks.push(c);
         if (!clientRes.writableEnded) clientRes.write(c);
+        if (!firstContentAt) {
+          var at = noteFirstContent(scanState, c);
+          if (at) firstContentAt = at;
+        }
       });
       res.on("end", function () {
         if (!clientRes.writableEnded) clientRes.end();
-        ok({ status: status || 200, headers: res.headers, raw: Buffer.concat(chunks), forwarded: true });
+        ok({
+          status: status || 200,
+          headers: res.headers,
+          raw: Buffer.concat(chunks),
+          forwarded: true,
+          firstContentAt: firstContentAt,
+        });
       });
       res.on("error", fail);
     });
@@ -569,50 +738,109 @@ async function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
   var attemptIndex = 0;
   var activeReq = { current: null };
   var retriesSpent = 0;
+  var attempts = [];
+  function withAttempts(out) {
+    if (attempts.length) {
+      out.attempts = attempts;
+      out.attemptCount = attempts.length;
+    }
+    return out;
+  }
   function onClientClose() {
     if (!clientRes.writableEnded && activeReq.current) activeReq.current.destroy();
   }
   clientRes.on("close", onClientClose);
   try {
     while (true) {
+      var attemptStartedMs = Date.now();
       var out;
       try {
         out = await pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeReq);
       } catch (err) {
         if (!canRetryUpstreamError(err, attemptIndex, clientRes, budgetStartedMs)) {
+          attempts.push({
+            attempt: attemptIndex + 1,
+            status: 0,
+            error: errorMessage(err, "hop failed"),
+            latencyMs: Date.now() - attemptStartedMs,
+            decision: "final",
+          });
           throw tagHopRetries(err, attemptIndex);
         }
         out = { attemptFailed: true, status: 0, headers: {}, raw: Buffer.alloc(0), attemptError: err };
       }
       if (out.attemptFailed) {
         var delay = delayBefore5xxRetryMs(attemptIndex, out.headers, Date.now(), budgetStartedMs);
-        if (delay === null) throw tagHopRetries(out.attemptError, attemptIndex);
+        if (delay === null) {
+          attempts.push({
+            attempt: attemptIndex + 1,
+            status: out.status || 0,
+            error: errorMessage(out.attemptError, "hop failed"),
+            latencyMs: Date.now() - attemptStartedMs,
+            decision: "final",
+          });
+          throw tagHopRetries(out.attemptError, attemptIndex);
+        }
+        attempts.push({
+          attempt: attemptIndex + 1,
+          status: out.status || 0,
+          error: errorMessage(out.attemptError, "hop failed"),
+          latencyMs: Date.now() - attemptStartedMs,
+          decision: "retry",
+        });
         await sleepMs(delay);
         attemptIndex += 1;
         retriesSpent = attemptIndex;
         continue;
       }
       if (out.forwarded) {
+        attempts.push({
+          attempt: attemptIndex + 1,
+          status: out.status,
+          latencyMs: Date.now() - attemptStartedMs,
+          decision: "final",
+        });
+        if (typeof out.firstContentAt === "number" && out.firstContentAt > 0) {
+          out.firstTokenMs = Math.max(0, Math.round(out.firstContentAt - budgetStartedMs));
+        }
         if (retriesSpent > 0) out.hopRetries = retriesSpent;
-        return out;
+        return withAttempts(out);
       }
       var retryKind = classifyUpstreamRetry(out.status, attemptIndex, clientRes, budgetStartedMs);
       if (retryKind === null) {
+        attempts.push({
+          attempt: attemptIndex + 1,
+          status: out.status,
+          latencyMs: Date.now() - attemptStartedMs,
+          decision: "final",
+        });
         if (retriesSpent > 0) out.hopRetries = retriesSpent;
         if (!clientRes.headersSent) {
           send(clientRes, out.status, out.raw, headerContentType(out.headers) || "application/json", retryAfterForwardHeaders(out.headers));
         }
-        return out;
+        return withAttempts(out);
       }
-      var delay = retryDelayMs(retryKind, attemptIndex, out.headers, Date.now(), budgetStartedMs);
-      if (delay === null) {
+      var retryDelay = retryDelayMs(retryKind, attemptIndex, out.headers, Date.now(), budgetStartedMs);
+      if (retryDelay === null) {
+        attempts.push({
+          attempt: attemptIndex + 1,
+          status: out.status,
+          latencyMs: Date.now() - attemptStartedMs,
+          decision: "final",
+        });
         if (retriesSpent > 0) out.hopRetries = retriesSpent;
         if (!clientRes.headersSent) {
           send(clientRes, out.status, out.raw, headerContentType(out.headers) || "application/json", retryAfterForwardHeaders(out.headers));
         }
-        return out;
+        return withAttempts(out);
       }
-      await sleepMs(delay);
+      attempts.push({
+        attempt: attemptIndex + 1,
+        status: out.status,
+        latencyMs: Date.now() - attemptStartedMs,
+        decision: "retry",
+      });
+      await sleepMs(retryDelay);
       attemptIndex += 1;
       retriesSpent = attemptIndex;
     }
@@ -691,6 +919,14 @@ async function handleCompletions(req, res) {
     inboundEndpoint: "/v1/chat/completions",
     stream: false,
   };
+  var clientMeta = {
+    userAgent: "",
+    clientName: "",
+    clientVersion: "",
+    conversationId: "",
+    origin: "",
+    requestId: "",
+  };
   var recorded = false;
 
   function record(extra) {
@@ -712,11 +948,22 @@ async function handleCompletions(req, res) {
       responseRaw: extra.responseRaw,
       status: extra.status,
       error: extra.error,
+      attempts: extra.attempts,
+      attemptCount: extra.attemptCount,
+      firstTokenMs: extra.firstTokenMs,
+      clientName: extra.clientName !== undefined ? extra.clientName : clientMeta.clientName,
+      clientVersion: extra.clientVersion !== undefined ? extra.clientVersion : clientMeta.clientVersion,
+      userAgent: extra.userAgent !== undefined ? extra.userAgent : clientMeta.userAgent,
+      conversationId: extra.conversationId !== undefined ? extra.conversationId : clientMeta.conversationId,
+      origin: extra.origin !== undefined ? extra.origin : clientMeta.origin,
+      requestId: extra.requestId !== undefined ? extra.requestId : clientMeta.requestId,
     });
   }
 
   try {
     var raw = await readBody(req);
+    // Capture header clues even when the JSON body itself is unreadable.
+    clientMeta = inboundClientMeta(req, undefined);
     var body;
     try {
       body = JSON.parse(raw.toString("utf8"));
@@ -736,6 +983,7 @@ async function handleCompletions(req, res) {
       if (typeof body.model === "string") fields.model = body.model;
       fields.requestBody = body;
     }
+    clientMeta = inboundClientMeta(req, body);
     var plan;
     try {
       plan = readJson(planPath());
@@ -790,6 +1038,9 @@ async function handleCompletions(req, res) {
         status: out.status,
         error: retrySuffix(out),
         responseRaw: Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw),
+        attempts: out.attempts,
+        attemptCount: out.attemptCount,
+        firstTokenMs: out.firstTokenMs,
       });
     } else {
       out = await postUpstream(upstream, body, key, req);
@@ -797,6 +1048,9 @@ async function handleCompletions(req, res) {
         status: out.status,
         error: retrySuffix(out),
         responseRaw: Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw),
+        attempts: out.attempts,
+        attemptCount: out.attemptCount,
+        firstTokenMs: out.firstTokenMs,
       });
       send(
         res,
@@ -856,6 +1110,11 @@ async function handleHopRequest(req, res) {
 
 exports.handleHopRequest = handleHopRequest;
 exports.sendJson = sendJson;
+exports.inboundClientMeta = inboundClientMeta;
+exports.detectClientName = detectClientName;
+exports.parseClientVersion = parseClientVersion;
+exports.findConversationId = findConversationId;
+exports.noteFirstContent = noteFirstContent;
 exports.lookupRoute = lookupRoute;
 exports.completionsUrl = completionsUrl;
 exports.hopParameters = hopParameters;

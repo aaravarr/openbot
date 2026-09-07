@@ -153,18 +153,20 @@ test("pruneNowAsync removes expired rows and orphan bodies", async () => {
   assert.equal(bodyFileExists("new-1"), true);
 });
 
-test("pruneNowAsync enforces maxRecords keeping the newest rows", async () => {
+test("pruneNowAsync ignores maxRecords: retention is date-based only", async () => {
   const base = Date.now();
   const rows: Array<Record<string, unknown>> = [];
   for (let i = 0; i < 10; i++) {
     rows.push(reqRow("cap-" + String(i), new Date(base + i * 1000).toISOString()));
   }
   writeRequestRows(rows);
+  // maxRecords is accepted for read-compat but never enforced: every fresh
+  // row survives and removedByCap is always 0.
   const result = await log.pruneNowAsync({ logRetentionDays: 7, maxRecords: 5 });
   assert.equal(result.removedByRetention, 0);
-  assert.equal(result.removedByCap, 5);
-  assert.equal(result.kept, 5);
-  assert.deepEqual(readRequestIds(), ["cap-5", "cap-6", "cap-7", "cap-8", "cap-9"]);
+  assert.equal(result.removedByCap, 0);
+  assert.equal(result.kept, 10);
+  assert.deepEqual(readRequestIds(), rows.map((row) => row.id));
 });
 
 test("pruneNowAsync processes 200-row batches and yields to the event loop", async () => {

@@ -23,6 +23,8 @@ var DEFAULTS = {
   logBodiesOnError: true,
   logRetentionDays: 7,
   maxBodyCaptureBytes: 65536,
+  // Deprecated: read-compat only. Retention is date-based (logRetentionDays);
+  // no count cap is enforced anywhere anymore.
   maxRecords: 2000,
 };
 
@@ -87,6 +89,7 @@ function normalizeSettings(raw, fallback) {
       base.maxBodyCaptureBytes,
       "Max body capture bytes",
     ),
+    // Deprecated (read-compat only): accepted and echoed back, never enforced.
     maxRecords: asOptionalInt(src.maxRecords, 1, 10000, base.maxRecords, "Max records"),
   };
 }
@@ -234,26 +237,136 @@ function num(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function extractUsage(payload) {
-  if (!isRecord(payload) || !isRecord(payload.usage)) return undefined;
-  var usage = payload.usage;
-  var promptTokens = num(usage.prompt_tokens) ?? num(usage.input_tokens) ?? num(usage.promptTokens);
-  var completionTokens = num(usage.completion_tokens) ?? num(usage.output_tokens) ?? num(usage.completionTokens);
+// Rich usage reader (mirrors opencode-api capture.ts): understands OpenAI
+// chat/responses, Anthropic messages and DeepSeek-style cache dialects, plus
+// reasoning / text / image / audio splits. Old prompt/completion/total keys
+// keep their meaning; the rest is purely additive.
+function readUsageObject(usage, fallback) {
+  if (!isRecord(usage)) return undefined;
+  var promptTokensRaw = num(usage.prompt_tokens) ?? num(usage.input_tokens) ?? num(usage.promptTokens);
+  var completionTokens =
+    num(usage.completion_tokens) ?? num(usage.output_tokens) ?? num(usage.completionTokens);
   var totalTokens = num(usage.total_tokens) ?? num(usage.totalTokens);
-  if (totalTokens === undefined && promptTokens !== undefined && completionTokens !== undefined) {
-    totalTokens = promptTokens + completionTokens;
+  var promptDetails = isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : undefined;
+  var inputDetails = isRecord(usage.input_tokens_details) ? usage.input_tokens_details : undefined;
+  var completionDetails = isRecord(usage.completion_tokens_details)
+    ? usage.completion_tokens_details
+    : undefined;
+  var outputDetails = isRecord(usage.output_tokens_details) ? usage.output_tokens_details : undefined;
+  var cacheRead = num(usage.cache_read_input_tokens);
+  var cachedTokens =
+    num(usage.cached_tokens) ??
+    cacheRead ??
+    (promptDetails ? num(promptDetails.cached_tokens) : undefined) ??
+    (inputDetails ? num(inputDetails.cached_tokens) : undefined) ??
+    num(usage.prompt_cache_hit_tokens) ??
+    (isRecord(fallback) ? num(fallback.cached_tokens) : undefined);
+  // Anthropic's input_tokens excludes cache reads: add them back so prompt
+  // totals share one definition across providers.
+  var promptTokens =
+    promptTokensRaw !== undefined && (cacheRead || 0) > 0 ? promptTokensRaw + cacheRead : promptTokensRaw;
+  var reasoningTokens =
+    num(usage.reasoning_tokens) ??
+    (completionDetails ? num(completionDetails.reasoning_tokens) : undefined) ??
+    (outputDetails ? num(outputDetails.reasoning_tokens) : undefined) ??
+    (completionDetails ? num(completionDetails.reasoning_output_tokens) : undefined) ??
+    (outputDetails ? num(outputDetails.reasoning_output_tokens) : undefined) ??
+    num(usage.reasoning_output_tokens) ??
+    (isRecord(fallback)
+      ? num(fallback.reasoning_tokens) ?? num(fallback.reasoning_output_tokens)
+      : undefined);
+  var textTokens =
+    num(usage.text_tokens) ??
+    (completionDetails ? num(completionDetails.text_tokens) : undefined) ??
+    (outputDetails ? num(outputDetails.text_tokens) : undefined) ??
+    (isRecord(fallback) ? num(fallback.text_tokens) : undefined);
+  var imageTokens = num(usage.image_tokens);
+  var audioTokens = num(usage.audio_tokens);
+  var computed =
+    totalTokens ??
+    (promptTokens !== undefined && completionTokens !== undefined
+      ? promptTokens + completionTokens
+      : undefined);
+  if (
+    promptTokens === undefined &&
+    completionTokens === undefined &&
+    computed === undefined &&
+    cachedTokens === undefined &&
+    reasoningTokens === undefined &&
+    textTokens === undefined &&
+    imageTokens === undefined &&
+    audioTokens === undefined
+  ) {
+    return undefined;
   }
-  if (promptTokens === undefined && completionTokens === undefined && totalTokens === undefined) return undefined;
   var out = {};
   if (promptTokens !== undefined) out.promptTokens = promptTokens;
   if (completionTokens !== undefined) out.completionTokens = completionTokens;
-  if (totalTokens !== undefined) out.totalTokens = totalTokens;
+  if (computed !== undefined) out.totalTokens = computed;
+  if (cachedTokens !== undefined) out.cachedTokens = cachedTokens;
+  if (reasoningTokens !== undefined) out.reasoningTokens = reasoningTokens;
+  if (textTokens !== undefined) out.textTokens = textTokens;
+  if (imageTokens !== undefined) out.imageTokens = imageTokens;
+  if (audioTokens !== undefined) out.audioTokens = audioTokens;
   return out;
+}
+
+function isUsageLikeObject(value) {
+  if (!isRecord(value)) return false;
+  var hasIn = typeof value.prompt_tokens === "number" || typeof value.input_tokens === "number";
+  var hasOut = typeof value.completion_tokens === "number" || typeof value.output_tokens === "number";
+  return hasIn && hasOut;
+}
+
+function extractUsage(payload) {
+  if (!isRecord(payload)) return undefined;
+  var candidates = [];
+  if (payload.usage !== undefined) candidates.push(payload.usage);
+  if (isRecord(payload.message) && payload.message.usage !== undefined) {
+    candidates.push(payload.message.usage);
+  }
+  if (isRecord(payload.response)) {
+    if (payload.response.usage !== undefined) candidates.push(payload.response.usage);
+    if (isRecord(payload.response.response) && payload.response.response.usage !== undefined) {
+      candidates.push(payload.response.response.usage);
+    }
+  }
+  if (Array.isArray(payload.choices)) {
+    for (var i = 0; i < payload.choices.length; i++) {
+      var choice = payload.choices[i];
+      if (isRecord(choice) && isRecord(choice.usage)) candidates.push(choice.usage);
+    }
+  }
+  // Bare usage events (a usage object with no "usage" wrapper key).
+  if (isUsageLikeObject(payload)) candidates.push(payload);
+  for (var c = 0; c < candidates.length; c++) {
+    var parsed = readUsageObject(candidates[c], payload);
+    if (parsed) return parsed;
+  }
+  return undefined;
+}
+
+// Field-level merge for streams that emit several usage frames: some
+// upstreams send reasoning/cached counts first and bare counts last, so
+// whole-object last-wins would wipe the earlier detail.
+function mergeUsage(prev, next) {
+  if (!prev) return next;
+  if (!next) return prev;
+  return {
+    promptTokens: next.promptTokens !== undefined ? next.promptTokens : prev.promptTokens,
+    completionTokens: next.completionTokens !== undefined ? next.completionTokens : prev.completionTokens,
+    totalTokens: next.totalTokens !== undefined ? next.totalTokens : prev.totalTokens,
+    cachedTokens: next.cachedTokens !== undefined ? next.cachedTokens : prev.cachedTokens,
+    textTokens: next.textTokens !== undefined ? next.textTokens : prev.textTokens,
+    imageTokens: next.imageTokens !== undefined ? next.imageTokens : prev.imageTokens,
+    audioTokens: next.audioTokens !== undefined ? next.audioTokens : prev.audioTokens,
+    reasoningTokens: next.reasoningTokens !== undefined ? next.reasoningTokens : prev.reasoningTokens,
+  };
 }
 
 function extractUsageFromSse(text) {
   if (typeof text !== "string" || text.indexOf("data:") === -1) return undefined;
-  var last;
+  var merged;
   var lines = text.split(/\r?\n/);
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i];
@@ -262,9 +375,161 @@ function extractUsageFromSse(text) {
     if (!data || data === "[DONE]") continue;
     var parsed = tryParseJson(data);
     var usage = extractUsage(parsed);
-    if (usage) last = usage;
+    if (usage) merged = mergeUsage(merged, usage);
   }
-  return last;
+  return merged;
+}
+
+// First-content-chunk test for streams: any real model output (content /
+// reasoning / thinking / text / delta / tool_calls). A bare role-only frame
+// does not count. Mirrors opencode-api capture.ts.
+var SSE_CONTENT_KEYS = ["content", "reasoning_content", "reasoning", "thinking", "text", "delta"];
+
+function sseChunkHasContent(value) {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) {
+    for (var i = 0; i < value.length; i++) {
+      if (sseChunkHasContent(value[i])) return true;
+    }
+    return false;
+  }
+  var obj = value;
+  for (var k = 0; k < SSE_CONTENT_KEYS.length; k++) {
+    if (typeof obj[SSE_CONTENT_KEYS[k]] === "string" && obj[SSE_CONTENT_KEYS[k]].length > 0) return true;
+  }
+  if (Array.isArray(obj.tool_calls) && obj.tool_calls.length > 0) return true;
+  var keys = Object.keys(obj);
+  for (var j = 0; j < keys.length; j++) {
+    var child = obj[keys[j]];
+    if (child && typeof child === "object" && sseChunkHasContent(child)) return true;
+  }
+  return false;
+}
+
+// Rebuild a display-ready response object out of SSE text: chat deltas are
+// aggregated per choice (content + reasoning + tool_calls), responses-style
+// completed events win when present. Raw SSE is unreadable in the UI, which
+// used to surface as "blank" bodies even though bytes were on disk.
+function extractResponseFromSse(text) {
+  if (typeof text !== "string" || text.indexOf("data:") === -1) return undefined;
+  var completed;
+  var lastResponseLike;
+  var lastChatChunk;
+  var chatAgg = {};
+  var lines = text.split(/\r?\n/);
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (!line || line.indexOf("data:") !== 0) continue;
+    var data = line.slice(5).trim();
+    if (!data || data === "[DONE]") continue;
+    var parsed;
+    try {
+      parsed = JSON.parse(data);
+    } catch (err) {
+      continue;
+    }
+    if (!isRecord(parsed)) continue;
+    if (parsed.type === "response.completed" && isRecord(parsed.response)) {
+      completed = parsed.response;
+      continue;
+    }
+    if (parsed.object === "response" && Array.isArray(parsed.output)) lastResponseLike = parsed;
+    var nested = parsed.response;
+    if (isRecord(nested) && nested.object === "response") lastResponseLike = nested;
+    if (Array.isArray(parsed.choices) && parsed.choices.length > 0) {
+      lastChatChunk = parsed;
+      for (var c = 0; c < parsed.choices.length; c++) {
+        var rawChoice = parsed.choices[c];
+        if (!isRecord(rawChoice)) continue;
+        var idx = typeof rawChoice.index === "number" ? rawChoice.index : 0;
+        var key = "choice-" + idx;
+        var agg = chatAgg[key];
+        if (!agg) {
+          agg = { content: "", contentRaw: undefined, reasoning: "", finish: null, tools: {} };
+          chatAgg[key] = agg;
+        }
+        var finish = rawChoice.finish_reason !== undefined ? rawChoice.finish_reason : rawChoice.finishReason;
+        if (finish !== undefined && finish !== null) agg.finish = finish;
+        var src = isRecord(rawChoice.delta)
+          ? rawChoice.delta
+          : isRecord(rawChoice.message)
+            ? rawChoice.message
+            : null;
+        if (src) {
+          if (typeof src.content === "string") agg.content += src.content;
+          else if (src.content !== undefined && src.content !== null) agg.contentRaw = src.content;
+          else if (typeof src.text === "string") agg.content += src.text;
+          var reasoning = [src.reasoning_content, src.reasoning, src.thinking];
+          for (var r = 0; r < reasoning.length; r++) {
+            if (typeof reasoning[r] === "string" && reasoning[r]) {
+              agg.reasoning += reasoning[r];
+              break;
+            }
+          }
+          if (Array.isArray(src.tool_calls)) {
+            for (var t = 0; t < src.tool_calls.length; t++) {
+              var tc = src.tool_calls[t];
+              if (!isRecord(tc)) continue;
+              var toolIdx = typeof tc.index === "number" && Number.isFinite(tc.index) ? tc.index : t;
+              var slot = agg.tools["tool-" + toolIdx];
+              if (!slot) {
+                slot = { name: "", arguments: "" };
+                agg.tools["tool-" + toolIdx] = slot;
+              }
+              if (typeof tc.id === "string" && tc.id) slot.id = tc.id;
+              if (typeof tc.type === "string" && tc.type) slot.type = tc.type;
+              var fn = isRecord(tc.function) ? tc.function : null;
+              if (fn) {
+                if (typeof fn.name === "string") slot.name += fn.name;
+                if (typeof fn.arguments === "string") slot.arguments += fn.arguments;
+              }
+            }
+          }
+        } else if (typeof rawChoice.text === "string") {
+          agg.content += rawChoice.text;
+        } else if (typeof rawChoice.content === "string") {
+          agg.content += rawChoice.content;
+        }
+      }
+    }
+  }
+  if (completed !== undefined || lastResponseLike !== undefined) {
+    return completed !== undefined ? completed : lastResponseLike;
+  }
+  if (lastChatChunk) {
+    var aggKeys = Object.keys(chatAgg).sort();
+    var choices = [];
+    for (var g = 0; g < aggKeys.length; g++) {
+      var entry = chatAgg[aggKeys[g]];
+      var content = entry.content;
+      if (content === "" && entry.contentRaw !== undefined) content = entry.contentRaw;
+      if (content === "" && entry.reasoning) content = entry.reasoning;
+      var message = { role: "assistant", content: content };
+      if (entry.reasoning) message.reasoning_content = entry.reasoning;
+      var toolKeys = Object.keys(entry.tools).sort();
+      if (toolKeys.length > 0) {
+        var calls = [];
+        for (var q = 0; q < toolKeys.length; q++) {
+          var slotOut = entry.tools[toolKeys[q]];
+          calls.push({
+            id: slotOut.id,
+            type: slotOut.type || "function",
+            function: { name: slotOut.name, arguments: slotOut.arguments },
+          });
+        }
+        message.tool_calls = calls;
+      }
+      choices.push({ index: g, message: message, finish_reason: entry.finish });
+    }
+    return {
+      id: lastChatChunk.id,
+      object: "chat.completion",
+      model: lastChatChunk.model,
+      choices: choices,
+      usage: lastChatChunk.usage,
+    };
+  }
+  return undefined;
 }
 
 // When the serialized body exceeds maxBytes, the display value keeps only a
@@ -364,6 +629,7 @@ function writeRows(file, rows, options) {
 
 var statsCache = null;
 var facetsCache = null;
+var usageCache = null;
 
 function cachedResult(cache, nowMs) {
   if (cache && nowMs - cache.at < CACHE_TTL_MS) return cache.value;
@@ -373,6 +639,7 @@ function cachedResult(cache, nowMs) {
 function invalidateAggregates() {
   statsCache = null;
   facetsCache = null;
+  usageCache = null;
 }
 
 function setStatsCache(value) {
@@ -396,6 +663,9 @@ function yieldToLoop() {
 }
 
 function pruneRows(rows, settings) {
+  // Retention is date-based only (logRetentionDays). maxRecords is accepted
+  // for read-compat but never enforced (aligned with opencode-api, where
+  // retentionDays is the only retention knob).
   var cutoff = cutoffForRetention(settings.logRetentionDays);
   var kept = [];
   for (var i = 0; i < rows.length; i++) {
@@ -408,7 +678,6 @@ function pruneRows(rows, settings) {
     if (left === right) return 0;
     return left < right ? 1 : -1;
   });
-  if (kept.length > settings.maxRecords) kept = kept.slice(0, settings.maxRecords);
   kept.reverse();
   return kept;
 }
@@ -446,8 +715,16 @@ function pruneNow(settings) {
 function resolveResponse(input) {
   if (input.responseBody !== undefined) return input.responseBody;
   if (typeof input.responseRaw !== "string") return undefined;
-  var parsed = tryParseJson(input.responseRaw);
-  return parsed !== undefined ? parsed : input.responseRaw;
+  // An empty upstream payload is "no body", not a blank body: callers use
+  // hasResponse to decide whether anything is readable.
+  if (!input.responseRaw.trim()) return undefined;
+  var text = input.responseRaw;
+  if (text.indexOf("data:") !== -1) {
+    var rebuilt = extractResponseFromSse(text);
+    if (rebuilt !== undefined) return rebuilt;
+  }
+  var parsed = tryParseJson(text);
+  return parsed !== undefined ? parsed : text;
 }
 
 function resolveError(input, responseValue) {
@@ -482,6 +759,9 @@ function recordHopInner(input) {
   var startedAt = typeof src.startedAt === "string" && src.startedAt ? src.startedAt : new Date().toISOString();
   var completedAt = typeof src.completedAt === "string" && src.completedAt ? src.completedAt : new Date().toISOString();
   var latencyMs = Number.isFinite(Number(src.latencyMs)) ? Math.max(0, Math.round(Number(src.latencyMs))) : undefined;
+  var firstTokenMs = Number.isFinite(Number(src.firstTokenMs))
+    ? Math.max(0, Math.round(Number(src.firstTokenMs)))
+    : undefined;
   var status = Number.isFinite(Number(src.status)) ? Math.round(Number(src.status)) : 0;
   var responseValue = resolveResponse(src);
   var error = resolveError(src, responseValue);
@@ -554,15 +834,46 @@ function recordHopInner(input) {
     if (usage.promptTokens !== undefined) row.promptTokens = usage.promptTokens;
     if (usage.completionTokens !== undefined) row.completionTokens = usage.completionTokens;
     if (usage.totalTokens !== undefined) row.totalTokens = usage.totalTokens;
+    if (usage.cachedTokens !== undefined) row.cachedTokens = usage.cachedTokens;
+    if (usage.reasoningTokens !== undefined) row.reasoningTokens = usage.reasoningTokens;
+    if (usage.textTokens !== undefined) row.textTokens = usage.textTokens;
+    if (usage.imageTokens !== undefined) row.imageTokens = usage.imageTokens;
+    if (usage.audioTokens !== undefined) row.audioTokens = usage.audioTokens;
   }
+  if (firstTokenMs !== undefined) row.firstTokenMs = firstTokenMs;
+  // Upstream attempt chain (hop-handler retry loop): per-attempt status /
+  // error / latency. Sanitized and capped so a pathological retry storm can
+  // never bloat the JSONL row.
+  var attempts = sanitizeAttempts(src.attempts);
+  if (attempts) {
+    row.attempts = attempts;
+    row.attemptCount = attempts.length;
+  } else if (Number.isFinite(Number(src.attemptCount))) {
+    row.attemptCount = Math.max(1, Math.round(Number(src.attemptCount)));
+  }
+  // Source metadata collected from the inbound request (best-effort: the
+  // OpenAI-compatible hop protocol carries no bot/chat identity, so these
+  // are UA/header/body clues, not chat identifiers).
+  var clientName = cleanText(src.clientName, 120);
+  if (clientName) row.clientName = clientName;
+  var clientVersion = cleanText(src.clientVersion, 40);
+  if (clientVersion) row.clientVersion = clientVersion;
+  var userAgent = cleanText(src.userAgent, 512);
+  if (userAgent) row.userAgent = userAgent;
+  var conversationId = cleanText(src.conversationId, 128);
+  if (conversationId) row.conversationId = conversationId;
+  var requestId = cleanText(src.requestId, 128);
+  if (requestId) row.requestId = requestId;
+  var origin = cleanText(src.origin, 120);
+  if (origin) row.origin = origin;
 
   var rows = readRows(paths.requestLog);
   rows.push(row);
-  // Gated sync prune: full retention+cap enforcement runs here at most once
-  // per WRITE_PRUNE_INTERVAL_MS (or whenever the cap is exceeded); the
-  // scheduled cleanup owns steady-state pruning.
+  // Gated sync prune: date-based retention runs here at most once per
+  // WRITE_PRUNE_INTERVAL_MS; the scheduled cleanup owns steady-state
+  // pruning. (maxRecords is deprecated and no longer consulted.)
   var nowMs = Date.now();
-  if (rows.length > settings.maxRecords || nowMs - lastWritePruneAt > WRITE_PRUNE_INTERVAL_MS) {
+  if (nowMs - lastWritePruneAt > WRITE_PRUNE_INTERVAL_MS) {
     lastWritePruneAt = nowMs;
     var kept = pruneRows(rows, settings);
     writeRows(paths.requestLog, kept);
@@ -579,6 +890,36 @@ function recordHop(input) {
   } catch (err) {
     /* never throw into the chat path */
   }
+}
+
+function cleanText(value, max) {
+  if (typeof value !== "string") return undefined;
+  var text = value.trim();
+  if (!text) return undefined;
+  return text.length > max ? text.slice(0, max) : text;
+}
+
+function sanitizeAttempts(value) {
+  if (!Array.isArray(value)) return undefined;
+  var out = [];
+  for (var i = 0; i < value.length && out.length < 10; i++) {
+    var attempt = value[i];
+    if (!isRecord(attempt)) continue;
+    var entry = {};
+    if (Number.isFinite(Number(attempt.attempt))) {
+      entry.attempt = Math.max(1, Math.round(Number(attempt.attempt)));
+    }
+    if (Number.isFinite(Number(attempt.status))) entry.status = Math.round(Number(attempt.status));
+    if (Number.isFinite(Number(attempt.latencyMs))) {
+      entry.latencyMs = Math.max(0, Math.round(Number(attempt.latencyMs)));
+    }
+    var errText = cleanText(attempt.error, 500);
+    if (errText) entry.error = errText;
+    var decision = cleanText(attempt.decision, 20);
+    if (decision) entry.decision = decision;
+    out.push(entry);
+  }
+  return out.length ? out : undefined;
 }
 
 function matchesQuery(row, query) {
@@ -611,6 +952,10 @@ function matchesQuery(row, query) {
       row.channel,
       row.inboundEndpoint,
       row.upstreamEndpoint,
+      row.clientName,
+      row.userAgent,
+      row.conversationId,
+      row.requestId,
     ]
       .filter(function (part) { return typeof part === "string"; })
       .join(" ")
@@ -678,10 +1023,24 @@ function getRequest(id) {
     if (!row) return null;
     var bodies = readBodyFile(paths.bodiesDir, safe);
     var detail = Object.assign({}, row);
-    if (Object.prototype.hasOwnProperty.call(bodies, "request")) detail.request = bodies.request;
-    if (Object.prototype.hasOwnProperty.call(bodies, "response")) detail.response = bodies.response;
+    var attachedRequest = false;
+    var attachedResponse = false;
+    if (Object.prototype.hasOwnProperty.call(bodies, "request")) {
+      detail.request = bodies.request;
+      attachedRequest = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(bodies, "response")) {
+      detail.response = bodies.response;
+      attachedResponse = true;
+    }
     if (Object.prototype.hasOwnProperty.call(bodies, "requestFull")) detail.requestFull = bodies.requestFull;
     if (Object.prototype.hasOwnProperty.call(bodies, "responseFull")) detail.responseFull = bodies.responseFull;
+    // The row claims a body exists but the sidecar file is gone (pruned by
+    // hand, raced with cleanup, ...): say so explicitly instead of serving
+    // a "blank" detail the UI cannot distinguish from an empty payload.
+    if ((row.hasRequest && !attachedRequest) || (row.hasResponse && !attachedResponse)) {
+      detail.bodyMissing = true;
+    }
     return detail;
   } catch (err) {
     return null;
@@ -822,9 +1181,8 @@ function retentionCutoffIso(settings) {
 function pruneNowAsync(settings, onBatch) {
   var paths = logPaths();
   var cutoff = retentionCutoffIso(settings);
-  var maxRecords = settings && Number.isInteger(settings.maxRecords) && settings.maxRecords > 0
-    ? settings.maxRecords
-    : DEFAULTS.maxRecords;
+  // No count cap: retention is date-based only. settings.maxRecords, when
+  // present, is ignored (read-compat).
   var rows = readRows(paths.requestLog);
   var removedByRetention = 0;
   var kept = [];
@@ -853,11 +1211,9 @@ function pruneNowAsync(settings, onBatch) {
       if (left === right) return 0;
       return left < right ? 1 : -1;
     });
+    // removedByCap stays in the result shape for backward compat and is
+    // always 0 now that no count cap is enforced.
     var removedByCap = 0;
-    if (kept.length > maxRecords) {
-      removedByCap = kept.length - maxRecords;
-      kept = kept.slice(0, maxRecords);
-    }
     kept.reverse();
     writeRows(paths.requestLog, kept);
     unlinkOrphans(paths.bodiesDir, kept);
@@ -882,7 +1238,7 @@ function cleanupNowAsync(settings, onBatch) {
         severity: "INFO",
         message: "Cleaned request logs: " +
           String(result.removedByRetention) + " expired, " +
-          String(result.removedByCap) + " over cap, " +
+          String(result.removedByCap) + " over cap (cap retired; retention is date-based), " +
           String(result.kept) + " kept.",
         metadata: result,
       });
@@ -914,6 +1270,8 @@ function statsNow() {
   var promptTokens = 0;
   var completionTokens = 0;
   var totalTokens = 0;
+  var cachedTokens = 0;
+  var reasoningTokens = 0;
   var bodyBytes = 0;
   var ok = 0;
   for (var i = 0; i < scanned.length; i++) {
@@ -923,6 +1281,8 @@ function statsNow() {
     promptTokens += numField(row, "promptTokens");
     completionTokens += numField(row, "completionTokens");
     totalTokens += numField(row, "totalTokens");
+    cachedTokens += numField(row, "cachedTokens");
+    reasoningTokens += numField(row, "reasoningTokens");
     bodyBytes += numField(row, "bodyBytes");
   }
   var diskBytes = 0;
@@ -963,6 +1323,8 @@ function statsNow() {
     promptTokens: promptTokens,
     completionTokens: completionTokens,
     totalTokens: totalTokens,
+    cachedTokens: cachedTokens,
+    reasoningTokens: reasoningTokens,
     bodyBytes: bodyBytes,
     bodyFiles: bodyFiles,
     bodyDiskBytes: bodyDiskBytes,
@@ -1019,6 +1381,147 @@ function facetsNow() {
     status: statusFacet(),
   };
   return setFacetsCache(value);
+}
+
+// ---- Usage aggregation (opencode-api usage-stats discipline). ----
+//
+// GET /api/logs/usage groups the newest USAGE_SCAN_LIMIT rows by day, model
+// and provider. The scan is capped, group lists are truncated, every result
+// carries approximate:true once a cap is hit, and identical queries share a
+// 60s TTL cache entry — the JSONL file is never scanned unboundedly.
+var USAGE_SCAN_LIMIT = 5000;
+var USAGE_BUCKET_LIMIT = 50;
+
+function newUsageBucket() {
+  return {
+    requests: 0,
+    ok: 0,
+    fail: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    cachedTokens: 0,
+    reasoningTokens: 0,
+    latencySum: 0,
+    latencyCount: 0,
+    firstTokenSum: 0,
+    firstTokenCount: 0,
+  };
+}
+
+function addUsageRow(bucket, row) {
+  bucket.requests += 1;
+  if (row.ok === true) bucket.ok += 1;
+  else bucket.fail += 1;
+  bucket.promptTokens += numField(row, "promptTokens");
+  bucket.completionTokens += numField(row, "completionTokens");
+  bucket.totalTokens += numField(row, "totalTokens");
+  bucket.cachedTokens += numField(row, "cachedTokens");
+  bucket.reasoningTokens += numField(row, "reasoningTokens");
+  if (typeof row.latencyMs === "number" && Number.isFinite(row.latencyMs)) {
+    bucket.latencySum += row.latencyMs;
+    bucket.latencyCount += 1;
+  }
+  if (typeof row.firstTokenMs === "number" && Number.isFinite(row.firstTokenMs)) {
+    bucket.firstTokenSum += row.firstTokenMs;
+    bucket.firstTokenCount += 1;
+  }
+}
+
+function finalizeUsageBucket(key, bucket) {
+  return {
+    key: key,
+    requests: bucket.requests,
+    ok: bucket.ok,
+    fail: bucket.fail,
+    promptTokens: bucket.promptTokens,
+    completionTokens: bucket.completionTokens,
+    totalTokens: bucket.totalTokens,
+    cachedTokens: bucket.cachedTokens,
+    reasoningTokens: bucket.reasoningTokens,
+    avgLatencyMs: bucket.latencyCount > 0 ? bucket.latencySum / bucket.latencyCount : 0,
+    avgFirstTokenMs: bucket.firstTokenCount > 0 ? bucket.firstTokenSum / bucket.firstTokenCount : null,
+  };
+}
+
+function usageNow(query) {
+  var q = isRecord(query) ? query : {};
+  var from = typeof q.from === "string" ? q.from : "";
+  var to = typeof q.to === "string" ? q.to : "";
+  var modelFilter = typeof q.model === "string" ? q.model : "";
+  var providerFilter = typeof q.provider === "string" ? q.provider : "";
+  var cacheKey = JSON.stringify([from, to, modelFilter, providerFilter]);
+  var nowMs = Date.now();
+  if (usageCache && nowMs - usageCache.at < CACHE_TTL_MS && usageCache.key === cacheKey) {
+    return usageCache.value;
+  }
+  var rows = readRows(logPaths().requestLog);
+  var total = rows.length;
+  var filtered = [];
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    if (from && (typeof row.startedAt !== "string" || row.startedAt < from)) continue;
+    if (to && (typeof row.startedAt !== "string" || row.startedAt > to)) continue;
+    if (modelFilter && row.model !== modelFilter) continue;
+    if (providerFilter) {
+      var providerName =
+        typeof row.providerId === "string" && row.providerId
+          ? row.providerId
+          : typeof row.providerName === "string"
+            ? row.providerName
+            : "";
+      if (providerName !== providerFilter) continue;
+    }
+    filtered.push(row);
+  }
+  var capped = filtered.length > USAGE_SCAN_LIMIT;
+  var scanned = capped ? filtered.slice(filtered.length - USAGE_SCAN_LIMIT) : filtered;
+  var byDay = {};
+  var byModel = {};
+  var byProvider = {};
+  for (var s = 0; s < scanned.length; s++) {
+    var item = scanned[s];
+    var day = typeof item.startedAt === "string" ? item.startedAt.slice(0, 10) : "(unknown)";
+    var modelKey = typeof item.model === "string" && item.model ? item.model : "(unknown)";
+    var providerKey =
+      typeof item.providerId === "string" && item.providerId
+        ? item.providerId
+        : typeof item.providerName === "string" && item.providerName
+          ? item.providerName
+          : "(unknown)";
+    if (!byDay[day]) byDay[day] = newUsageBucket();
+    if (!byModel[modelKey]) byModel[modelKey] = newUsageBucket();
+    if (!byProvider[providerKey]) byProvider[providerKey] = newUsageBucket();
+    addUsageRow(byDay[day], item);
+    addUsageRow(byModel[modelKey], item);
+    addUsageRow(byProvider[providerKey], item);
+  }
+  var truncated = false;
+  function finalizeGroups(map, sortDesc) {
+    var keys = Object.keys(map);
+    if (sortDesc) {
+      keys.sort(function (a, b) { return map[b].requests - map[a].requests; });
+    } else {
+      keys.sort();
+    }
+    if (keys.length > USAGE_BUCKET_LIMIT) {
+      truncated = true;
+      keys = keys.slice(0, USAGE_BUCKET_LIMIT);
+    }
+    return keys.map(function (key) { return finalizeUsageBucket(key, map[key]); });
+  }
+  var value = {
+    approximate: capped || truncated,
+    scanned: scanned.length,
+    total: total,
+    from: from,
+    to: to,
+    byDay: finalizeGroups(byDay, false),
+    byModel: finalizeGroups(byModel, true),
+    byProvider: finalizeGroups(byProvider, true),
+  };
+  usageCache = { key: cacheKey, value: value, at: nowMs };
+  return value;
 }
 
 // ---- One-shot body stripping (opencode-api stripAllBodies discipline). ----
@@ -1095,6 +1598,11 @@ exports.pruneNowAsync = pruneNowAsync;
 exports.cleanupNowAsync = cleanupNowAsync;
 exports.statsNow = statsNow;
 exports.facetsNow = facetsNow;
+exports.usageNow = usageNow;
+exports.extractUsage = extractUsage;
+exports.mergeUsage = mergeUsage;
+exports.extractResponseFromSse = extractResponseFromSse;
+exports.sseChunkHasContent = sseChunkHasContent;
 exports.appendEvent = appendEvent;
 exports.queryEvents = queryEvents;
 exports.stripBodiesAsync = stripBodiesAsync;

@@ -24,6 +24,7 @@ type LogSettings = {
   logBodiesOnError: boolean;
   logRetentionDays: number;
   maxBodyCaptureBytes: number;
+  /** Deprecated: read-compat only, the log store no longer enforces it. */
   maxRecords: number;
 };
 
@@ -67,6 +68,31 @@ type LogEventList = {
   total: number;
 };
 
+type LogUsageBucket = {
+  key: string;
+  requests: number;
+  ok: number;
+  fail: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  cachedTokens: number;
+  reasoningTokens: number;
+  avgLatencyMs: number;
+  avgFirstTokenMs: number | null;
+};
+
+type LogUsage = {
+  approximate: boolean;
+  scanned: number;
+  total: number;
+  from: string;
+  to: string;
+  byDay: LogUsageBucket[];
+  byModel: LogUsageBucket[];
+  byProvider: LogUsageBucket[];
+};
+
 const require = createRequire(import.meta.url);
 const hop = require("../../payload/hop-handler.cjs") as {
   handleHopRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<boolean>;
@@ -84,6 +110,7 @@ const requestLog = require("../../payload/request-log.cjs") as {
   appendEvent: (entry: Record<string, unknown>) => unknown;
   queryEvents: (query: Record<string, unknown>) => LogEventList;
   stripBodiesAsync: () => Promise<{ stripped: number }>;
+  usageNow: (query: Record<string, unknown>) => LogUsage;
 };
 
 const repoRoot = process.env.OPENBOT_REPO ?? fileURLToPath(new URL("../..", import.meta.url));
@@ -269,6 +296,19 @@ function parseEventsQuery(url: URL): Record<string, unknown> {
   return query;
 }
 
+function parseUsageQuery(url: URL): Record<string, unknown> {
+  const query: Record<string, unknown> = {};
+  const from = url.searchParams.get("from") ?? "";
+  const to = url.searchParams.get("to") ?? "";
+  const model = url.searchParams.get("model") ?? "";
+  const provider = url.searchParams.get("provider") ?? "";
+  if (from.trim()) query.from = from.trim();
+  if (to.trim()) query.to = to.trim();
+  if (model.trim()) query.model = model.trim();
+  if (provider.trim()) query.provider = provider.trim();
+  return query;
+}
+
 function logIdFromPath(pathname: string): string | undefined {
   const prefix = "/api/logs/";
   if (!pathname.startsWith(prefix)) {
@@ -364,6 +404,12 @@ async function handleLogsApi(req: http.IncomingMessage, res: http.ServerResponse
   }
   if (req.method === "GET" && url.pathname === "/api/logs/events") {
     sendJson(res, 200, requestLog.queryEvents(parseEventsQuery(url)));
+    return true;
+  }
+  // NOTE: kept above the generic /api/logs/:id matcher so "usage" is not
+  // mistaken for a record id.
+  if (req.method === "GET" && url.pathname === "/api/logs/usage") {
+    sendJson(res, 200, requestLog.usageNow(parseUsageQuery(url)));
     return true;
   }
   if (req.method === "POST" && url.pathname === "/api/logs/cleanup") {

@@ -71,6 +71,30 @@ test("wrapMode is strict: only an exact official mode file means official", () =
   assert.equal(wrapMode("official-mode"), "custom");
 });
 
+test("GET /api/logs/usage returns grouped usage with an approximate flag", async () => {
+  const { server, port } = await listen();
+  try {
+    const res = await request(port, "/api/logs/usage?model=m-x", "GET");
+    assert.equal(res.status, 200);
+    const body = res.json as {
+      approximate: boolean;
+      scanned: number;
+      total: number;
+      byDay: unknown[];
+      byModel: unknown[];
+      byProvider: unknown[];
+    };
+    assert.equal(typeof body.approximate, "boolean");
+    assert.equal(typeof body.scanned, "number");
+    assert.ok(Array.isArray(body.byDay));
+    assert.ok(Array.isArray(body.byModel));
+    assert.ok(Array.isArray(body.byProvider));
+  } finally {
+    server.close();
+    server.closeAllConnections();
+  }
+});
+
 test("a throwing handler returns a structured 500 and the server keeps serving", async () => {
   const { server, port } = await listen();
   try {

@@ -13,9 +13,13 @@ import type {
   GrokSkillsReport,
   LogChannelFilter,
   LogDetail,
+  LogEvent,
+  LogEventList,
+  LogFacets,
   LogList,
   LogRecord,
   LogSettings,
+  LogStats,
   ModelCatalog,
   RefreshCatalogResult,
   RefusalError,
@@ -229,6 +233,48 @@ export async function getLog(id: string): Promise<LogDetail> {
 
 export async function clearLogs(): Promise<{ ok: true }> {
   return (await request("/api/logs/clear", jsonInit({}))) as { ok: true };
+}
+
+export async function getLogStats(): Promise<LogStats> {
+  return (await request("/api/logs/stats")) as LogStats;
+}
+
+export async function getLogFacets(): Promise<LogFacets> {
+  return (await request("/api/logs/facets")) as LogFacets;
+}
+
+export type EventQuery = {
+  severity?: string;
+  type?: string;
+  requestId?: string;
+  limit?: number;
+};
+
+export async function listEvents(query: EventQuery = {}): Promise<LogEventList> {
+  const params = new URLSearchParams();
+  if (query.severity) params.set("severity", query.severity);
+  if (query.type) params.set("type", query.type);
+  if (query.requestId) params.set("requestId", query.requestId);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  const suffix = params.toString();
+  const data = (await request(suffix ? `/api/logs/events?${suffix}` : "/api/logs/events")) as LogEventList;
+  return {
+    items: Array.isArray(data.items) ? (data.items as LogEvent[]) : [],
+    total: typeof data.total === "number" ? data.total : 0,
+  };
+}
+
+export async function cleanupLogs(): Promise<{ ok: true; removedByRetention?: number; removedByCap?: number; kept?: number }> {
+  return (await request("/api/logs/cleanup", jsonInit({}))) as {
+    ok: true;
+    removedByRetention?: number;
+    removedByCap?: number;
+    kept?: number;
+  };
+}
+
+export async function stripLogBodies(): Promise<{ ok: true; stripped: number }> {
+  return (await request("/api/logs/strip-bodies", jsonInit({}))) as { ok: true; stripped: number };
 }
 
 /* ---- Derived helpers ---- */

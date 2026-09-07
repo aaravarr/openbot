@@ -7,6 +7,15 @@ var path = require("path");
 var PREVIEW_CHARS = 8000;
 var ERROR_CHARS = 500;
 var DEFAULT_SAND_DATA = "/home/box/sand-data";
+var CACHE_TTL_MS = 60 * 1000;
+var MAX_TOTAL_COUNT = 1000;
+var FACETS_SAMPLE_LIMIT = 5000;
+var FACETS_MAX_OPTIONS = 200;
+var PRUNE_BATCH = 200;
+var MAX_EVENT_BYTES = 4 * 1000 * 1000;
+var MAX_EVENT_KEPT = 500;
+var STATS_DISK_SCAN_CAP = 5000;
+var APPROX_BYTES_PER_ROW = 400;
 
 var DEFAULTS = {
   loggingEnabled: false,
@@ -33,6 +42,7 @@ function logPaths() {
     sandData: sand,
     settings: process.env.OPENBOT_LOGS || path.join(sand, "openbot-logs.json"),
     requestLog: path.join(sand, "openbot-requests.jsonl"),
+    eventsLog: path.join(sand, "openbot-events.jsonl"),
     bodiesDir: path.join(sand, "openbot-request-bodies"),
     secrets: process.env.OPENBOT_SECRETS || path.join(sand, "secrets.json"),
   };
@@ -108,6 +118,7 @@ function saveSettings(input) {
   } catch (err) {
     /* prune is best-effort */
   }
+  invalidateAggregates();
   return next;
 }
 
@@ -327,8 +338,19 @@ function readRows(file) {
   return rows;
 }
 
-function writeRows(file, rows) {
+function writeRows(file, rows, options) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
+  var opts = options || {};
+  // Events use a single-line append; request rewrites keep the tmp+rename
+  // discipline so a crash can never leave a truncated JSONL behind.
+  if (opts.append === true) {
+    var appended = "";
+    for (var j = 0; j < rows.length; j++) {
+      appended += JSON.stringify(rows[j]) + "\n";
+    }
+    fs.appendFileSync(file, appended, "utf8");
+    return;
+  }
   var body = "";
   for (var i = 0; i < rows.length; i++) {
     body += JSON.stringify(rows[i]) + "\n";
@@ -336,6 +358,41 @@ function writeRows(file, rows) {
   var tmp = file + ".tmp";
   fs.writeFileSync(tmp, body, "utf8");
   fs.renameSync(tmp, file);
+}
+
+// ---- Aggregate caches (opencode-api: TTL-capped stats/facets). ----
+
+var statsCache = null;
+var facetsCache = null;
+
+function cachedResult(cache, nowMs) {
+  if (cache && nowMs - cache.at < CACHE_TTL_MS) return cache.value;
+  return undefined;
+}
+
+function invalidateAggregates() {
+  statsCache = null;
+  facetsCache = null;
+}
+
+function setStatsCache(value) {
+  statsCache = { value: value, at: Date.now() };
+  return value;
+}
+
+function setFacetsCache(value) {
+  facetsCache = { value: value, at: Date.now() };
+  return value;
+}
+
+// The sync write path (recordHopInner) must never block chat: a full prune
+// runs at most once per WRITE_PRUNE_INTERVAL_MS there. Steady-state pruning
+// is owned by the scheduled cleanup (pruneNowAsync / cleanupNowAsync).
+var lastWritePruneAt = 0;
+var WRITE_PRUNE_INTERVAL_MS = 60 * 1000;
+
+function yieldToLoop() {
+  return new Promise(function (resolve) { setImmediate(resolve); });
 }
 
 function pruneRows(rows, settings) {
@@ -456,10 +513,15 @@ function recordHopInner(input) {
       if (resCloned.truncated) bodyFile.responseFull = resCloned.full;
       hasResponse = true;
     }
-    if (hasRequest || hasResponse) {
-      fs.mkdirSync(paths.bodiesDir, { recursive: true });
-      fs.writeFileSync(path.join(paths.bodiesDir, id + ".json"), JSON.stringify(bodyFile), "utf8");
-    }
+  // bodyBytes is precomputed here so stats can SUM metadata instead of
+  // re-statting every body file on each read (opencode-api discipline).
+  var bodyBytes = 0;
+  if (hasRequest || hasResponse) {
+    fs.mkdirSync(paths.bodiesDir, { recursive: true });
+    var bodyText = JSON.stringify(bodyFile);
+    bodyBytes = Buffer.byteLength(bodyText, "utf8");
+    fs.writeFileSync(path.join(paths.bodiesDir, id + ".json"), bodyText, "utf8");
+  }
   }
 
   var channel = normalizeChannel(src.channel);
@@ -487,6 +549,7 @@ function recordHopInner(input) {
   if (error) row.error = error;
   if (requestTruncated) row.requestTruncated = true;
   if (responseTruncated) row.responseTruncated = true;
+  if (bodyBytes > 0) row.bodyBytes = bodyBytes;
   if (usage) {
     if (usage.promptTokens !== undefined) row.promptTokens = usage.promptTokens;
     if (usage.completionTokens !== undefined) row.completionTokens = usage.completionTokens;
@@ -495,9 +558,19 @@ function recordHopInner(input) {
 
   var rows = readRows(paths.requestLog);
   rows.push(row);
-  var kept = pruneRows(rows, settings);
-  writeRows(paths.requestLog, kept);
-  unlinkOrphans(paths.bodiesDir, kept);
+  // Gated sync prune: full retention+cap enforcement runs here at most once
+  // per WRITE_PRUNE_INTERVAL_MS (or whenever the cap is exceeded); the
+  // scheduled cleanup owns steady-state pruning.
+  var nowMs = Date.now();
+  if (rows.length > settings.maxRecords || nowMs - lastWritePruneAt > WRITE_PRUNE_INTERVAL_MS) {
+    lastWritePruneAt = nowMs;
+    var kept = pruneRows(rows, settings);
+    writeRows(paths.requestLog, kept);
+    unlinkOrphans(paths.bodiesDir, kept);
+  } else {
+    writeRows(paths.requestLog, rows);
+  }
+  invalidateAggregates();
 }
 
 function recordHop(input) {
@@ -573,9 +646,10 @@ function listRequests(query) {
       total: total,
       page: page,
       pageSize: pageSize,
+      approximate: false,
     };
   } catch (err) {
-    return { items: [], total: 0, page: 1, pageSize: 50 };
+    return { items: [], total: 0, page: 1, pageSize: 50, approximate: false };
   }
 }
 
@@ -634,6 +708,373 @@ function clearRequests() {
       /* ignore */
     }
   }
+  invalidateAggregates();
+}
+
+// ---- Events (opencode-api: type/severity/message/metadata + requestId). ----
+
+var EVENT_SEVERITIES = { INFO: true, WARN: true, ERROR: true };
+
+function appendEvent(input) {
+  try {
+    var src = isRecord(input) ? input : {};
+    var severity = typeof src.severity === "string" && EVENT_SEVERITIES[src.severity.toUpperCase()]
+      ? src.severity.toUpperCase()
+      : "INFO";
+    var event = {
+      id: makeId(src.id),
+      at: typeof src.at === "string" && src.at ? src.at : new Date().toISOString(),
+      type: typeof src.type === "string" && src.type ? src.type.slice(0, 120) : "note",
+      severity: severity,
+      message: typeof src.message === "string" ? src.message.slice(0, 2000) : "",
+    };
+    if (typeof src.requestId === "string" && src.requestId) event.requestId = src.requestId.slice(0, 80);
+    if (isRecord(src.metadata)) {
+      try {
+        var metaText = JSON.stringify(src.metadata);
+        if (Buffer.byteLength(metaText, "utf8") <= 8192) event.metadata = src.metadata;
+      } catch (err) {
+        /* drop oversized/unserializable metadata */
+      }
+    }
+    var paths = logPaths();
+    fs.mkdirSync(path.dirname(paths.eventsLog), { recursive: true });
+    fs.appendFileSync(paths.eventsLog, JSON.stringify(event) + "\n", "utf8");
+    trimEventsFile(paths.eventsLog);
+    return event;
+  } catch (err) {
+    return null;
+  }
+}
+
+// Cap the events file by bytes and rows so a chatty loop can never grow it
+// without bound. Oldest lines are dropped first; the file stays newest-last.
+function trimEventsFile(file) {
+  var stat;
+  try {
+    stat = fs.statSync(file);
+  } catch (err) {
+    return;
+  }
+  if (stat.size <= MAX_EVENT_BYTES) return;
+  try {
+    var lines = fs.readFileSync(file, "utf8").split(/\n/);
+    var kept = [];
+    for (var i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].trim()) continue;
+      kept.push(lines[i]);
+      if (kept.length >= MAX_EVENT_KEPT) break;
+    }
+    kept.reverse();
+    fs.writeFileSync(file, kept.join("\n") + "\n", "utf8");
+  } catch (err) {
+    /* best-effort */
+  }
+}
+
+function queryEvents(query) {
+  try {
+    var q = isRecord(query) ? query : {};
+    var limit = Number(q.limit);
+    if (!Number.isInteger(limit) || limit < 1) limit = 100;
+    if (limit > 500) limit = 500;
+    var rows = readRows(logPaths().eventsLog);
+    var matched = [];
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      if (typeof q.severity === "string" && q.severity) {
+        if (String(row.severity || "").toUpperCase() !== q.severity.toUpperCase()) continue;
+      }
+      if (typeof q.type === "string" && q.type) {
+        if (row.type !== q.type) continue;
+      }
+      if (typeof q.requestId === "string" && q.requestId) {
+        if (row.requestId !== q.requestId) continue;
+      }
+      matched.push(row);
+    }
+    matched.sort(function (a, b) {
+      var left = typeof a.at === "string" ? a.at : "";
+      var right = typeof b.at === "string" ? b.at : "";
+      if (left === right) return 0;
+      return left < right ? 1 : -1;
+    });
+    return { items: matched.slice(0, limit), total: matched.length };
+  } catch (err) {
+    return { items: [], total: 0 };
+  }
+}
+
+// ---- Async batched cleanup (opencode-api log-cleanup.ts discipline). ----
+//
+// Every batch is bounded (PRUNE_BATCH rows) and yields to the event loop via
+// setImmediate between batches, so a large backlog can never hold the loop
+// hostage. ISO-8601 timestamps compare lexicographically, so the cutoff
+// check is a plain string compare with no Date parsing per row.
+
+function retentionCutoffIso(settings) {
+  var days = settings && settings.logRetentionDays !== undefined
+    ? settings.logRetentionDays
+    : DEFAULTS.logRetentionDays;
+  return cutoffForRetention(days);
+}
+
+function pruneNowAsync(settings, onBatch) {
+  var paths = logPaths();
+  var cutoff = retentionCutoffIso(settings);
+  var maxRecords = settings && Number.isInteger(settings.maxRecords) && settings.maxRecords > 0
+    ? settings.maxRecords
+    : DEFAULTS.maxRecords;
+  var rows = readRows(paths.requestLog);
+  var removedByRetention = 0;
+  var kept = [];
+  var index = 0;
+  function step() {
+    var end = Math.min(index + PRUNE_BATCH, rows.length);
+    for (; index < end; index++) {
+      var row = rows[index];
+      if (typeof row.startedAt === "string" && row.startedAt >= cutoff) {
+        kept.push(row);
+      } else {
+        removedByRetention++;
+      }
+    }
+    if (typeof onBatch === "function") {
+      try {
+        onBatch({ processed: index, kept: kept.length, removedByRetention: removedByRetention });
+      } catch (err) {
+        /* progress callback must not break cleanup */
+      }
+    }
+    if (index < rows.length) return yieldToLoop().then(step);
+    kept.sort(function (a, b) {
+      var left = typeof a.startedAt === "string" ? a.startedAt : "";
+      var right = typeof b.startedAt === "string" ? b.startedAt : "";
+      if (left === right) return 0;
+      return left < right ? 1 : -1;
+    });
+    var removedByCap = 0;
+    if (kept.length > maxRecords) {
+      removedByCap = kept.length - maxRecords;
+      kept = kept.slice(0, maxRecords);
+    }
+    kept.reverse();
+    writeRows(paths.requestLog, kept);
+    unlinkOrphans(paths.bodiesDir, kept);
+    invalidateAggregates();
+    return {
+      removedByRetention: removedByRetention,
+      removedByCap: removedByCap,
+      kept: kept.length,
+    };
+  }
+  // Always async: callers (and the UI scheduler) rely on a Promise, even
+  // when there is nothing to prune.
+  return Promise.resolve().then(step);
+}
+
+function cleanupNowAsync(settings, onBatch) {
+  var active = settings || loadSettings();
+  return pruneNowAsync(active, onBatch).then(function (result) {
+    try {
+      appendEvent({
+        type: "logs.cleanup",
+        severity: "INFO",
+        message: "Cleaned request logs: " +
+          String(result.removedByRetention) + " expired, " +
+          String(result.removedByCap) + " over cap, " +
+          String(result.kept) + " kept.",
+        metadata: result,
+      });
+    } catch (err) {
+      /* event write is best-effort */
+    }
+    return result;
+  });
+}
+
+// ---- Stats + facets (opencode-api lightweight-count.ts discipline). ----
+//
+// cappedCount bounds every scan (MAX_TOTAL_COUNT rows); results carry
+// approximate:true once the cap is hit, and both endpoints share a 60s TTL
+// cache (CACHE_TTL_MS) so repeated UI polls never rescan the file.
+
+function numField(row, key) {
+  return typeof row[key] === "number" && Number.isFinite(row[key]) ? row[key] : 0;
+}
+
+function statsNow() {
+  var cached = cachedResult(statsCache, Date.now());
+  if (cached !== undefined) return cached;
+  var paths = logPaths();
+  var rows = readRows(paths.requestLog);
+  var capped = rows.length > MAX_TOTAL_COUNT;
+  var scanned = capped ? rows.slice(rows.length - MAX_TOTAL_COUNT) : rows;
+  var errors = 0;
+  var promptTokens = 0;
+  var completionTokens = 0;
+  var totalTokens = 0;
+  var bodyBytes = 0;
+  var ok = 0;
+  for (var i = 0; i < scanned.length; i++) {
+    var row = scanned[i];
+    if (row.ok === true) ok++;
+    else errors++;
+    promptTokens += numField(row, "promptTokens");
+    completionTokens += numField(row, "completionTokens");
+    totalTokens += numField(row, "totalTokens");
+    bodyBytes += numField(row, "bodyBytes");
+  }
+  var diskBytes = 0;
+  try {
+    diskBytes += fs.statSync(paths.requestLog).size;
+  } catch (err) {
+    /* file may not exist yet */
+  }
+  // Bodies dir: stat at most STATS_DISK_SCAN_CAP files, then extrapolate.
+  var bodyFiles = 0;
+  var bodyDiskBytes = 0;
+  var bodyDirCapped = false;
+  try {
+    var names = fs.readdirSync(paths.bodiesDir);
+    bodyFiles = names.length;
+    var scanCount = Math.min(names.length, STATS_DISK_SCAN_CAP);
+    bodyDirCapped = names.length > STATS_DISK_SCAN_CAP;
+    for (var f = 0; f < scanCount; f++) {
+      try {
+        bodyDiskBytes += fs.statSync(path.join(paths.bodiesDir, names[f])).size;
+      } catch (err) {
+        /* race with prune */
+      }
+    }
+    if (bodyDirCapped && scanCount > 0) {
+      bodyDiskBytes = Math.round((bodyDiskBytes / scanCount) * names.length);
+    }
+  } catch (err) {
+    /* no bodies dir yet */
+  }
+  diskBytes += bodyDiskBytes;
+  var value = {
+    records: rows.length,
+    scanned: scanned.length,
+    approximate: capped,
+    ok: ok,
+    errors: errors,
+    promptTokens: promptTokens,
+    completionTokens: completionTokens,
+    totalTokens: totalTokens,
+    bodyBytes: bodyBytes,
+    bodyFiles: bodyFiles,
+    bodyDiskBytes: bodyDiskBytes,
+    bodiesApproximate: bodyDirCapped,
+    diskBytes: diskBytes,
+  };
+  return setStatsCache(value);
+}
+
+function facetsNow() {
+  var cached = cachedResult(facetsCache, Date.now());
+  if (cached !== undefined) return cached;
+  var rows = readRows(logPaths().requestLog);
+  var sample = rows.length > FACETS_SAMPLE_LIMIT
+    ? rows.slice(rows.length - FACETS_SAMPLE_LIMIT)
+    : rows;
+  function top(key) {
+    var counts = Object.create(null);
+    for (var i = 0; i < sample.length; i++) {
+      var v = sample[i][key];
+      if (typeof v !== "string" || !v) continue;
+      counts[v] = (counts[v] || 0) + 1;
+    }
+    var names = Object.keys(counts);
+    names.sort(function (a, b) { return counts[b] - counts[a]; });
+    var capped = names.length > FACETS_MAX_OPTIONS;
+    if (capped) names = names.slice(0, FACETS_MAX_OPTIONS);
+    return {
+      values: names.map(function (name) { return { value: name, count: counts[name] }; }),
+      approximate: capped || rows.length > FACETS_SAMPLE_LIMIT,
+    };
+  }
+  function statusFacet() {
+    var counts = Object.create(null);
+    for (var i = 0; i < sample.length; i++) {
+      var key = typeof sample[i].status === "number" ? String(sample[i].status) : "0";
+      counts[key] = (counts[key] || 0) + 1;
+    }
+    var names = Object.keys(counts);
+    names.sort(function (a, b) { return counts[b] - counts[a]; });
+    var capped = names.length > FACETS_MAX_OPTIONS;
+    if (capped) names = names.slice(0, FACETS_MAX_OPTIONS);
+    return {
+      values: names.map(function (name) { return { value: name, count: counts[name] }; }),
+      approximate: capped || rows.length > FACETS_SAMPLE_LIMIT,
+    };
+  }
+  var value = {
+    sampled: sample.length,
+    total: rows.length,
+    model: top("model"),
+    provider: top("providerId"),
+    channel: top("channel"),
+    status: statusFacet(),
+  };
+  return setFacetsCache(value);
+}
+
+// ---- One-shot body stripping (opencode-api stripAllBodies discipline). ----
+//
+// Deletes captured request/response bodies but keeps every metadata row, so
+// history stays browsable while stored payloads are gone. Batched with a
+// yield between batches; each batch removes at most PRUNE_BATCH files.
+
+function stripBodiesAsync() {
+  var paths = logPaths();
+  var names;
+  try {
+    names = fs.readdirSync(paths.bodiesDir);
+  } catch (err) {
+    return Promise.resolve({ stripped: 0 });
+  }
+  var files = [];
+  for (var i = 0; i < names.length; i++) {
+    if (names[i].endsWith(".json")) files.push(names[i]);
+  }
+  var stripped = 0;
+  var index = 0;
+  function step() {
+    var end = Math.min(index + PRUNE_BATCH, files.length);
+    for (; index < end; index++) {
+      try {
+        fs.unlinkSync(path.join(paths.bodiesDir, files[index]));
+        stripped++;
+      } catch (err) {
+        /* race with prune */
+      }
+    }
+    if (index < files.length) return yieldToLoop().then(step);
+    var rows = readRows(paths.requestLog);
+    for (var r = 0; r < rows.length; r++) {
+      if (rows[r].hasRequest) rows[r].hasRequest = false;
+      if (rows[r].hasResponse) rows[r].hasResponse = false;
+      if (rows[r].bodyBytes !== undefined) delete rows[r].bodyBytes;
+      if (rows[r].requestTruncated !== undefined) delete rows[r].requestTruncated;
+      if (rows[r].responseTruncated !== undefined) delete rows[r].responseTruncated;
+    }
+    writeRows(paths.requestLog, rows);
+    invalidateAggregates();
+    try {
+      appendEvent({
+        type: "logs.strip-bodies",
+        severity: "WARN",
+        message: "Stripped " + String(stripped) + " captured bodies; metadata kept.",
+        metadata: { stripped: stripped },
+      });
+    } catch (err) {
+      /* best-effort */
+    }
+    return { stripped: stripped };
+  }
+  return Promise.resolve().then(step);
 }
 
 exports.DEFAULTS = DEFAULTS;
@@ -648,3 +1089,13 @@ exports.clearRequests = clearRequests;
 exports.redact = redact;
 exports.extractBodyError = extractBodyError;
 exports.safeCloneBody = safeCloneBody;
+exports.pruneRows = pruneRows;
+exports.pruneNow = pruneNow;
+exports.pruneNowAsync = pruneNowAsync;
+exports.cleanupNowAsync = cleanupNowAsync;
+exports.statsNow = statsNow;
+exports.facetsNow = facetsNow;
+exports.appendEvent = appendEvent;
+exports.queryEvents = queryEvents;
+exports.stripBodiesAsync = stripBodiesAsync;
+exports.invalidateAggregates = invalidateAggregates;

@@ -173,6 +173,50 @@ export type LogList = {
   total: number;
   page: number;
   pageSize: number;
+  /** JSONL files are prune-bounded, so list counts stay exact. */
+  approximate?: boolean;
+};
+
+export type LogStats = {
+  records: number;
+  scanned: number;
+  approximate: boolean;
+  ok: number;
+  errors: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  bodyBytes: number;
+  bodyFiles: number;
+  bodyDiskBytes: number;
+  bodiesApproximate: boolean;
+  diskBytes: number;
+};
+
+export type LogFacetOption = { value: string; count: number };
+
+export type LogFacets = {
+  sampled: number;
+  total: number;
+  model: { values: LogFacetOption[]; approximate: boolean };
+  provider: { values: LogFacetOption[]; approximate: boolean };
+  channel: { values: LogFacetOption[]; approximate: boolean };
+  status: { values: LogFacetOption[]; approximate: boolean };
+};
+
+export type LogEvent = {
+  id: string;
+  at: string;
+  type: string;
+  severity: "INFO" | "WARN" | "ERROR";
+  message: string;
+  requestId?: string;
+  metadata?: unknown;
+};
+
+export type LogEventList = {
+  items: LogEvent[];
+  total: number;
 };
 
 export type RefusalError =

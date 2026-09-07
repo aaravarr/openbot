@@ -32,6 +32,39 @@ type LogList = {
   total: number;
   page: number;
   pageSize: number;
+  approximate: boolean;
+};
+
+type LogStats = {
+  records: number;
+  scanned: number;
+  approximate: boolean;
+  ok: number;
+  errors: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  bodyBytes: number;
+  bodyFiles: number;
+  bodyDiskBytes: number;
+  bodiesApproximate: boolean;
+  diskBytes: number;
+};
+
+type LogFacetOption = { value: string; count: number };
+
+type LogFacets = {
+  sampled: number;
+  total: number;
+  model: { values: LogFacetOption[]; approximate: boolean };
+  provider: { values: LogFacetOption[]; approximate: boolean };
+  channel: { values: LogFacetOption[]; approximate: boolean };
+  status: { values: LogFacetOption[]; approximate: boolean };
+};
+
+type LogEventList = {
+  items: unknown[];
+  total: number;
 };
 
 const require = createRequire(import.meta.url);
@@ -44,6 +77,13 @@ const requestLog = require("../../payload/request-log.cjs") as {
   listRequests: (query: Record<string, unknown>) => LogList;
   getRequest: (id: string) => unknown;
   clearRequests: () => void;
+  pruneNowAsync: (settings?: unknown, onBatch?: unknown) => Promise<unknown>;
+  cleanupNowAsync: (settings?: unknown) => Promise<Record<string, unknown>>;
+  statsNow: () => LogStats;
+  facetsNow: () => LogFacets;
+  appendEvent: (entry: Record<string, unknown>) => unknown;
+  queryEvents: (query: Record<string, unknown>) => LogEventList;
+  stripBodiesAsync: () => Promise<{ stripped: number }>;
 };
 
 const repoRoot = process.env.OPENBOT_REPO ?? fileURLToPath(new URL("../..", import.meta.url));
@@ -216,6 +256,19 @@ function providerIdFromFetchPath(pathname: string): string | undefined {
   }
 }
 
+function parseEventsQuery(url: URL): Record<string, unknown> {
+  const query: Record<string, unknown> = {};
+  const severity = url.searchParams.get("severity") ?? "";
+  const type = url.searchParams.get("type") ?? "";
+  const requestId = url.searchParams.get("requestId") ?? "";
+  if (severity.trim()) query.severity = severity.trim().toUpperCase();
+  if (type.trim()) query.type = type.trim();
+  if (requestId.trim()) query.requestId = requestId.trim();
+  const limit = Number(url.searchParams.get("limit"));
+  if (Number.isInteger(limit)) query.limit = limit;
+  return query;
+}
+
 function logIdFromPath(pathname: string): string | undefined {
   const prefix = "/api/logs/";
   if (!pathname.startsWith(prefix)) {
@@ -247,7 +300,19 @@ async function handleLogsApi(req: http.IncomingMessage, res: http.ServerResponse
     }
     try {
       await enqueueSave(async () => {
+        const before = logSettings();
         const saved = requestLog.saveSettings(parsed);
+        if (before.loggingEnabled !== saved.loggingEnabled) {
+          try {
+            requestLog.appendEvent({
+              type: "logs.settings",
+              severity: "INFO",
+              message: `Request recording ${saved.loggingEnabled ? "enabled" : "disabled"}.`,
+            });
+          } catch {
+            /* event write is best-effort */
+          }
+        }
         let wrapBytesChanged = false;
         let wrapError: string | undefined;
         const current = deps();
@@ -273,11 +338,42 @@ async function handleLogsApi(req: http.IncomingMessage, res: http.ServerResponse
   }
   if (req.method === "POST" && url.pathname === "/api/logs/clear") {
     requestLog.clearRequests();
+    try {
+      requestLog.appendEvent({
+        type: "logs.clear",
+        severity: "WARN",
+        message: "All request records and captured bodies were cleared.",
+      });
+    } catch {
+      /* best-effort */
+    }
     sendJson(res, 200, { ok: true });
     return true;
   }
   if (req.method === "GET" && url.pathname === "/api/logs") {
     sendJson(res, 200, requestLog.listRequests(parseLogsQuery(url)));
+    return true;
+  }
+  if (req.method === "GET" && url.pathname === "/api/logs/stats") {
+    sendJson(res, 200, requestLog.statsNow());
+    return true;
+  }
+  if (req.method === "GET" && url.pathname === "/api/logs/facets") {
+    sendJson(res, 200, requestLog.facetsNow());
+    return true;
+  }
+  if (req.method === "GET" && url.pathname === "/api/logs/events") {
+    sendJson(res, 200, requestLog.queryEvents(parseEventsQuery(url)));
+    return true;
+  }
+  if (req.method === "POST" && url.pathname === "/api/logs/cleanup") {
+    const result = await requestLog.cleanupNowAsync();
+    sendJson(res, 200, { ok: true, ...result });
+    return true;
+  }
+  if (req.method === "POST" && url.pathname === "/api/logs/strip-bodies") {
+    const result = await requestLog.stripBodiesAsync();
+    sendJson(res, 200, { ok: true, ...result });
     return true;
   }
   if (req.method === "GET") {
@@ -509,8 +605,43 @@ export function registerProcessFallbacks(
   });
 }
 
+// Automatic log cleanup: retention + cap enforcement runs ~every 30 minutes
+// (plus once shortly after startup), batched with event-loop yields so it
+// never blocks chat. Every run appends a logs.cleanup event.
+export const LOG_CLEANUP_INTERVAL_MS = 30 * 60 * 1000;
+const LOG_CLEANUP_STARTUP_DELAY_MS = 60 * 1000;
+
+let logCleanupTimer: ReturnType<typeof setInterval> | undefined;
+
+function runScheduledCleanup(): void {
+  try {
+    const pending = requestLog.cleanupNowAsync() as Promise<unknown>;
+    pending.catch(() => {
+      /* best-effort: cleanup must never take down the control service */
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+export function scheduleLogCleanup(): void {
+  if (logCleanupTimer !== undefined) return;
+  const startup = setTimeout(runScheduledCleanup, LOG_CLEANUP_STARTUP_DELAY_MS);
+  if (typeof startup.unref === "function") startup.unref();
+  logCleanupTimer = setInterval(runScheduledCleanup, LOG_CLEANUP_INTERVAL_MS);
+  if (typeof logCleanupTimer.unref === "function") logCleanupTimer.unref();
+}
+
+export function stopLogCleanup(): void {
+  if (logCleanupTimer !== undefined) {
+    clearInterval(logCleanupTimer);
+    logCleanupTimer = undefined;
+  }
+}
+
 function startServer(): void {
   registerProcessFallbacks();
+  scheduleLogCleanup();
   server.listen(port, host, () => {
     const box = paths();
     fs.mkdirSync(box.sandData, { recursive: true });

@@ -15,11 +15,25 @@ import {
 } from "lucide-react";
 import {
   clearLogs,
+  cleanupLogs,
   getLog,
+  getLogFacets,
+  getLogStats,
   listLogs,
+  listEvents,
   saveLogSettings,
+  stripLogBodies,
 } from "../api/client";
-import type { LogChannel, LogChannelFilter, LogDetail, LogRecord, LogSettings } from "../api/types";
+import type {
+  LogChannel,
+  LogChannelFilter,
+  LogDetail,
+  LogEvent,
+  LogFacets,
+  LogRecord,
+  LogSettings,
+  LogStats,
+} from "../api/types";
 import { LogChannelPair } from "../components/LogChannel";
 import { channelSubtitle, formatLatency, formatTime, formatTimestamp } from "../lib/format";
 import {
@@ -57,6 +71,19 @@ function asLogChannels(values: ReadonlyArray<string | undefined>): Array<LogChan
   });
 }
 
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"] as const;
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
 export function Logs({ logId, page: routePage }: { logId?: string; page?: number }) {
   const state = useBoxState();
   const { pushToast } = useApp();
@@ -83,6 +110,16 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
   const [drawer, setDrawer] = useState<DrawerState | null>(null);
   const [drawerLoading, setDrawerLoading] = useState(false);
 
+  const [activeTab, setActiveTab] = useState<"requests" | "events">("requests");
+  const [stats, setStats] = useState<LogStats | null>(null);
+  const [facets, setFacets] = useState<LogFacets | null>(null);
+  const [events, setEvents] = useState<LogEvent[]>([]);
+  const [eventsTotal, setEventsTotal] = useState(0);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [severityFilter, setSeverityFilter] = useState("");
+  const [confirmStrip, setConfirmStrip] = useState(false);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+
   useEffect(() => {
     if (state.logSettings) {
       setSettings(state.logSettings);
@@ -93,11 +130,14 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
   }, [state.logSettings]);
 
   const modelOptions = useMemo(() => {
+    if (facets && facets.model.values.length > 0) {
+      return facets.model.values.map((option) => option.value);
+    }
     const seen = new Set<string>();
     for (const m of state.models) seen.add(m.slug);
     for (const r of records) if (r.model) seen.add(r.model);
     return [...seen];
-  }, [state.models, records]);
+  }, [facets, state.models, records]);
 
   const pairs = useMemo(() => pairLogRows(records), [records]);
 
@@ -147,6 +187,78 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
   useEffect(() => {
     void loadRecords();
   }, [loadRecords]);
+
+  // Stats + facets are lazy and non-blocking: a failure hides the extras but
+  // never blocks the record list.
+  const refreshStats = useCallback(async () => {
+    try {
+      setStats(await getLogStats());
+    } catch {
+      /* stats stay hidden; the list is the source of truth */
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshStats();
+    listEvents({ limit: 1 })
+      .then((list) => setEventsTotal(list.total))
+      .catch(() => {
+        /* events tab will retry on open */
+      });
+    getLogFacets()
+      .then((f) => setFacets(f))
+      .catch(() => {
+        /* filters fall back to local options */
+      });
+  }, [refreshStats]);
+
+  const loadEvents = useCallback(async () => {
+    setEventsLoading(true);
+    try {
+      const list = await listEvents({ severity: severityFilter || undefined, limit: 100 });
+      setEvents(list.items);
+      setEventsTotal(list.total);
+    } catch {
+      /* keep previous events */
+    } finally {
+      setEventsLoading(false);
+    }
+  }, [severityFilter]);
+
+  useEffect(() => {
+    if (activeTab === "events") void loadEvents();
+  }, [activeTab, loadEvents]);
+
+  const doCleanup = async () => {
+    setCleanupBusy(true);
+    try {
+      const result = await cleanupLogs();
+      pushToast(
+        "success",
+        "Cleanup done",
+        `${String(result.removedByRetention ?? 0)} expired, ${String(result.removedByCap ?? 0)} over cap removed, ${String(result.kept ?? 0)} kept.`,
+      );
+      await refreshStats();
+      await loadRecords();
+      if (activeTab === "events") await loadEvents();
+    } catch (err) {
+      pushToast("error", "Cleanup failed", err instanceof Error ? err.message : "Could not clean logs.");
+    } finally {
+      setCleanupBusy(false);
+    }
+  };
+
+  const doStrip = async () => {
+    setConfirmStrip(false);
+    try {
+      const result = await stripLogBodies();
+      pushToast("success", "Bodies stripped", `${String(result.stripped)} captured bodies deleted; metadata kept.`);
+      await refreshStats();
+      await loadRecords();
+    } catch (err) {
+      pushToast("error", "Strip failed", err instanceof Error ? err.message : "Could not strip bodies.");
+    }
+  };
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
@@ -243,6 +355,8 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
       setTotal(0);
       goToPage(1);
       pushToast("success", "Logs cleared", "All request records were deleted.");
+      await refreshStats();
+      if (activeTab === "events") await loadEvents();
     } catch (err) {
       pushToast("error", "Clear failed", err instanceof Error ? err.message : "Could not clear logs.");
     }
@@ -269,6 +383,21 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
           { value: "", label: "All channels" },
           { value: "official", label: "Official", sublabel: "Stock Grok tap" },
           { value: "custom", label: "Custom", sublabel: "Upstream + harness" },
+        ],
+      },
+    ],
+    [],
+  );
+
+  const severityGroups: ListboxGroup[] = useMemo(
+    () => [
+      {
+        label: "Severity",
+        options: [
+          { value: "", label: "All severities" },
+          { value: "INFO", label: "Info" },
+          { value: "WARN", label: "Warnings" },
+          { value: "ERROR", label: "Errors" },
         ],
       },
     ],
@@ -350,6 +479,136 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
         ) : null}
       </section>
 
+      {/* Storage overview: lazy-loaded, never blocks the record list */}
+      {stats ? (
+        <section className="card logs-stats" aria-label="Log storage">
+          <div className="logs-stats__row">
+            <span className="logs-stats__item">
+              <span className="k">Records</span>
+              <span className="v mono">
+                {stats.records}
+                {stats.approximate ? " ~" : ""}
+              </span>
+            </span>
+            <span className="logs-stats__item">
+              <span className="k">Errors</span>
+              <span className="v mono">{stats.errors}</span>
+            </span>
+            <span className="logs-stats__item">
+              <span className="k">Tokens</span>
+              <span className="v mono">{stats.totalTokens}</span>
+            </span>
+            <span className="logs-stats__item">
+              <span className="k">Disk</span>
+              <span className="v mono">
+                {formatBytes(stats.diskBytes)}
+                {stats.bodiesApproximate ? " ~" : ""}
+              </span>
+            </span>
+            <span className="logs-stats__spacer" />
+            <Button variant="ghost-sm" onClick={() => void doCleanup()} disabled={cleanupBusy}>
+              {cleanupBusy ? "Cleaning…" : "Run cleanup"}
+            </Button>
+            <Button variant="ghost-danger" icon={Trash2} onClick={() => setConfirmStrip(true)}>
+              Strip bodies
+            </Button>
+          </div>
+          {stats.approximate ? (
+            <span className="logs-stats__note">Counts sampled from recent records.</span>
+          ) : null}
+        </section>
+      ) : null}
+
+      <div className="logs-tabs" role="tablist" aria-label="Log views">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "requests"}
+          className={`logs-tab${activeTab === "requests" ? " is-active" : ""}`}
+          onClick={() => setActiveTab("requests")}
+        >
+          Requests
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "events"}
+          className={`logs-tab${activeTab === "events" ? " is-active" : ""}`}
+          onClick={() => setActiveTab("events")}
+        >
+          Events{eventsTotal > 0 ? ` (${eventsTotal})` : ""}
+        </button>
+      </div>
+
+      {activeTab === "events" ? (
+        <section className="card" aria-label="Log events">
+          <div className="card__head logs-toolbar">
+            <Listbox
+              label="Filter by severity"
+              groups={severityGroups}
+              value={severityFilter}
+              onChange={(v) => setSeverityFilter(v)}
+              triggerStyle={{ height: 30 }}
+            />
+            <span className="mono" style={{ fontSize: 12, color: "var(--muted)" }}>
+              {eventsTotal} event{eventsTotal === 1 ? "" : "s"}
+            </span>
+            <span className="logs-toolbar__spacer" />
+            <IconButton label="Refresh events" icon={RefreshCw} onClick={() => void loadEvents()} />
+          </div>
+          <div className="card__body--flush table-wrap">
+            <table className="data table--stack">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Severity</th>
+                  <th>Type</th>
+                  <th>Message</th>
+                </tr>
+              </thead>
+              <tbody>
+                {eventsLoading ? (
+                  Array.from({ length: 5 }).map((_, i) => (
+                    <tr className="row-empty" key={i}>
+                      <td colSpan={4} style={{ padding: 0 }}>
+                        <div className="skel skel--row" />
+                      </td>
+                    </tr>
+                  ))
+                ) : events.length ? (
+                  events.map((event) => (
+                    <tr key={event.id}>
+                      <td className="mono" data-label="Time">
+                        {formatTime(event.at)}
+                      </td>
+                      <td data-label="Severity">
+                        <span className={`log-sev log-sev--${event.severity}`}>{event.severity}</span>
+                      </td>
+                      <td className="mono" data-label="Type">
+                        {event.type}
+                      </td>
+                      <td className="ellipsis" data-label="Message">
+                        {event.message}
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr className="row-empty">
+                    <td colSpan={4}>
+                      <EmptyState
+                        icon={ScrollText}
+                        title="No events yet"
+                        body="Settings changes and cleanups will appear here."
+                      />
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : (
+      <>
       {/* Toolbar + table */}
       <section className="card" aria-label="Request records">
         <div className="card__head logs-toolbar">
@@ -522,6 +781,8 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
           </div>
         </footer>
       </section>
+      </>
+      )}
 
       <ConfirmDialog
         open={confirmClear}
@@ -530,6 +791,17 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
         title="Clear all logs?"
         description="Every request record and captured body is deleted permanently."
         confirmLabel="Clear all logs"
+        icon={Trash2}
+        iconTone="danger"
+      />
+
+      <ConfirmDialog
+        open={confirmStrip}
+        onClose={() => setConfirmStrip(false)}
+        onConfirm={() => void doStrip()}
+        title="Strip all bodies?"
+        description="Captured request and response payloads are deleted permanently; record metadata stays browsable."
+        confirmLabel="Strip bodies"
         icon={Trash2}
         iconTone="danger"
       />

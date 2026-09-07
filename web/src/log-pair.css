@@ -88,3 +88,98 @@
 table.data td .log-pair {
   white-space: normal;
 }
+
+/* Logs storage overview: hairline card row, no shadows (DESIGN.md). */
+
+.logs-stats__row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+}
+
+.logs-stats__item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.logs-stats__item .k {
+  color: var(--muted);
+}
+
+.logs-stats__item .v {
+  font-weight: 600;
+}
+
+.logs-stats__spacer {
+  flex: 1 1 auto;
+}
+
+.logs-stats__note {
+  display: block;
+  padding: 0 16px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Requests / Events tabs. */
+
+.logs-tabs {
+  display: inline-flex;
+  gap: 4px;
+  margin: 0 0 12px;
+  padding: 2px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+}
+
+.logs-tab {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  color: var(--muted);
+  padding: 5px 14px;
+  border-radius: var(--r-pill);
+}
+
+.logs-tab.is-active {
+  background: var(--neutral-tint);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* Event severity pills reuse the notice palette. */
+
+.log-sev {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.88px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.log-sev--INFO {
+  background: var(--info-tint);
+  color: var(--info);
+}
+
+.log-sev--WARN {
+  background: var(--warning-tint);
+  color: var(--warning);
+}
+
+.log-sev--ERROR {
+  background: var(--danger-tint);
+  color: var(--danger-strong);
+}

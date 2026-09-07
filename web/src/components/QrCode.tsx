@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { qrMatrix, qrWithQuietZone } from "../../../src/qrcode.ts";
 
 const MODULE_DARK = "#000000";
@@ -27,18 +27,38 @@ export function QrCode({
 }) {
   const packed = useMemo(() => {
     try {
-      return qrWithQuietZone(qrMatrix(value), 4);
-    } catch {
-      return null;
+      return { grid: qrWithQuietZone(qrMatrix(value), 4), error: undefined as string | undefined };
+    } catch (err) {
+      return { grid: null as boolean[][] | null, error: err instanceof Error ? err.message : "QR encode failed" };
     }
   }, [value]);
 
-  if (!packed) {
-    return null;
+  const [copied, setCopied] = useState(false);
+
+  if (!packed.grid) {
+    return (
+      <div className="qr-code-fallback" role="img" aria-label={`QR code unavailable for ${value}`}>
+        <p>QR code unavailable ({packed.error ?? "unknown error"}).</p>
+        <p>
+          Open this link instead: <code>{value}</code>
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            setCopied(true);
+            navigator.clipboard?.writeText(value).catch(() => {
+              setCopied(false);
+            });
+          }}
+        >
+          {copied ? "Copied" : "Copy link"}
+        </button>
+      </div>
+    );
   }
 
-  const size = packed.length;
-  const d = modulesToPath(packed);
+  const size = packed.grid.length;
+  const d = modulesToPath(packed.grid);
   const caption = label ?? `QR code for ${value}`;
 
   return (

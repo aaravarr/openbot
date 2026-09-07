@@ -189,6 +189,76 @@ if [[ "${OPENBOT_SKIP_NPM_INSTALL:-}" != "1" ]] && ! payload_vendor_compression_
   fi
 fi
 
+# Update path: an old guard daemon (pidfile lock) would otherwise keep running
+# the previous release's code, so new guard logic (e.g. hop health patrol)
+# never takes effect. Stop it unconditionally here with the freshly swapped-in
+# cli.ts (new code always knows `guard --stop`): on a custom box the daemon is
+# restarted below from the new tree; on an official box this also clears a
+# leftover daemon from a previous custom install. First installs have no
+# pidfile and skip silently. Failures never abort the install (set -euo
+# pipefail is neutralized with || true).
+stop_old_guard_for_update() {
+  local pidfile="$DATA/openbot-guard.pid"
+  [[ -f "$pidfile" ]] || return 0
+  local pid
+  pid="$(tr -d '[:space:]' <"$pidfile" 2>/dev/null || true)"
+  if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+    rm -f "$pidfile" || true
+    return 0
+  fi
+  if ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$pidfile" || true
+    return 0
+  fi
+  node --experimental-strip-types src/cli.ts guard --stop \
+    --host-main "$HOST" --sand-data "$DATA" >/dev/null 2>&1 || true
+}
+
+# Update path: a standalone hop-server (payload/hop-server.cjs, pidfile
+# openbot-hop.pid) is only restarted for the UI service by reconcile's
+# reloadService (uiPid); a live standalone hop keeps serving old code.
+# Stop it here so cli.ts install below brings up the new tree. The argv check
+# (hop-server must appear) guards against killing a recycled pid, otherwise
+# only the stale pidfile is removed. Unified UI mode has no standalone hop
+# and skips automatically. All failures are silent.
+stop_stale_hop_for_update() {
+  local pidfile="$DATA/openbot-hop.pid"
+  [[ -f "$pidfile" ]] || return 0
+  local pid
+  pid="$(tr -d '[:space:]' <"$pidfile" 2>/dev/null || true)"
+  if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+    rm -f "$pidfile" || true
+    return 0
+  fi
+  if ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$pidfile" || true
+    return 0
+  fi
+  local args=""
+  if [[ -r "/proc/$pid/cmdline" ]]; then
+    args="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+  else
+    args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+  fi
+  if [[ "$args" == *"hop-server"* ]]; then
+    kill "$pid" 2>/dev/null || true
+    local waited=0
+    while kill -0 "$pid" 2>/dev/null && [[ "$waited" -lt 50 ]]; do
+      sleep 0.1 2>/dev/null || true
+      waited=$((waited + 1))
+    done
+    rm -f "$pidfile" || true
+  else
+    rm -f "$pidfile" || true
+  fi
+  return 0
+}
+
+# Guard first (it patrols hop health and could otherwise restart the hop),
+# then the standalone hop. Both are no-ops on a first install.
+stop_old_guard_for_update || true
+stop_stale_hop_for_update || true
+
 node --experimental-strip-types src/cli.ts install --host-main "$HOST" --sand-data "$DATA"
 
 # Start the in-project guard daemon when the box is custom so drift heals

@@ -7,7 +7,15 @@ import {
   type Snapshot,
 } from "../domain/types.ts";
 import { censusHost } from "../host/census.ts";
-import { peelOpengrokToStock, proveWrap, stripWrap, wrapHostSource } from "../host/wrap.ts";
+import { payloadFingerprint } from "../host/payload-fingerprint.ts";
+import {
+  extractPayloadFingerprint,
+  peelOpengrokToStock,
+  proveWrap,
+  refreshPayloadStamp,
+  stripWrap,
+  wrapHostSource,
+} from "../host/wrap.ts";
 import { observe, wrapFromSource, type SupervisorDeps } from "./observe.ts";
 import { compileCustomPlan, planToJson } from "./plan.ts";
 import { parseOwnedPid, writeTemp } from "./procs.ts";
@@ -135,6 +143,41 @@ async function bounceHostIfNeeded(deps: SupervisorDeps, wrapBytesChanged: boolea
   const pids = deps.procs.hostPids(deps.paths.hostMain);
   for (const pid of pids) {
     deps.procs.term(pid);
+  }
+}
+
+/**
+ * Hash of the payload tree that executes inside the host process. The wrap
+ * header only embeds the runtime path, so without this a payload deploy
+ * leaves the header byte-identical and the stale host is never bounced.
+ */
+function currentPayloadFingerprint(deps: SupervisorDeps): string {
+  const payloadDir = joinAbs(deps.paths.repoRoot, "payload");
+  return payloadFingerprint({
+    payloadDir,
+    read: (path) => deps.fs.read(path as AbsPath),
+  });
+}
+
+/**
+ * A wrap change means a new tree was deployed: a guard daemon from the
+ * previous tree would keep patrolling with old code. SIGTERM it here;
+ * install.sh starts a fresh daemon from the new tree right after, and
+ * `openbot guard --daemon` does the same for CLI-direct installs.
+ */
+function stopStaleGuardForUpdate(deps: SupervisorDeps): void {
+  const pid = deps.procs.readPidFile(deps.paths.guardPid);
+  if (pid === undefined || !deps.procs.pidAlive(pid)) {
+    deps.fs.remove(deps.paths.guardPid);
+    return;
+  }
+  deps.procs.stop(parseOwnedPid(pid));
+  try {
+    if (deps.procs.readPidFile(deps.paths.guardPid) === pid) {
+      deps.fs.remove(deps.paths.guardPid);
+    }
+  } catch {
+    /* pidfile cleanup is best-effort */
   }
 }
 
@@ -276,11 +319,22 @@ function installCustomWrap(
   deps: SupervisorDeps,
   source: string,
   opts: ReconcileOpts,
+  fingerprint: string,
 ): ReconcileResult | { changed: boolean } {
   if (source.includes(OPENBOT_MARKER)) {
-    return { changed: false };
+    // Already wrapped, but the wrap header is byte-stable across payload
+    // deploys: refresh the payload stamp so a payload change rewrites the
+    // host file and bounces the stale host below.
+    const before = extractPayloadFingerprint(source) ?? "none";
+    const refreshed = refreshPayloadStamp(source, fingerprint);
+    if (!refreshed.changed) {
+      return { changed: false };
+    }
+    deps.fs.write(deps.paths.hostMain, refreshed.source, 0o644);
+    appendAudit(deps, opts, "wrap", `payload:${before}`, `payload:${fingerprint}`);
+    return { changed: true };
   }
-  const proof = wrapHostSource({ source, runtimePath: deps.paths.runtime });
+  const proof = wrapHostSource({ source, runtimePath: deps.paths.runtime, payloadFingerprint: fingerprint });
   if (proof.kind === "refused") {
     return { kind: "refused", error: { kind: "census-refused", reason: proof.reason } };
   }
@@ -321,6 +375,9 @@ async function finishOk(
   desired: DesiredState,
   wrapBytesChanged: boolean,
 ): Promise<ReconcileResult> {
+  if (wrapBytesChanged) {
+    stopStaleGuardForUpdate(deps);
+  }
   await bounceHostIfNeeded(deps, wrapBytesChanged);
   const tunnel = await reconcileExpose(desired.expose, deps);
   const snapshot = await observe(deps);
@@ -361,6 +418,10 @@ export async function reconcile(
   deps.fs.mkdirp(deps.paths.sandData);
   let wrapBytesChanged = false;
 
+  // Payload fingerprint: a payload deploy must bounce the host even though
+  // the wrap header itself would otherwise be byte-identical.
+  const payloadFp = currentPayloadFingerprint(deps);
+
   if (desired.kind === "official") {
     writeMode(deps, "official", opts);
     if (loggingEnabledFromDisk(deps)) {
@@ -372,7 +433,7 @@ export async function reconcile(
           error: { kind: "census-refused", reason: `cannot wrap a ${census.kind} host` },
         };
       }
-      const wrapped = installCustomWrap(deps, toWrap, opts);
+      const wrapped = installCustomWrap(deps, toWrap, opts, payloadFp);
       if ("kind" in wrapped) {
         return wrapped;
       }
@@ -395,7 +456,7 @@ export async function reconcile(
     };
   }
 
-  const wrapped = installCustomWrap(deps, source, opts);
+  const wrapped = installCustomWrap(deps, source, opts, payloadFp);
   if ("kind" in wrapped) {
     return wrapped;
   }

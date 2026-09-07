@@ -338,6 +338,12 @@ async function handleLogsApi(req: http.IncomingMessage, res: http.ServerResponse
       sendJson(res, 400, { error: "invalid json" });
       return true;
     }
+    // maxRecords is read-compat only and never enforced: ignore it on the
+    // way in (saveSettings also refuses to persist it) so a stale count cap
+    // can never be mistaken for an active retention knob.
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      delete (parsed as Record<string, unknown>).maxRecords;
+    }
     try {
       await enqueueSave(async () => {
         const before = logSettings();

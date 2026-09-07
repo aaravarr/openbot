@@ -12,6 +12,15 @@ var MAX_TOTAL_COUNT = 1000;
 var FACETS_SAMPLE_LIMIT = 5000;
 var FACETS_MAX_OPTIONS = 200;
 var PRUNE_BATCH = 200;
+// A body file whose id never appeared in the log file may be mid-write from
+// another process ("body first, row second"). Only reap it once it is older
+// than this grace window. Bodies of rows that were pruned away are deleted
+// immediately: their id can never be appended again.
+var ORPHAN_GRACE_MS = 10 * 60 * 1000;
+var PRUNE_LOCK_NAME = "openbot-requests.lock";
+var PRUNE_LOCK_STALE_MS = 60 * 1000;
+var PRUNE_LOCK_WAIT_MS = 15 * 1000;
+var PRUNE_LOCK_WAIT_ASYNC_MS = 2000;
 var MAX_EVENT_BYTES = 4 * 1000 * 1000;
 var MAX_EVENT_KEPT = 500;
 var STATS_DISK_SCAN_CAP = 5000;
@@ -113,6 +122,10 @@ function loadSettings() {
 
 function saveSettings(input) {
   var next = normalizeSettings(input, loadSettings());
+  // Deprecated (read-compat only): maxRecords is never enforced anywhere, so
+  // it is never persisted. The settings PUT API drops the field before it
+  // even reaches here; this is the second net for direct callers.
+  delete next.maxRecords;
   var file = logPaths().settings;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(next, null, 2) + "\n", "utf8");
@@ -589,13 +602,19 @@ function readRows(file) {
     return [];
   }
   var rows = [];
+  var seenIds = Object.create(null);
   var lines = text.split(/\n/);
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i].trim();
     if (!line) continue;
     try {
       var row = JSON.parse(line);
-      if (isRecord(row) && typeof row.id === "string") rows.push(row);
+      // Dedupe by id (keep first): a maintenance repair pass may re-append a
+      // row that raced a rewrite, and readers must never double-count it.
+      if (isRecord(row) && typeof row.id === "string" && !seenIds[row.id]) {
+        seenIds[row.id] = true;
+        rows.push(row);
+      }
     } catch (err) {
       /* skip bad lines */
     }
@@ -652,11 +671,128 @@ function setFacetsCache(value) {
   return value;
 }
 
-// The sync write path (recordHopInner) must never block chat: a full prune
-// runs at most once per WRITE_PRUNE_INTERVAL_MS there. Steady-state pruning
-// is owned by the scheduled cleanup (pruneNowAsync / cleanupNowAsync).
-var lastWritePruneAt = 0;
-var WRITE_PRUNE_INTERVAL_MS = 60 * 1000;
+// ---- Cross-process safety (UI server + host append + prune side by side).
+//
+// Writers never take the prune lock: rows are appended with O_APPEND
+// (fs.appendFileSync), which never truncates a concurrent writer's bytes.
+// Only maintenance (prune/strip) takes the lock, via an O_EXCL lockfile, so
+// two pruners can never interleave read-modify-write cycles. The lock is
+// stale-checked by mtime: a crashed holder cannot wedge pruning forever.
+
+function pruneLockFile() {
+  return path.join(sandDataDir(), PRUNE_LOCK_NAME);
+}
+
+function sleepMsSync(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch (err) {
+    /* sleep is best-effort */
+  }
+}
+
+function acquirePruneLock(waitMs) {
+  var file = pruneLockFile();
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+  } catch (err) {
+    /* fall through to the create attempt */
+  }
+  var budget = typeof waitMs === "number" ? waitMs : PRUNE_LOCK_WAIT_MS;
+  var deadline = Date.now() + budget;
+  for (;;) {
+    try {
+      fs.writeFileSync(file, String(process.pid) + "\n", { flag: "wx" });
+      return true;
+    } catch (err) {
+      var stat = null;
+      try {
+        stat = fs.statSync(file);
+      } catch (statErr) {
+        continue; // lock vanished between attempts; retry immediately
+      }
+      if (stat !== null && Date.now() - stat.mtimeMs > PRUNE_LOCK_STALE_MS) {
+        try {
+          fs.unlinkSync(file);
+        } catch (unlinkErr) {
+          /* someone else is racing us; fall through to wait */
+        }
+        continue;
+      }
+      if (Date.now() >= deadline) return false;
+      sleepMsSync(50);
+    }
+  }
+}
+
+function releasePruneLock() {
+  try {
+    fs.unlinkSync(pruneLockFile());
+  } catch (err) {
+    /* already gone */
+  }
+}
+
+function rowIdSet(rows) {
+  var ids = Object.create(null);
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i] && typeof rows[i].id === "string") ids[rows[i].id] = true;
+  }
+  return ids;
+}
+
+function sortRowsOldestFirst(rows) {
+  rows.sort(function (a, b) {
+    var left = typeof a.startedAt === "string" ? a.startedAt : "";
+    var right = typeof b.startedAt === "string" ? b.startedAt : "";
+    if (left === right) return 0;
+    return left < right ? 1 : -1;
+  });
+  rows.reverse();
+  return rows;
+}
+
+// Merge rows another process appended after `seenRows` was read. Writers
+// append lock-free, so the tail can grow between our last read and the
+// rewrite: merging narrows that loss window, and repairAppends closes it.
+function mergeRows(kept, seenRows, freshRows) {
+  var seen = rowIdSet(seenRows);
+  var have = rowIdSet(kept);
+  for (var i = 0; i < freshRows.length; i++) {
+    var row = freshRows[i];
+    if (row && typeof row.id === "string" && !seen[row.id] && !have[row.id]) {
+      kept.push(row);
+      have[row.id] = true;
+    }
+  }
+  return kept;
+}
+
+// Re-append rows that landed between our last read and the rewrite. Safe to
+// run under the prune lock: writers use O_APPEND, so our repair append and
+// their row append both survive (readRows dedupes by id on the next read).
+// Callers must pass only rows that were never in the pre-prune read:
+// intentionally pruned (expired) rows must never be rescued.
+function unseenRows(seenRows, freshRows) {
+  var seen = rowIdSet(seenRows);
+  var out = [];
+  for (var i = 0; i < freshRows.length; i++) {
+    var row = freshRows[i];
+    if (row && typeof row.id === "string" && !seen[row.id]) out.push(row);
+  }
+  return out;
+}
+function repairAppends(file, freshRows) {
+  var after = readRows(file);
+  var have = rowIdSet(after);
+  var missing = [];
+  for (var i = 0; i < freshRows.length; i++) {
+    var row = freshRows[i];
+    if (row && typeof row.id === "string" && !have[row.id]) missing.push(row);
+  }
+  if (missing.length > 0) writeRows(file, missing, { append: true });
+  return missing;
+}
 
 function yieldToLoop() {
   return new Promise(function (resolve) { setImmediate(resolve); });
@@ -682,9 +818,10 @@ function pruneRows(rows, settings) {
   return kept;
 }
 
-function unlinkOrphans(dir, kept) {
-  var ids = Object.create(null);
-  for (var i = 0; i < kept.length; i++) ids[kept[i].id] = true;
+function unlinkOrphans(dir, kept, knownIds, nowMs) {
+  var ids = rowIdSet(kept);
+  var known = knownIds || ids;
+  var now = typeof nowMs === "number" ? nowMs : Date.now();
   var files;
   try {
     files = fs.readdirSync(dir);
@@ -695,21 +832,45 @@ function unlinkOrphans(dir, kept) {
     var name = files[f];
     if (!name.endsWith(".json")) continue;
     var id = name.slice(0, -5);
-    if (!ids[id]) {
+    if (ids[id]) continue;
+    if (!known[id]) {
+      // No row with this id was in the log file: it may be mid-write from
+      // another process ("body first, row second"). Only reap it once it is
+      // older than the grace window.
+      var stat = null;
       try {
-        fs.unlinkSync(path.join(dir, name));
-      } catch (err) {
-        /* ignore */
+        stat = fs.statSync(path.join(dir, name));
+      } catch (statErr) {
+        continue;
       }
+      if (stat === null || now - stat.mtimeMs < ORPHAN_GRACE_MS) continue;
+    }
+    // A row with this id existed and was pruned away: no live writer will
+    // ever append that id again, so the body can go immediately.
+    try {
+      fs.unlinkSync(path.join(dir, name));
+    } catch (err) {
+      /* ignore */
     }
   }
 }
 
 function pruneNow(settings) {
-  var paths = logPaths();
-  var kept = pruneRows(readRows(paths.requestLog), settings);
-  writeRows(paths.requestLog, kept);
-  unlinkOrphans(paths.bodiesDir, kept);
+  if (!acquirePruneLock()) return;
+  try {
+    var paths = logPaths();
+    var seen = readRows(paths.requestLog);
+    var kept = pruneRows(seen, settings);
+    var fresh = readRows(paths.requestLog);
+    mergeRows(kept, seen, fresh);
+    sortRowsOldestFirst(kept);
+    writeRows(paths.requestLog, kept);
+    var rescued = repairAppends(paths.requestLog, unseenRows(seen, fresh));
+    for (var i = 0; i < rescued.length; i++) kept.push(rescued[i]);
+    unlinkOrphans(paths.bodiesDir, kept, rowIdSet(fresh));
+  } finally {
+    releasePruneLock();
+  }
 }
 
 function resolveResponse(input) {
@@ -867,20 +1028,14 @@ function recordHopInner(input) {
   var origin = cleanText(src.origin, 120);
   if (origin) row.origin = origin;
 
-  var rows = readRows(paths.requestLog);
-  rows.push(row);
-  // Gated sync prune: date-based retention runs here at most once per
-  // WRITE_PRUNE_INTERVAL_MS; the scheduled cleanup owns steady-state
-  // pruning. (maxRecords is deprecated and no longer consulted.)
-  var nowMs = Date.now();
-  if (nowMs - lastWritePruneAt > WRITE_PRUNE_INTERVAL_MS) {
-    lastWritePruneAt = nowMs;
-    var kept = pruneRows(rows, settings);
-    writeRows(paths.requestLog, kept);
-    unlinkOrphans(paths.bodiesDir, kept);
-  } else {
-    writeRows(paths.requestLog, rows);
-  }
+  // Append-only, lock-free: O_APPEND never truncates a concurrent writer's
+  // bytes, so the UI server and the host process record side by side with
+  // no read-modify-write cycle. Retention and orphan cleanup are owned by
+  // the UI server's scheduled cleanup (pruneNowAsync); the write path never
+  // prunes, so a body file can never be reaped between "body written" and
+  // "row appended".
+  fs.mkdirSync(path.dirname(paths.requestLog), { recursive: true });
+  fs.appendFileSync(paths.requestLog, JSON.stringify(row) + "\n", "utf8");
   invalidateAggregates();
 }
 
@@ -1049,10 +1204,16 @@ function getRequest(id) {
 
 function clearRequests() {
   var paths = logPaths();
+  // Best-effort maintenance lock so a concurrent prune cannot interleave.
+  var locked = acquirePruneLock(PRUNE_LOCK_WAIT_ASYNC_MS);
   try {
-    writeRows(paths.requestLog, []);
-  } catch (err) {
-    /* ignore */
+    try {
+      writeRows(paths.requestLog, []);
+    } catch (err) {
+      /* ignore */
+    }
+  } finally {
+    if (locked) releasePruneLock();
   }
   var files;
   try {
@@ -1180,6 +1341,17 @@ function retentionCutoffIso(settings) {
 
 function pruneNowAsync(settings, onBatch) {
   var paths = logPaths();
+  // Serialize pruners across processes. Writers append lock-free (O_APPEND),
+  // so holding this lock never blocks chat; it only stops two maintenance
+  // passes from interleaving read-modify-write cycles.
+  if (!acquirePruneLock(PRUNE_LOCK_WAIT_ASYNC_MS)) {
+    return Promise.resolve({
+      skipped: true,
+      removedByRetention: 0,
+      removedByCap: 0,
+      kept: readRows(paths.requestLog).length,
+    });
+  }
   var cutoff = retentionCutoffIso(settings);
   // No count cap: retention is date-based only. settings.maxRecords, when
   // present, is ignored (read-compat).
@@ -1187,6 +1359,28 @@ function pruneNowAsync(settings, onBatch) {
   var removedByRetention = 0;
   var kept = [];
   var index = 0;
+  function finish() {
+    try {
+      // removedByCap stays in the result shape for backward compat and is
+      // always 0 now that no count cap is enforced.
+      var removedByCap = 0;
+      var fresh = readRows(paths.requestLog);
+      mergeRows(kept, rows, fresh);
+      sortRowsOldestFirst(kept);
+      writeRows(paths.requestLog, kept);
+      var rescued = repairAppends(paths.requestLog, unseenRows(rows, fresh));
+      for (var i = 0; i < rescued.length; i++) kept.push(rescued[i]);
+      unlinkOrphans(paths.bodiesDir, kept, rowIdSet(fresh));
+      invalidateAggregates();
+      return {
+        removedByRetention: removedByRetention,
+        removedByCap: removedByCap,
+        kept: kept.length,
+      };
+    } finally {
+      releasePruneLock();
+    }
+  }
   function step() {
     var end = Math.min(index + PRUNE_BATCH, rows.length);
     for (; index < end; index++) {
@@ -1205,28 +1399,21 @@ function pruneNowAsync(settings, onBatch) {
       }
     }
     if (index < rows.length) return yieldToLoop().then(step);
-    kept.sort(function (a, b) {
-      var left = typeof a.startedAt === "string" ? a.startedAt : "";
-      var right = typeof b.startedAt === "string" ? b.startedAt : "";
-      if (left === right) return 0;
-      return left < right ? 1 : -1;
-    });
-    // removedByCap stays in the result shape for backward compat and is
-    // always 0 now that no count cap is enforced.
-    var removedByCap = 0;
-    kept.reverse();
-    writeRows(paths.requestLog, kept);
-    unlinkOrphans(paths.bodiesDir, kept);
-    invalidateAggregates();
-    return {
-      removedByRetention: removedByRetention,
-      removedByCap: removedByCap,
-      kept: kept.length,
-    };
+    return finish();
   }
   // Always async: callers (and the UI scheduler) rely on a Promise, even
   // when there is nothing to prune.
-  return Promise.resolve().then(step);
+  return Promise.resolve()
+    .then(step)
+    .then(
+      function (result) {
+        return result;
+      },
+      function (err) {
+        releasePruneLock();
+        throw err;
+      },
+    );
 }
 
 function cleanupNowAsync(settings, onBatch) {
@@ -1532,10 +1719,14 @@ function usageNow(query) {
 
 function stripBodiesAsync() {
   var paths = logPaths();
+  if (!acquirePruneLock(PRUNE_LOCK_WAIT_ASYNC_MS)) {
+    return Promise.resolve({ stripped: 0, skipped: true });
+  }
   var names;
   try {
     names = fs.readdirSync(paths.bodiesDir);
   } catch (err) {
+    releasePruneLock();
     return Promise.resolve({ stripped: 0 });
   }
   var files = [];
@@ -1555,16 +1746,20 @@ function stripBodiesAsync() {
       }
     }
     if (index < files.length) return yieldToLoop().then(step);
-    var rows = readRows(paths.requestLog);
-    for (var r = 0; r < rows.length; r++) {
-      if (rows[r].hasRequest) rows[r].hasRequest = false;
-      if (rows[r].hasResponse) rows[r].hasResponse = false;
-      if (rows[r].bodyBytes !== undefined) delete rows[r].bodyBytes;
-      if (rows[r].requestTruncated !== undefined) delete rows[r].requestTruncated;
-      if (rows[r].responseTruncated !== undefined) delete rows[r].responseTruncated;
+    try {
+      var rows = readRows(paths.requestLog);
+      for (var r = 0; r < rows.length; r++) {
+        if (rows[r].hasRequest) rows[r].hasRequest = false;
+        if (rows[r].hasResponse) rows[r].hasResponse = false;
+        if (rows[r].bodyBytes !== undefined) delete rows[r].bodyBytes;
+        if (rows[r].requestTruncated !== undefined) delete rows[r].requestTruncated;
+        if (rows[r].responseTruncated !== undefined) delete rows[r].responseTruncated;
+      }
+      writeRows(paths.requestLog, rows);
+      invalidateAggregates();
+    } finally {
+      releasePruneLock();
     }
-    writeRows(paths.requestLog, rows);
-    invalidateAggregates();
     try {
       appendEvent({
         type: "logs.strip-bodies",
@@ -1577,7 +1772,17 @@ function stripBodiesAsync() {
     }
     return { stripped: stripped };
   }
-  return Promise.resolve().then(step);
+  return Promise.resolve()
+    .then(step)
+    .then(
+      function (result) {
+        return result;
+      },
+      function (err) {
+        releasePruneLock();
+        throw err;
+      },
+    );
 }
 
 exports.DEFAULTS = DEFAULTS;

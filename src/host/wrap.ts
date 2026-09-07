@@ -12,14 +12,58 @@ const WRAPPER = `function createProtoSessionProvider() {
 `;
 
 const HEADER_RE =
-  /^\/\* openbot-stock-wrap \*\/\nvar __openbotRuntime = require\((?:'[^']+'|"[^"]+")\);\nfunction createProtoSessionProvider\(\) \{\n  return __openbotRuntime\.(?:wrapSession|attachSession)\(createProtoSessionProvider_stock, arguments\);\n\}\n/;
+  /^\/\* openbot-stock-wrap \*\/\n(?:\/\* openbot-payload [0-9a-f]{8,64} \*\/\n)?var __openbotRuntime = require\((?:'[^']+'|"[^"]+")\);\nfunction createProtoSessionProvider\(\) \{\n  return __openbotRuntime\.(?:wrapSession|attachSession)\(createProtoSessionProvider_stock, arguments\);\n\}\n/;
 
 const OPENGROK_HEADER_RE =
   /^\/\* opengrok-stock-wrap \*\/\nvar __opengrokRuntime = require\((?:'[^']+'|"[^"]+")\);\n(?:async )?function createProtoSessionProvider\(\) \{\n  return __opengrokRuntime\.wrapSession\(createProtoSessionProvider_stock, arguments\);\n\}\n/;
 
 const LEFTOVER_MARKER_RE = /^\s*\/\* openbot-stock-wrap \*\/\s*\n/;
 
-export function wrapHostSource(input: { source: string; runtimePath: string }): WrapProof {
+/** A wrap header without a stamp is pre-stamp code: always treated as stale. */
+export function extractPayloadFingerprint(source: string): string | undefined {
+  const match = source.match(/^\/\* openbot-payload ([0-9a-f]{8,64}) \*\/$/m);
+  return match?.[1];
+}
+
+function stampLine(fingerprint: string): string | undefined {
+  if (!/^[0-9a-f]{8,64}$/.test(fingerprint)) {
+    return undefined;
+  }
+  return `/* openbot-payload ${fingerprint} */\n`;
+}
+
+/**
+ * Ensure the wrap header carries the current payload fingerprint. Returns
+ * the source unchanged when the stamp already matches; inserts or replaces
+ * the stamp line otherwise. Never touches unmarked sources.
+ */
+export function refreshPayloadStamp(source: string, fingerprint: string): { source: string; changed: boolean } {
+  if (!source.includes(OPENBOT_MARKER)) {
+    return { source, changed: false };
+  }
+  if (extractPayloadFingerprint(source) === fingerprint) {
+    return { source, changed: false };
+  }
+  const line = stampLine(fingerprint);
+  if (line === undefined) {
+    return { source, changed: false };
+  }
+  if (/^\/\* openbot-payload [0-9a-f]{8,64} \*\/\n/m.test(source)) {
+    return { source: source.replace(/^\/\* openbot-payload [0-9a-f]{8,64} \*\/\n/m, line), changed: true };
+  }
+  const markerAt = source.indexOf(OPENBOT_MARKER);
+  const eol = source.indexOf("\n", markerAt);
+  if (eol < 0) {
+    return { source: `${source}\n${line}`, changed: true };
+  }
+  return { source: `${source.slice(0, eol + 1)}${line}${source.slice(eol + 1)}`, changed: true };
+}
+
+export function wrapHostSource(input: {
+  source: string;
+  runtimePath: string;
+  payloadFingerprint?: string | undefined;
+}): WrapProof {
   const { source, runtimePath } = input;
   if (source.includes(OPENBOT_MARKER)) {
     return { kind: "already-marked", source };
@@ -42,8 +86,9 @@ export function wrapHostSource(input: { source: string; runtimePath: string }): 
   }
   const renamed =
     source.slice(0, at) + "function createProtoSessionProvider_stock(" + source.slice(at + needle.length);
+  const stamp = typeof input.payloadFingerprint === "string" ? (stampLine(input.payloadFingerprint) ?? "") : "";
   const header =
-    `${OPENBOT_MARKER}\n` + `var __openbotRuntime = require(${JSON.stringify(runtimePath)});\n` + WRAPPER;
+    `${OPENBOT_MARKER}\n` + stamp + `var __openbotRuntime = require(${JSON.stringify(runtimePath)});\n` + WRAPPER;
   return { kind: "wrapped", source: header + renamed };
 }
 

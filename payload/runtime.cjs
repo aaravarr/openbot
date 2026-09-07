@@ -3,6 +3,8 @@
 var fs = require("fs");
 var http = require("http");
 var https = require("https");
+var net = require("net");
+var childProcess = require("child_process");
 var path = require("path");
 var { URL } = require("url");
 var { toOpenAIMessages } = require("./openai-messages.cjs");
@@ -300,12 +302,299 @@ function isRetryableHopError(err) {
   return msg.indexOf("socket hang up") !== -1 || msg.indexOf("ECONNRESET") !== -1 || msg.indexOf("ETIMEDOUT") !== -1;
 }
 
+// ---- In-request hop self-heal (gateway-owned; the guard daemon stays the backstop). ----
+//
+// Budgets (worst-case added latency per request, on top of upstream time):
+//   retry delays ............ 1s + 3s = ~4s   (HOP_RETRY, unchanged)
+//   port probe .............. 0.25s           (mirrors procs.portOpen)
+//   live-pid grace .......... 3s              (a starting hop may just be slow)
+//   spawn + port wait ....... 15s cap         (cold node boot is ~0.5-2s)
+//   per-request retry budget  30s from the first failure (HOP_HEAL.retryBudgetMs)
+// Steady-state cost is one ~ms TCP probe per retry; spawning happens only
+// when the port is actually closed, and concurrent healers share one
+// in-flight attempt plus a pidfile-mtime throttle against other processes.
+var HOP_HEAL = {
+  probeTimeoutMs: 250,
+  pollMs: 100,
+  startupGraceMs: 3000,
+  spawnWaitMs: 15000,
+  spawnThrottleMs: 10000,
+  shortWaitMs: 2000,
+  retryBudgetMs: 30000,
+};
+
+var healInFlight = null;
+var lastSpawnAt = 0;
+var lastSpawnPid = 0;
+
+function hopHealTarget(overrides) {
+  var o = overrides && typeof overrides === "object" ? overrides : {};
+  var entry = typeof o.entry === "string" && o.entry
+    ? o.entry
+    : process.env.OPENBOT_HOP_ENTRY || path.join(__dirname, "hop-server.cjs");
+  var pidFile = typeof o.pidFile === "string" && o.pidFile
+    ? o.pidFile
+    : process.env.OPENBOT_HOP_PID || path.join(sandDir(), "openbot-hop.pid");
+  var logFile = typeof o.logFile === "string" && o.logFile
+    ? o.logFile
+    : process.env.OPENBOT_HOP_LOG || path.join(sandDir(), "openbot-hop.log");
+  return {
+    host: typeof o.host === "string" && o.host ? o.host : HOP_HOST,
+    port: Number.isFinite(Number(o.port)) && Number(o.port) > 0 ? Number(o.port) : HOP_PORT,
+    entry: entry,
+    pidFile: pidFile,
+    logFile: logFile,
+  };
+}
+
+function hopPortOpen(host, port, timeoutMs) {
+  return new Promise(function (resolve) {
+    var done = false;
+    var socket;
+    try {
+      socket = net.connect({ host: host, port: port });
+    } catch (err) {
+      resolve(false);
+      return;
+    }
+    function finish(open) {
+      if (done) return;
+      done = true;
+      try {
+        socket.removeAllListeners();
+      } catch (err) {
+        /* ignore */
+      }
+      try {
+        socket.destroy();
+      } catch (err) {
+        /* ignore */
+      }
+      resolve(open);
+    }
+    socket.setTimeout(timeoutMs || HOP_HEAL.probeTimeoutMs);
+    socket.once("connect", function () {
+      finish(true);
+    });
+    socket.once("timeout", function () {
+      finish(false);
+    });
+    socket.once("error", function () {
+      finish(false);
+    });
+  });
+}
+
+function readHopPid(pidFile) {
+  try {
+    var pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+    return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+  } catch (err) {
+    return undefined;
+  }
+}
+
+function hopPidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+function hopPidFileAgeMs(pidFile) {
+  try {
+    return Date.now() - fs.statSync(pidFile).mtimeMs;
+  } catch (err) {
+    return undefined;
+  }
+}
+
+// Poll the port until it opens or the deadline passes. When a spawned child
+// handle is given, give up early once it has exited: a dead child will never
+// open the port, and waiting out the full window would only stall the retry.
+function waitHopPort(host, port, waitMs, child) {
+  var deadline = Date.now() + Math.max(0, waitMs);
+  function poll(resolve) {
+    if (child && child.exitCode !== null && child.exitCode !== undefined) {
+      resolve(false);
+      return;
+    }
+    hopPortOpen(host, port).then(function (open) {
+      if (open || Date.now() >= deadline) {
+        resolve(open);
+        return;
+      }
+      setTimeout(function () {
+        poll(resolve);
+      }, HOP_HEAL.pollMs);
+    });
+  }
+  return new Promise(poll);
+}
+
+// Mirror of src/supervisor procs.start: detached spawn, output appended to
+// the hop log, pidfile written (hop-server rewrites the same file on listen,
+// so both writers converge). Never throws: failures surface as null and the
+// caller falls back to plain retries.
+function spawnHopServer(target) {
+  try {
+    fs.mkdirSync(path.dirname(target.pidFile), { recursive: true });
+    fs.mkdirSync(path.dirname(target.logFile), { recursive: true });
+  } catch (err) {
+    /* best-effort */
+  }
+  var logFd;
+  try {
+    logFd = fs.openSync(target.logFile, "a");
+  } catch (err) {
+    return null;
+  }
+  var child;
+  try {
+    child = childProcess.spawn(process.execPath, [target.entry], {
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+      env: Object.assign({}, process.env, {
+        OPENBOT_HOP_HOST: target.host,
+        OPENBOT_HOP_PORT: String(target.port),
+        OPENBOT_HOP_PID: target.pidFile,
+      }),
+    });
+  } catch (err) {
+    try {
+      fs.closeSync(logFd);
+    } catch (closeErr) {
+      /* ignore */
+    }
+    return null;
+  }
+  try {
+    fs.closeSync(logFd);
+  } catch (err) {
+    /* ignore */
+  }
+  // A failed spawn (bad entry path, EACCES, ...) arrives as an async error
+  // event: swallow it here so it can never take down the host process. The
+  // exit-code check in waitHopPort reports the failure to the caller.
+  child.on("error", function () {
+    /* reported via exitCode polling */
+  });
+  if (child.pid === undefined) return null;
+  try {
+    child.unref();
+  } catch (err) {
+    /* ignore */
+  }
+  try {
+    fs.writeFileSync(target.pidFile, String(child.pid) + "\n", { encoding: "utf8", mode: 0o644 });
+  } catch (err) {
+    /* hop-server rewrites it on listen; ours is best-effort */
+  }
+  lastSpawnAt = Date.now();
+  lastSpawnPid = child.pid;
+  return child;
+}
+
+async function doHealUp(target, allowSpawn) {
+  if (await hopPortOpen(target.host, target.port)) return { ok: true, action: "already-up" };
+  if (!allowSpawn) {
+    // Post-heal retries: confirm only, never spawn (bounded extra latency).
+    if (await waitHopPort(target.host, target.port, HOP_HEAL.shortWaitMs, null)) {
+      return { ok: true, action: "waited" };
+    }
+    return { ok: false, action: "still-down" };
+  }
+  var pid = readHopPid(target.pidFile);
+  var ownerAlive = pid !== undefined && hopPidAlive(pid);
+  var age = hopPidFileAgeMs(target.pidFile);
+  var freshPidfile = age !== undefined && age < HOP_HEAL.spawnThrottleMs;
+  // Our own recent spawn counts only while that child is still alive: a
+  // dead child will never open the port, so throttling on it would stall
+  // every later retry behind a full wait window for nothing.
+  var recentSpawn = Date.now() - lastSpawnAt < HOP_HEAL.spawnThrottleMs &&
+    lastSpawnPid > 0 &&
+    hopPidAlive(lastSpawnPid);
+  if (!ownerAlive && !freshPidfile && !recentSpawn) {
+    // Nobody owns the address and nobody just spawned: safe to launch.
+    // A live-but-portless owner gets one grace window inside the wait
+    // below only when the throttle says someone is actively starting.
+    var child = spawnHopServer(target);
+    if (child) {
+      log("hop heal: spawned hop-server pid=" + child.pid + " for " + target.host + ":" + String(target.port));
+      if (await waitHopPort(target.host, target.port, HOP_HEAL.spawnWaitMs, child)) {
+        return { ok: true, action: "spawned", pid: child.pid };
+      }
+      log("hop heal: spawned pid=" + child.pid + " never opened " + String(target.port));
+    } else {
+      log("hop heal: spawn failed for " + target.host + ":" + String(target.port));
+    }
+    return { ok: false, action: "spawn-failed" };
+  }
+  if (ownerAlive) {
+    // The pidfile owner is alive but portless (still starting or wedged):
+    // a short grace first, then the full wait below covers a slow boot.
+    if (await waitHopPort(target.host, target.port, HOP_HEAL.startupGraceMs, null)) {
+      return { ok: true, action: "waited" };
+    }
+  }
+  // A live owner, a fresh pidfile from another process, or our own live
+  // recent spawn: wait for the port instead of stampeding a second server
+  // onto the same address.
+  if (await waitHopPort(target.host, target.port, HOP_HEAL.spawnWaitMs, null)) {
+    return { ok: true, action: "waited" };
+  }
+  return { ok: false, action: ownerAlive ? "owner-wedged" : "spawn-throttled" };
+}
+
+// In-request entry point. Resolves {ok, action}; never throws and never
+// touches the chat path on failure — callers fall back to plain retries.
+// Concurrent healers in this process share one in-flight attempt; the port
+// is re-checked under that mutex so a winner's hop is reused, not respawned.
+function ensureHopUp(overrides, allowSpawn) {
+  var target = hopHealTarget(overrides);
+  if (allowSpawn === undefined) allowSpawn = true;
+  return hopPortOpen(target.host, target.port).then(function (open) {
+    if (open) return { ok: true, action: "already-up" };
+    if (healInFlight) return healInFlight;
+    healInFlight = doHealUp(target, allowSpawn);
+    return healInFlight.then(
+      function (result) {
+        healInFlight = null;
+        return result;
+      },
+      function () {
+        healInFlight = null;
+        return { ok: false, action: "error" };
+      },
+    );
+  });
+}
+
+// Test seam: drop any shared heal attempt and spawn-throttle timestamp.
+function resetHopHealState() {
+  healInFlight = null;
+  lastSpawnAt = 0;
+  lastSpawnPid = 0;
+}
+
 /** Bounded retry around hopRequest. Callers must only call this before any
  * byte of the response has been consumed: the promise resolves with the
  * first response that has a usable (2xx) status, and 5xx statuses are read
- * and discarded here so the next attempt can start cleanly. */
-async function hopRequestWithRetry(body) {
+ * and discarded here so the next attempt can start cleanly. Self-heal runs
+ * in this loop (see above): retryable failures re-probe the hop port and
+ * relaunch hop-server while it is down, then replay the original request —
+ * only an exhausted gateway ever throws to the harness. */
+async function hopRequestWithRetry(body, healOverrides) {
   var attemptIndex = 0;
+  // Only the first retryable failure may spawn; later ones just re-confirm
+  // the port (the guard daemon owns the slow loop from there on).
+  var healTried = false;
+  // Wall-clock budget for the whole retry sequence, measured from the first
+  // failure. When it lapses the last error/response goes to the harness —
+  // every layer below has already been exhausted by then.
+  var budgetStart = 0;
   while (true) {
     var res;
     try {
@@ -314,6 +603,13 @@ async function hopRequestWithRetry(body) {
       if (attemptIndex >= HOP_RETRY.maxRetries || !isRetryableHopError(err)) {
         throw err;
       }
+      if (!budgetStart) budgetStart = Date.now();
+      var heal = await ensureHopUp(healOverrides, !healTried);
+      healTried = true;
+      if (heal.action !== "already-up") {
+        log("hop retry: heal " + heal.action + " after " + String(err && err.message ? err.message : err));
+      }
+      if (Date.now() - budgetStart > HOP_HEAL.retryBudgetMs) throw err;
       await new Promise(function (resolve) { setTimeout(resolve, hopRetryDelayMs(attemptIndex)); });
       attemptIndex += 1;
       continue;
@@ -325,6 +621,15 @@ async function hopRequestWithRetry(body) {
     if (attemptIndex >= HOP_RETRY.maxRetries || !isRetryableHopStatus(status)) {
       return res;
     }
+    if (!budgetStart) budgetStart = Date.now();
+    // An HTTP 5xx proves hop answered, but the port is still re-confirmed
+    // (cheap): a hop that died between response and replay is caught here.
+    var confirm = await ensureHopUp(healOverrides, !healTried);
+    healTried = true;
+    if (confirm.action !== "already-up") {
+      log("hop retry: heal " + confirm.action + " after hop HTTP " + String(status));
+    }
+    if (Date.now() - budgetStart > HOP_HEAL.retryBudgetMs) return res;
     await new Promise(function (resolve) { res.resume(); setTimeout(resolve, hopRetryDelayMs(attemptIndex)); });
     attemptIndex += 1;
   }
@@ -366,6 +671,7 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
       status: extra.status,
       error: extra.error,
       usage: extra.usage,
+      firstTokenMs: extra.firstTokenMs,
       requestBody: {
         messages: jsonSafe(hostMsgs, 0),
         tools: jsonSafe(tools, 0),
@@ -423,7 +729,9 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
       var u = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
       var hopId = "";
       var yielded = [];
+      var firstPartAt = 0;
       for await (var part of iterateOpenAiResponse(res, voiceTool)) {
+        if (!firstPartAt) firstPartAt = Date.now();
         if (part && part.type === "finish") {
           if (part.usage) u = part.usage;
           if (part.id) hopId = part.id;
@@ -450,7 +758,11 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
         settled.r = true;
         resR(settledResponse);
       }
-      recordCustomHost({ status: 200, usage: u });
+      recordCustomHost({
+        status: 200,
+        usage: u,
+        firstTokenMs: firstPartAt ? firstPartAt - startedMs : undefined,
+      });
     } catch (err) {
       log("stream error " + (err && err.message));
       failAll(err);
@@ -544,10 +856,12 @@ function tapStreamResult(result, ctx) {
   var original = result.fullStream;
   if (!original || typeof original[Symbol.asyncIterator] !== "function") return result;
   var parts = [];
+  var firstPartAt = 0;
   var fullStream = (async function* () {
     var err;
     try {
       for await (var part of original) {
+        if (!firstPartAt) firstPartAt = Date.now();
         try {
           parts.push(jsonSafe(part, 0));
         } catch (ignore) {
@@ -579,6 +893,7 @@ function tapStreamResult(result, ctx) {
           status: err ? 500 : 200,
           error: err && err.message ? String(err.message) : undefined,
           usage: usageVal,
+          firstTokenMs: firstPartAt ? Math.max(0, firstPartAt - ctx.startedMs) : undefined,
           requestBody: {
             messages: jsonSafe(ctx.messages, 0),
             tools: jsonSafe(ctx.tools, 0),
@@ -702,6 +1017,10 @@ module.exports = {
   hopFullStream: hopFullStream,
   hopRequest: hopRequest,
   hopRequestWithRetry: hopRequestWithRetry,
+  HOP_HEAL: HOP_HEAL,
+  ensureHopUp: ensureHopUp,
+  hopPortOpen: hopPortOpen,
+  resetHopHealState: resetHopHealState,
   isRetryableHopStatus: isRetryableHopStatus,
   isRetryableHopError: isRetryableHopError,
   hopRetryDelayMs: hopRetryDelayMs,

@@ -174,7 +174,7 @@ test("hopFullStream does not retry a hop 400", async () => {
   });
 });
 
-test("hopFullStream retries ECONNREFUSED when hop is down then succeeds", async () => {
+test("hopFullStream surfaces ECONNREFUSED when hop is down and self-heal has nothing to launch", async () => {
   const deadPort = await freePort();
   const dir = mkdtempSync(path.join(os.tmpdir(), "openbot-rt-dead-"));
   const planPath = path.join(dir, "plan.json");
@@ -189,9 +189,17 @@ test("hopFullStream retries ECONNREFUSED when hop is down then succeeds", async 
   const prevPlan = process.env.OPENBOT_PLAN;
   const prevHost = process.env.OPENBOT_HOP_HOST;
   const prevPort = process.env.OPENBOT_HOP_PORT;
+  const prevEntry = process.env.OPENBOT_HOP_ENTRY;
+  const prevPid = process.env.OPENBOT_HOP_PID;
+  const prevLog = process.env.OPENBOT_HOP_LOG;
   process.env.OPENBOT_PLAN = planPath;
   process.env.OPENBOT_HOP_HOST = "127.0.0.1";
   process.env.OPENBOT_HOP_PORT = String(deadPort);
+  // Nothing launchable here: self-heal must fail fast and the original
+  // connection error (not a spawn artifact) reaches the harness.
+  process.env.OPENBOT_HOP_ENTRY = path.join(dir, "no-such-hop-server.cjs");
+  process.env.OPENBOT_HOP_PID = path.join(dir, "hop.pid");
+  process.env.OPENBOT_HOP_LOG = path.join(dir, "hop.log");
   const runtime = loadRuntime();
   try {
     const result = runtime.hopFullStream(
@@ -218,5 +226,11 @@ test("hopFullStream retries ECONNREFUSED when hop is down then succeeds", async 
     else process.env.OPENBOT_HOP_HOST = prevHost;
     if (prevPort === undefined) delete process.env.OPENBOT_HOP_PORT;
     else process.env.OPENBOT_HOP_PORT = prevPort;
+    if (prevEntry === undefined) delete process.env.OPENBOT_HOP_ENTRY;
+    else process.env.OPENBOT_HOP_ENTRY = prevEntry;
+    if (prevPid === undefined) delete process.env.OPENBOT_HOP_PID;
+    else process.env.OPENBOT_HOP_PID = prevPid;
+    if (prevLog === undefined) delete process.env.OPENBOT_HOP_LOG;
+    else process.env.OPENBOT_HOP_LOG = prevLog;
   }
 });

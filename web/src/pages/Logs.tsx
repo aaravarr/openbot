@@ -16,6 +16,7 @@ import {
 import {
   clearLogs,
   cleanupLogs,
+  fetchLogUsage,
   getLog,
   getLogFacets,
   getLogStats,
@@ -33,6 +34,8 @@ import type {
   LogRecord,
   LogSettings,
   LogStats,
+  LogUsage,
+  LogUsageRow,
 } from "../api/types";
 import { LogChannelPair } from "../components/LogChannel";
 import { channelSubtitle, formatLatency, formatTime, formatTimestamp } from "../lib/format";
@@ -110,7 +113,10 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
   const [drawer, setDrawer] = useState<DrawerState | null>(null);
   const [drawerLoading, setDrawerLoading] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<"requests" | "events">("requests");
+  const [activeTab, setActiveTab] = useState<"requests" | "events" | "usage">("requests");
+  const [usage, setUsage] = useState<LogUsage | null>(null);
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [usageError, setUsageError] = useState<string | null>(null);
   const [stats, setStats] = useState<LogStats | null>(null);
   const [facets, setFacets] = useState<LogFacets | null>(null);
   const [events, setEvents] = useState<LogEvent[]>([]);
@@ -140,6 +146,9 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
   }, [facets, state.models, records]);
 
   const pairs = useMemo(() => pairLogRows(records), [records]);
+  // The source column only appears once the backend stamps source fields; older
+  // rows render without it instead of a column of dashes.
+  const hasSourceColumn = useMemo(() => records.some(hasSource), [records]);
 
   const routePageValue = routePage !== undefined && routePage >= 1 ? routePage : 1;
 
@@ -228,6 +237,24 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
   useEffect(() => {
     if (activeTab === "events") void loadEvents();
   }, [activeTab, loadEvents]);
+ 
+  // Usage is a lazy extra: it loads only when the tab opens, and a failure
+  // shows a note without ever blocking the request list.
+  const loadUsage = useCallback(async () => {
+    setUsageLoading(true);
+    setUsageError(null);
+    try {
+      setUsage(await fetchLogUsage());
+    } catch (err) {
+      setUsageError(err instanceof Error ? err.message : "Could not load usage.");
+    } finally {
+      setUsageLoading(false);
+    }
+  }, []);
+ 
+  useEffect(() => {
+    if (activeTab === "usage" && usage === null && !usageLoading && !usageError) void loadUsage();
+  }, [activeTab, usage, usageLoading, usageError, loadUsage]);
 
   const doCleanup = async () => {
     setCleanupBusy(true);
@@ -357,6 +384,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
       pushToast("success", "Logs cleared", "All request records were deleted.");
       await refreshStats();
       if (activeTab === "events") await loadEvents();
+      if (activeTab === "usage") await loadUsage();
     } catch (err) {
       pushToast("error", "Clear failed", err instanceof Error ? err.message : "Could not clear logs.");
     }
@@ -538,6 +566,15 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
         >
           Events{eventsTotal > 0 ? ` (${eventsTotal})` : ""}
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "usage"}
+          className={`logs-tab${activeTab === "usage" ? " is-active" : ""}`}
+          onClick={() => setActiveTab("usage")}
+        >
+          Usage
+        </button>
       </div>
 
       {activeTab === "events" ? (
@@ -607,6 +644,8 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
             </table>
           </div>
         </section>
+      ) : activeTab === "usage" ? (
+        <UsageSection usage={usage} loading={usageLoading} error={usageError} onRetry={() => void loadUsage()} />
       ) : (
       <>
       {/* Toolbar + table */}
@@ -676,6 +715,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
                 <th>Time</th>
                 <th>Channel</th>
                 <th>Model</th>
+                {hasSourceColumn ? <th>Source</th> : null}
                 <th>Status</th>
                 <th className="num">Latency</th>
                 <th className="num">Tokens</th>
@@ -687,7 +727,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr className="row-empty" key={i}>
-                    <td colSpan={8} style={{ padding: 0 }}><div className="skel skel--row" /></td>
+                    <td colSpan={hasSourceColumn ? 9 : 8} style={{ padding: 0 }}><div className="skel skel--row" /></td>
                   </tr>
                 ))
               ) : pairs.length ? (
@@ -709,6 +749,11 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
                         <LogChannelPair channels={asLogChannels(pairChannels(pair))} />
                       </td>
                       <td className="mono" data-label="Model">{pairModel(pair) ?? "—"}</td>
+                      {hasSourceColumn ? (
+                        <td className="ellipsis" data-label="Source">
+                          {pairSourceLabel(pair) ?? "—"}
+                        </td>
+                      ) : null}
                       <td data-label="Status"><StatusPill status={pairStatus(pair)} /></td>
                       <td className="num mono" data-label="Latency">{formatLatency(pairLatency(pair))}</td>
                       <td className="num mono" data-label="Tokens">{pairTokens(pair) ?? "—"}</td>
@@ -721,7 +766,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
                 })
               ) : recordingOff ? (
                 <tr className="row-empty">
-                  <td colSpan={8}>
+                  <td colSpan={hasSourceColumn ? 9 : 8}>
                     <EmptyState
                       icon={ScrollText}
                       title="Recording is off"
@@ -736,7 +781,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
                 </tr>
               ) : (
                 <tr className="row-empty">
-                  <td colSpan={8}>
+                  <td colSpan={hasSourceColumn ? 9 : 8}>
                     <EmptyState
                       icon={ScrollText}
                       title="No requests yet"
@@ -818,6 +863,254 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
   );
 }
 
+/** Members behind a rendered row: a single record, or the hop + harness pair. */
+function pairMembers(pair: LogRowPair<LogRecord>): LogRecord[] {
+  return pair.kind === "pair" ? [pair.hop, pair.harness] : [pair.record];
+}
+ 
+function hasSource(r: LogRecord): boolean {
+  return Boolean(r.clientName || r.clientVersion || r.conversationId || r.userAgent);
+}
+ 
+/** Short source label for list rows; prefers client name, then conversation, then UA. */
+function sourceLabel(r: LogRecord): string | undefined {
+  const name = r.clientName?.trim();
+  if (name) {
+    const version = r.clientVersion?.trim();
+    return version ? `${name} ${version}` : name;
+  }
+  const conversation = r.conversationId?.trim();
+  if (conversation) {
+    return conversation.length > 18 ? `…${conversation.slice(-16)}` : conversation;
+  }
+  const ua = r.userAgent?.trim();
+  if (ua) return ua.length > 32 ? `${ua.slice(0, 31)}…` : ua;
+  return undefined;
+}
+ 
+function pairSourceLabel(pair: LogRowPair<LogRecord>): string | undefined {
+  for (const member of pairMembers(pair)) {
+    const label = sourceLabel(member);
+    if (label) return label;
+  }
+  return undefined;
+}
+ 
+/** True when a body was kept in metadata but its text is (temporarily) unreadable. */
+function isBodyMissing(has: boolean, body: unknown): boolean {
+  if (!has) return false;
+  if (body === null || body === undefined) return true;
+  if (typeof body === "string" && body.length === 0) return true;
+  return false;
+}
+ 
+/** Complete clipboard text: the full body when the record carries it, else the preview. */
+function fullRequestText(d: LogDetail): string | null {
+  return rawBodyText(d.request ?? d.requestBody, d.requestFull);
+}
+ 
+function fullResponseText(d: LogDetail): string | null {
+  return rawBodyText(d.response ?? d.responseBody, d.responseFull);
+}
+ 
+type UsageGroup = {
+  key: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  requestCount: number;
+  avgLatencyMs?: number;
+}
+ 
+/** Aggregate raw usage rows by an arbitrary key; latency is request-weighted. */
+function groupUsage(rows: LogUsageRow[], pick: (row: LogUsageRow) => string): UsageGroup[] {
+  const acc = new Map<string, UsageGroup & { latSum: number; latN: number }>();
+  for (const row of rows) {
+    const key = pick(row).trim() || "未知";
+    let g = acc.get(key);
+    if (!g) {
+      g = { key, promptTokens: 0, completionTokens: 0, totalTokens: 0, requestCount: 0, latSum: 0, latN: 0 };
+      acc.set(key, g);
+    }
+    g.promptTokens += row.promptTokens;
+    g.completionTokens += row.completionTokens;
+    g.totalTokens += row.totalTokens;
+    g.requestCount += row.requestCount;
+    if (row.avgLatencyMs !== undefined) {
+      const weight = Math.max(1, row.requestCount);
+      g.latSum += row.avgLatencyMs * weight;
+      g.latN += weight;
+    }
+  }
+  const groups = [...acc.values()].map(({ latSum, latN, ...rest }) => ({
+    ...rest,
+    avgLatencyMs: latN > 0 ? latSum / latN : undefined,
+  }));
+  groups.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return groups;
+}
+ 
+/** Approximate counts render with the “约” marker. */
+function usageCount(value: number, approximate: boolean): string {
+  return `${approximate ? "约 " : ""}${value.toLocaleString("en-US")}`;
+}
+ 
+/** Dependency-free bar: a thin proportional fill under the total cell. */
+function UsageBar({ value, max }: { value: number; max: number }) {
+  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+  return (
+    <div
+      aria-hidden="true"
+      style={{ height: 6, borderRadius: 3, background: "var(--surface-3)", overflow: "hidden", marginTop: 4, minWidth: 80 }}
+    >
+      <div style={{ height: "100%", width: `${pct}%`, background: "var(--primary)", borderRadius: 3 }} />
+    </div>
+  );
+}
+ 
+function UsageTable({
+  caption,
+  keyLabel,
+  groups,
+  approximate,
+}: {
+  caption: string;
+  keyLabel: string;
+  groups: UsageGroup[];
+  approximate: boolean;
+}) {
+  const maxTotal = groups.reduce((max, g) => Math.max(max, g.totalTokens), 0);
+  return (
+    <div>
+      <span className="section-label">{caption}</span>
+      <div className="card__body--flush table-wrap">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>{keyLabel}</th>
+              <th className="num">请求数</th>
+              <th className="num">输入</th>
+              <th className="num">输出</th>
+              <th className="num">总计</th>
+              <th className="num">平均延迟</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map((g) => (
+              <tr key={g.key}>
+                <td className="mono">{g.key}</td>
+                <td className="num mono">{usageCount(g.requestCount, approximate)}</td>
+                <td className="num mono">{usageCount(g.promptTokens, approximate)}</td>
+                <td className="num mono">{usageCount(g.completionTokens, approximate)}</td>
+                <td className="num mono">
+                  {usageCount(g.totalTokens, approximate)}
+                  <UsageBar value={g.totalTokens} max={maxTotal} />
+                </td>
+                <td className="num mono">{formatLatency(g.avgLatencyMs)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+ 
+function UsageSection({
+  usage,
+  loading,
+  error,
+  onRetry,
+}: {
+  usage: LogUsage | null;
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+}) {
+  const rows = usage?.rows ?? [];
+  const approximate = usage?.approximate === true;
+ 
+  const totals = useMemo(() => {
+    let promptTokens = 0;
+    let completionTokens = 0;
+    let totalTokens = 0;
+    let requestCount = 0;
+    let latSum = 0;
+    let latN = 0;
+    for (const row of rows) {
+      promptTokens += row.promptTokens;
+      completionTokens += row.completionTokens;
+      totalTokens += row.totalTokens;
+      requestCount += row.requestCount;
+      if (row.avgLatencyMs !== undefined) {
+        const weight = Math.max(1, row.requestCount);
+        latSum += row.avgLatencyMs * weight;
+        latN += weight;
+      }
+    }
+    return {
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      requestCount,
+      avgLatencyMs: latN > 0 ? latSum / latN : undefined,
+    };
+  }, [rows]);
+ 
+  const byDay = useMemo(() => groupUsage(rows, (row) => row.day ?? row.date ?? "未知"), [rows]);
+  const byModel = useMemo(() => groupUsage(rows, (row) => row.model ?? "未知"), [rows]);
+ 
+  return (
+    <section className="card" aria-label="Token usage">
+      <div className="card__head logs-toolbar">
+        <span className="card__label">Usage</span>
+        <span className="mono" style={{ fontSize: 12, color: "var(--muted)" }}>
+          按天 / 按模型聚合
+        </span>
+        <span className="logs-toolbar__spacer" />
+        <IconButton label="Refresh usage" icon={RefreshCw} onClick={onRetry} />
+      </div>
+      {loading && rows.length === 0 ? (
+        <div className="card__body stack" style={{ gap: 8 }}>
+          <div className="skel skel--line" style={{ width: "60%" }} />
+          <div className="skel skel--line" style={{ width: "85%" }} />
+          <div className="skel skel--block" />
+        </div>
+      ) : error && rows.length === 0 ? (
+        <div className="card__body stack" style={{ gap: 12 }}>
+          <div className="notice notice--warn">
+            <span className="text">用量统计暂不可用（{error}），日志列表不受影响。</span>
+          </div>
+          <div>
+            <Button variant="secondary" onClick={onRetry}>
+              重试
+            </Button>
+          </div>
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="card__body">
+          <EmptyState icon={ScrollText} title="暂无用量数据" body="产生请求后，这里会按天和按模型汇总 token 用量。" />
+        </div>
+      ) : (
+        <div className="card__body stack" style={{ gap: 20 }}>
+          <div className="token-trio" style={{ flexWrap: "wrap" }}>
+            <div className="token-stat"><div className="k">请求数</div><div className="v">{usageCount(totals.requestCount, approximate)}</div></div>
+            <div className="token-stat"><div className="k">输入</div><div className="v">{usageCount(totals.promptTokens, approximate)}</div></div>
+            <div className="token-stat"><div className="k">输出</div><div className="v">{usageCount(totals.completionTokens, approximate)}</div></div>
+            <div className="token-stat"><div className="k">总计</div><div className="v">{usageCount(totals.totalTokens, approximate)}</div></div>
+            <div className="token-stat"><div className="k">平均延迟</div><div className="v">{formatLatency(totals.avgLatencyMs)}</div></div>
+          </div>
+          <UsageTable caption="按天" keyLabel="日期" groups={byDay} approximate={approximate} />
+          <UsageTable caption="按模型" keyLabel="模型" groups={byModel} approximate={approximate} />
+          {approximate ? (
+            <span style={{ fontSize: 12, color: "var(--muted)" }}>“约”表示该计数为近似值（后端采样或封顶计数）。</span>
+          ) : null}
+        </div>
+      )}
+    </section>
+  );
+}
+ 
 function LogDrawer({
   state,
   loading,
@@ -891,8 +1184,12 @@ function LogDrawer({
 }
 
 function LogLayer({ detail: d, stacked }: { detail: LogDetail; stacked: boolean }) {
-  const requestRaw = rawBodyText(d.request, d.requestFull);
-  const responseRaw = rawBodyText(d.response, d.responseFull);
+  const requestValue = d.request ?? d.requestBody;
+  const responseValue = d.response ?? d.responseBody;
+  const requestRaw = rawBodyText(requestValue, d.requestFull);
+  const responseRaw = rawBodyText(responseValue, d.responseFull);
+  const requestMissing = isBodyMissing(d.hasRequest, requestValue);
+  const responseMissing = isBodyMissing(d.hasResponse, responseValue);
 
   const body = (
     <>
@@ -913,6 +1210,24 @@ function LogLayer({ detail: d, stacked }: { detail: LogDetail; stacked: boolean 
           <span className="v mono">{d.stream ? "true" : "false"}</span>
           <span className="k">Inbound</span>
           <span className="v mono">{d.inboundEndpoint ?? "POST /v1/chat/completions"}</span>
+          {d.clientName || d.clientVersion ? (
+            <>
+              <span className="k">Source</span>
+              <span className="v">{[d.clientName, d.clientVersion].filter(Boolean).join(" ")}</span>
+            </>
+          ) : null}
+          {d.conversationId ? (
+            <>
+              <span className="k">Conversation</span>
+              <span className="v mono">{d.conversationId}</span>
+            </>
+          ) : null}
+          {d.userAgent ? (
+            <>
+              <span className="k">User agent</span>
+              <span className="v">{d.userAgent}</span>
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -946,9 +1261,15 @@ function LogLayer({ detail: d, stacked }: { detail: LogDetail; stacked: boolean 
         <div className="drawer-section">
           <div className="drawer-section__head">
             <span className="section-label">Request body <span style={{ color: "var(--muted)", textTransform: "none", letterSpacing: 0 }}>· keys redacted</span></span>
-            {requestRaw ? <CopyButton label="Copy request payload" text={requestRaw} /> : null}
+            {d.hasRequest ? (
+              <CopyButton
+                label="Copy request payload"
+                fullLabel="Request payload copied"
+                text={() => getLog(d.id).then((fresh) => fullRequestText(fresh), () => requestRaw)}
+              />
+            ) : null}
           </div>
-          <div className="code-pane">{stringifyBody(d.request)}</div>
+          <div className="code-pane">{requestMissing ? "报文不可用" : stringifyBody(requestValue)}</div>
           {d.requestTruncated ? <span style={{ fontSize: 12, color: "var(--muted)" }}>Body truncated by retention settings.</span> : null}
         </div>
       ) : null}
@@ -957,9 +1278,15 @@ function LogLayer({ detail: d, stacked }: { detail: LogDetail; stacked: boolean 
         <div className="drawer-section">
           <div className="drawer-section__head">
             <span className="section-label">Response body <span style={{ color: "var(--muted)", textTransform: "none", letterSpacing: 0 }}>· redacted</span></span>
-            {responseRaw ? <CopyButton label="Copy response payload" text={responseRaw} /> : null}
+            {d.hasResponse ? (
+              <CopyButton
+                label="Copy response payload"
+                fullLabel="Response payload copied"
+                text={() => getLog(d.id).then((fresh) => fullResponseText(fresh), () => responseRaw)}
+              />
+            ) : null}
           </div>
-          <div className="code-pane">{stringifyBody(d.response)}</div>
+          <div className="code-pane">{responseMissing ? "报文不可用" : stringifyBody(responseValue)}</div>
           {d.responseTruncated ? <span style={{ fontSize: 12, color: "var(--muted)" }}>Body truncated by retention settings.</span> : null}
         </div>
       ) : null}
@@ -1060,7 +1387,7 @@ function legacyCopy(text: string): boolean {
   }
 }
 
-function CopyButton({ label, text }: { label: string; text: string }) {
+function CopyButton({ label, text, fullLabel }: { label: string; text: string | (() => Promise<string | null>); fullLabel?: string }) {
   const { pushToast } = useApp();
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | null>(null);
@@ -1072,12 +1399,15 @@ function CopyButton({ label, text }: { label: string; text: string }) {
   }, []);
 
   const onCopy = async () => {
-    if (await copyText(text)) {
+    const resolve = typeof text === "string" ? undefined : await text();
+    const value = typeof text === "string" ? text : (resolve ?? null);
+    if (value !== null && (await copyText(value))) {
       setCopied(true);
+      pushToast("success", "Copied", fullLabel ?? label);
       if (timer.current !== null) window.clearTimeout(timer.current);
       timer.current = window.setTimeout(() => setCopied(false), 1500);
     } else {
-      pushToast("error", "Copy failed", "Clipboard access was denied.");
+      pushToast("error", "Copy failed", value === null ? "The full body is not readable yet." : "Clipboard access was denied.");
     }
   };
 

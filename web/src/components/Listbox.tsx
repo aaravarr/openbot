@@ -29,6 +29,8 @@ type ListboxProps = {
   disabled?: boolean;
   placeholder?: string;
   triggerStyle?: React.CSSProperties;
+  /** Text shown when the search filter matches nothing. Defaults to "无匹配模型". */
+  emptyText?: string;
 };
 
 type FlatOption = { option: ListboxOption; groupLabel: string };
@@ -41,6 +43,7 @@ export function Listbox({
   disabled,
   placeholder,
   triggerStyle,
+  emptyText = "无匹配模型",
 }: ListboxProps) {
   const uid = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -86,6 +89,24 @@ export function Listbox({
     setActiveIndex(-1);
   }, []);
 
+  // The search input updates the query before the filtered list is recomputed,
+  // so activeIndex can transiently point past the end (or at [0] of an empty
+  // list). Clamp it here; every visible[activeIndex] read is additionally guarded
+  // through activeFlat so an empty filter can never crash the render.
+  useEffect(() => {
+    if (!open) return;
+    if (visible.length === 0) {
+      if (activeIndex !== -1) setActiveIndex(-1);
+      return;
+    }
+    if (activeIndex < 0 || activeIndex >= visible.length) {
+      setActiveIndex(0);
+    }
+  }, [open, visible, activeIndex]);
+ 
+  const activeFlat: FlatOption | undefined =
+    activeIndex >= 0 && activeIndex < visible.length ? visible[activeIndex] : undefined;
+ 
   const openPanel = useCallback(() => {
     if (disabled) return;
     setOpen(true);
@@ -150,11 +171,11 @@ export function Listbox({
   }, [visible]);
 
   useEffect(() => {
-    const id = activeIndex >= 0 ? optionId(visible[activeIndex] as FlatOption) : undefined;
+    const id = activeFlat ? optionId(activeFlat) : undefined;
     if (id) {
       document.getElementById(id)?.scrollIntoView({ block: "nearest" });
     }
-  }, [activeIndex, visible, uid]);
+  }, [activeFlat, uid]);
 
   const move = useCallback(
     (delta: number) => {
@@ -189,7 +210,7 @@ export function Listbox({
       setActiveIndex(visible.length ? visible.length - 1 : -1);
     } else if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      const opt = visible[activeIndex];
+      const opt = activeFlat;
       if (opt) select(opt.option);
     }
   };
@@ -201,7 +222,7 @@ export function Listbox({
       listRef.current?.focus();
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const first = visible[0];
+      const first = visible.length ? visible[0] : undefined;
       if (first) select(first.option);
     }
   };
@@ -253,7 +274,7 @@ export function Listbox({
             tabIndex={-1}
             aria-label={label ?? "Options"}
             aria-activedescendant={
-              activeIndex >= 0 ? optionId(visible[activeIndex] as FlatOption) : undefined
+              activeFlat ? optionId(activeFlat) : undefined
             }
             ref={listRef}
             onKeyDown={handleListKey}
@@ -293,7 +314,7 @@ export function Listbox({
                   })}
               </div>
             ))}
-            {!visible.length ? <div className="listbox__empty">No models match.</div> : null}
+            {!visible.length ? <div className="listbox__empty">{emptyText}</div> : null}
           </div>
         </div>
       ) : null}

@@ -157,6 +157,11 @@ export type LogRecord = {
   hasResponse: boolean;
   requestTruncated?: boolean;
   responseTruncated?: boolean;
+  /** Request source stamped by the logger; absent on rows written before it existed. */
+  clientName?: string;
+  clientVersion?: string;
+  conversationId?: string;
+  userAgent?: string;
 };
 
 export type LogDetail = LogRecord & {
@@ -166,6 +171,10 @@ export type LogDetail = LogRecord & {
   requestFull?: string;
   /** Full redacted body text for copy buttons; present only on truncated records. */
   responseFull?: string;
+  /** Legacy alias some backends use for `request`. */
+  requestBody?: unknown;
+  /** Legacy alias some backends use for `response`. */
+  responseBody?: unknown;
 };
 
 export type LogList = {
@@ -194,6 +203,25 @@ export type LogStats = {
 };
 
 export type LogFacetOption = { value: string; count: number };
+ 
+/** One aggregated usage row from GET /api/logs/usage (grouped by day and/or model). */
+export type LogUsageRow = {
+  day?: string;
+  date?: string;
+  model?: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  requestCount: number;
+  avgLatencyMs?: number;
+  approximate?: boolean;
+};
+ 
+/** Normalized usage payload; `approximate` renders as the “约” marker in the UI. */
+export type LogUsage = {
+  rows: LogUsageRow[];
+  approximate: boolean;
+};
 
 export type LogFacets = {
   sampled: number;

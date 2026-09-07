@@ -20,6 +20,8 @@ import type {
   LogRecord,
   LogSettings,
   LogStats,
+  LogUsage,
+  LogUsageRow,
   ModelCatalog,
   RefreshCatalogResult,
   RefusalError,
@@ -241,6 +243,59 @@ export async function getLogStats(): Promise<LogStats> {
 
 export async function getLogFacets(): Promise<LogFacets> {
   return (await request("/api/logs/facets")) as LogFacets;
+}
+ 
+/* ---- Usage: per-day / per-model token aggregates (lazy, never blocks the list) ---- */
+export async function fetchLogUsage(query: { from?: string; to?: string; model?: string } = {}): Promise<LogUsage> {
+  const params = new URLSearchParams();
+  if (query.from) params.set("from", query.from);
+  if (query.to) params.set("to", query.to);
+  if (query.model) params.set("model", query.model);
+  const suffix = params.toString();
+  const data = await request(suffix ? `/api/logs/usage?${suffix}` : "/api/logs/usage");
+  return normalizeLogUsage(data);
+}
+ 
+function numOrZero(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+ 
+/** Backend shape is still settling, so accept a bare row array or { rows | items | data }. */
+function normalizeLogUsage(data: unknown): LogUsage {
+  const obj = (typeof data === "object" && data !== null ? data : {}) as Record<string, unknown>;
+  const rawRows: unknown[] = Array.isArray(data)
+    ? data
+    : Array.isArray(obj.rows)
+      ? (obj.rows as unknown[])
+      : Array.isArray(obj.items)
+        ? (obj.items as unknown[])
+        : Array.isArray(obj.data)
+          ? (obj.data as unknown[])
+          : [];
+  const rows: LogUsageRow[] = rawRows.map((row) => {
+    const r = (typeof row === "object" && row !== null ? row : {}) as Record<string, unknown>;
+    const promptTokens = numOrZero(r.promptTokens ?? r.prompt_tokens);
+    const completionTokens = numOrZero(r.completionTokens ?? r.completion_tokens);
+    const totalRaw = r.totalTokens ?? r.total_tokens;
+    const totalTokens =
+      typeof totalRaw === "number" && Number.isFinite(totalRaw) ? totalRaw : promptTokens + completionTokens;
+    const latencyRaw = r.avgLatencyMs ?? r.avgLatency ?? r.latencyMs;
+    return {
+      day: typeof r.day === "string" ? (r.day as string) : undefined,
+      date: typeof r.date === "string" ? (r.date as string) : undefined,
+      model: typeof r.model === "string" ? (r.model as string) : undefined,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      requestCount: numOrZero(r.requestCount ?? r.requests ?? r.count),
+      avgLatencyMs: typeof latencyRaw === "number" && Number.isFinite(latencyRaw) ? latencyRaw : undefined,
+      approximate: r.approximate === true,
+    };
+  });
+  return {
+    rows,
+    approximate: obj.approximate === true || rows.some((row) => row.approximate === true),
+  };
 }
 
 export type EventQuery = {

@@ -25,7 +25,7 @@ var HOP_PORT = Number(process.env.OPENBOT_HOP_PORT || "9280");
 var HIGH_AGENT_MAX_TOKENS = 65536;
 var MAX_SAFE_STRING = 32768;
 var HOP_RETRY = {
-  maxRetries: 2,
+  maxRetries: 3,
   baseDelayMs: 1000,
   factor: 3,
 };
@@ -290,7 +290,11 @@ function hopRetryDelayMs(attemptIndex) {
 }
 
 function isRetryableHopStatus(status) {
-  return status === 500 || status === 502 || status === 503 || status === 504;
+  if (status === 500 || status === 502 || status === 503 || status === 504) return true;
+  // Cloudflare edge errors pass through hop unchanged; 524 (origin timeout)
+  // is the common one and is worth a full replay. 521/525 excluded: those are
+  // config-level failures an immediate replay will not fix.
+  return status === 520 || status === 522 || status === 523 || status === 524 || status === 526 || status === 527;
 }
 
 function isRetryableHopError(err) {

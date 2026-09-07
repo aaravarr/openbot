@@ -126,6 +126,12 @@ test("hopRetryDelayMs and retry classifiers are shaped as documented", () => {
   assert.equal(runtime.isRetryableHopStatus(502), true);
   assert.equal(runtime.isRetryableHopStatus(503), true);
   assert.equal(runtime.isRetryableHopStatus(504), true);
+  // Cloudflare edge errors pass through hop and are worth a full replay.
+  assert.equal(runtime.isRetryableHopStatus(524), true);
+  assert.equal(runtime.isRetryableHopStatus(520), true);
+  assert.equal(runtime.isRetryableHopStatus(522), true);
+  assert.equal(runtime.isRetryableHopStatus(521), false);
+  assert.equal(runtime.isRetryableHopStatus(525), false);
   assert.equal(runtime.isRetryableHopStatus(501), false);
   assert.equal(runtime.isRetryableHopStatus(429), false);
   assert.equal(runtime.isRetryableHopError(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" })), true);
@@ -156,10 +162,28 @@ test("hopFullStream keeps the openbot-runtime error format after exhausting hop 
     res.end(JSON.stringify({ error: { message: "persistent failure" } }));
   }, async (runtime, hits) => {
     const out = await drainHop(runtime);
-    assert.equal(hits(), 3);
+    // 1 initial attempt + 3 bounded retries, then the harness sees the error.
+    assert.equal(hits(), 4);
     assert.equal(out.errors.length, 1);
     assert.match(out.errors[0] ?? "", /^openbot-runtime: hop HTTP 500/);
     assert.match(out.errors[0] ?? "", /persistent failure/);
+  });
+});
+
+test("hopFullStream retries a hop 524 (Cloudflare origin timeout) and succeeds", async () => {
+  await withHop((req, res, hits) => {
+    if (hits === 1) {
+      res.writeHead(524, { "Content-Type": "text/plain" });
+      res.end("524 origin timeout");
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.end('data: {"choices":[{"delta":{"content":"after-524"}}]}\n\ndata: [DONE]\n\n');
+  }, async (runtime, hits) => {
+    const out = await drainHop(runtime);
+    assert.equal(hits(), 2);
+    assert.deepEqual(out.errors, []);
+    assert.equal(out.parts.some((p) => p.type === "text-delta"), true);
   });
 });
 

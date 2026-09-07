@@ -24,28 +24,25 @@ const hop = require(hopPath) as {
     status: number,
     attemptIndex: number,
     clientRes: { headersSent?: boolean } | null,
-    budgetStartedMs: number,
-    nowMs?: number,
+    sleepSpentMs: number,
   ) => boolean;
   canRetryUpstreamError: (
     err: unknown,
     attemptIndex: number,
     clientRes: { headersSent?: boolean } | null,
-    budgetStartedMs: number,
-    nowMs?: number,
+    sleepSpentMs: number,
   ) => boolean;
   classifyUpstreamRetry: (
     status: number,
     attemptIndex: number,
     clientRes: { headersSent?: boolean } | null,
-    budgetStartedMs: number,
-    nowMs?: number,
+    sleepSpentMs: number,
   ) => "429" | "5xx" | null;
   delayBefore5xxRetryMs: (
     attemptIndex: number,
     headers: http.IncomingHttpHeaders,
     nowMs?: number,
-    budgetStartedMs?: number,
+    sleepSpentMs?: number,
   ) => number | null;
 };
 
@@ -228,6 +225,16 @@ test("retryable upstream statuses and errors are classified", () => {
   assert.equal(hop.isRetryableUpstreamStatus(502), true);
   assert.equal(hop.isRetryableUpstreamStatus(503), true);
   assert.equal(hop.isRetryableUpstreamStatus(504), true);
+  // Cloudflare edge errors: 524 (origin timeout) is the one production hits;
+  // 521/525 stay non-retryable (config-level failures).
+  assert.equal(hop.isRetryableUpstreamStatus(524), true);
+  assert.equal(hop.isRetryableUpstreamStatus(520), true);
+  assert.equal(hop.isRetryableUpstreamStatus(522), true);
+  assert.equal(hop.isRetryableUpstreamStatus(523), true);
+  assert.equal(hop.isRetryableUpstreamStatus(526), true);
+  assert.equal(hop.isRetryableUpstreamStatus(527), true);
+  assert.equal(hop.isRetryableUpstreamStatus(521), false);
+  assert.equal(hop.isRetryableUpstreamStatus(525), false);
   assert.equal(hop.isRetryableUpstreamStatus(501), false);
   assert.equal(hop.isRetryableUpstreamStatus(429), false);
   assert.equal(hop.isRetryableUpstreamError(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })), true);
@@ -239,21 +246,21 @@ test("retryable upstream statuses and errors are classified", () => {
 
 test("delayBefore5xxRetryMs uses exponential backoff and honors Retry-After", () => {
   const now = 2_000_000;
-  const fromHeader = hop.delayBefore5xxRetryMs(0, { "retry-after": "3" }, now, now);
+  const fromHeader = hop.delayBefore5xxRetryMs(0, { "retry-after": "3" }, now, 0);
   assert.equal(fromHeader, 3000);
 
   mock.timers.enable({ apis: ["setTimeout", "Date"] });
   try {
     const samples = new Set<number>();
     for (let i = 0; i < 30; i += 1) {
-      const d = hop.delayBefore5xxRetryMs(0, {}, now, now);
+      const d = hop.delayBefore5xxRetryMs(0, {}, now, 0);
       assert.notEqual(d, null);
       samples.add(d as number);
       assert.equal((d as number) >= 250, true);
       assert.equal((d as number) <= 500, true);
     }
     assert.equal(samples.size >= 1, true);
-    const step1 = hop.delayBefore5xxRetryMs(1, {}, now, now);
+    const step1 = hop.delayBefore5xxRetryMs(1, {}, now, 0);
     assert.equal((step1 as number) >= 750, true);
     assert.equal((step1 as number) <= 1500, true);
   } finally {
@@ -261,17 +268,23 @@ test("delayBefore5xxRetryMs uses exponential backoff and honors Retry-After", ()
   }
 });
 
-test("canRetry helpers stop at the retry cap and budget", () => {
-  const start = Date.now();
-  assert.equal(hop.canRetryUpstreamStatus(500, 0, null, start), true);
-  assert.equal(hop.canRetryUpstreamStatus(500, 2, null, start), false);
-  assert.equal(hop.canRetryUpstreamStatus(503, 1, { headersSent: true }, start), false);
-  assert.equal(hop.canRetryUpstreamError({ code: "ECONNRESET" }, 0, null, start), true);
-  assert.equal(hop.canRetryUpstreamError({ code: "ECONNRESET" }, 2, null, start), false);
-  assert.equal(hop.classifyUpstreamRetry(429, 0, null, start), "429");
-  assert.equal(hop.classifyUpstreamRetry(500, 0, null, start), "5xx");
-  assert.equal(hop.classifyUpstreamRetry(504, 3, null, start), null);
-  assert.equal(hop.classifyUpstreamRetry(400, 0, null, start), null);
+test("canRetry helpers stop at the retry cap and sleep budget", () => {
+  // The budget is backoff sleep, not wall clock: a failure that took 125s to
+  // arrive (Cloudflare 524 origin timeout) must still be retryable.
+  assert.equal(hop.canRetryUpstreamStatus(500, 0, null, 0), true);
+  assert.equal(hop.canRetryUpstreamStatus(524, 0, null, 0), true);
+  assert.equal(hop.canRetryUpstreamStatus(500, 2, null, 0), false);
+  assert.equal(hop.canRetryUpstreamStatus(503, 1, { headersSent: true }, 0), false);
+  assert.equal(hop.canRetryUpstreamStatus(500, 0, null, 10_000), false);
+  assert.equal(hop.canRetryUpstreamStatus(500, 0, null, 9_999), true);
+  assert.equal(hop.canRetryUpstreamError({ code: "ECONNRESET" }, 0, null, 0), true);
+  assert.equal(hop.canRetryUpstreamError({ code: "ECONNRESET" }, 2, null, 0), false);
+  assert.equal(hop.canRetryUpstreamError({ code: "ECONNRESET" }, 0, null, 10_000), false);
+  assert.equal(hop.classifyUpstreamRetry(429, 0, null, 0), "429");
+  assert.equal(hop.classifyUpstreamRetry(500, 0, null, 0), "5xx");
+  assert.equal(hop.classifyUpstreamRetry(524, 0, null, 0), "5xx");
+  assert.equal(hop.classifyUpstreamRetry(504, 3, null, 0), null);
+  assert.equal(hop.classifyUpstreamRetry(400, 0, null, 0), null);
 });
 
 test("hop retries upstream 500 then returns success", async () => {
@@ -334,6 +347,39 @@ test("hop returns the upstream 500 after retries are exhausted", async () => {
         const row = after.items[after.items.length - 1];
         assert.equal(row?.status, 500);
         assert.match(row?.error ?? "", /upstream-retries=2/);
+      } finally {
+        hopServer.server.close();
+        hopServer.server.closeAllConnections();
+      }
+    });
+  } finally {
+    upstream.server.close();
+    upstream.server.closeAllConnections();
+  }
+});
+
+test("hop retries a Cloudflare 524 then returns success", async () => {
+  let hits = 0;
+  const upstream = await listen((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      hits += 1;
+      if (hits === 1) {
+        res.writeHead(524, { "Content-Type": "text/plain" });
+        res.end("524 origin timeout");
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(okJson());
+    });
+  });
+  try {
+    await withHopEnv("http://127.0.0.1:" + String(upstream.port) + "/v1", async () => {
+      const hopServer = await startHopServer();
+      try {
+        const out = await postJson(hopServer.port, { model: "k3-256k", messages: [{ role: "user", content: "hi" }] });
+        assert.equal(out.status, 200);
+        assert.equal(hits, 2);
       } finally {
         hopServer.server.close();
         hopServer.server.closeAllConnections();

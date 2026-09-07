@@ -28,8 +28,14 @@ var UPSTREAM_429_RETRY = {
 };
 
 /** Retry policy for upstream 5xx and network-layer failures, while the
- * response is still fully buffered (no client byte written yet). Small
- * budget on purpose: the runtime adds its own bounded retries on top. */
+ * response is still fully buffered (no client byte written yet).
+ *
+ * budgetMs bounds TOTAL BACKOFF SLEEP, not wall-clock since the first
+ * attempt: a slow failure (e.g. Cloudflare 524 arriving after ~100s of
+ * origin timeout) must still get its maxRetries retries — gating on
+ * wall-clock would exhaust the budget before any retry happens. Fast
+ * failures are bounded by maxRetries plus the sleep budget. The runtime
+ * adds its own bounded retries on top. */
 var UPSTREAM_5XX_RETRY = {
   maxRetries: 2,
   baseDelayMs: 500,
@@ -39,7 +45,12 @@ var UPSTREAM_5XX_RETRY = {
 };
 
 function isRetryableUpstreamStatus(status) {
-  return status === 500 || status === 502 || status === 503 || status === 504;
+  if (status === 500 || status === 502 || status === 503 || status === 504) return true;
+  // Cloudflare edge errors 520-527 (522/524 = origin unreachable/timed out)
+  // are transient gateway weather, retryable like a 502. 525 (SSL handshake)
+  // and 521 (web server down) are excluded: they indicate config issues where
+  // an immediate retry only adds latency.
+  return status === 520 || status === 522 || status === 523 || status === 524 || status === 526 || status === 527;
 }
 
 function isRetryableUpstreamError(err) {
@@ -89,22 +100,20 @@ function exponentialBackoffMs(attemptIndex) {
   return Math.max(0, Math.floor(jittered));
 }
 
-function delayBefore429RetryMs(attemptIndex, headers, nowMs, budgetStartedMs) {
+function delayBefore429RetryMs(attemptIndex, headers, nowMs, sleepSpentMs) {
   var retryAfter = parseRetryAfterMs(headers, nowMs);
   var policy = UPSTREAM_429_RETRY;
   var delay = retryAfter === null ? exponentialBackoffMs(attemptIndex, policy) : retryAfter;
-  var elapsed = Math.max(0, (Number.isFinite(nowMs) ? nowMs : Date.now()) - budgetStartedMs);
-  var remaining = policy.budgetMs - elapsed;
+  var remaining = policy.budgetMs - Math.max(0, Number(sleepSpentMs) || 0);
   if (remaining <= 0) return null;
   return Math.min(delay, remaining);
 }
 
-function delayBefore5xxRetryMs(attemptIndex, headers, nowMs, budgetStartedMs) {
+function delayBefore5xxRetryMs(attemptIndex, headers, nowMs, sleepSpentMs) {
   var retryAfter = parseRetryAfterMs(headers, nowMs);
   var policy = UPSTREAM_5XX_RETRY;
   var delay = retryAfter === null ? exponentialBackoffMs(attemptIndex, policy) : retryAfter;
-  var elapsed = Math.max(0, (Number.isFinite(nowMs) ? nowMs : Date.now()) - budgetStartedMs);
-  var remaining = policy.budgetMs - elapsed;
+  var remaining = policy.budgetMs - Math.max(0, Number(sleepSpentMs) || 0);
   if (remaining <= 0) return null;
   return Math.min(delay, remaining);
 }
@@ -130,32 +139,31 @@ function tagHopRetries(err, attemptIndex) {
   return err;
 }
 
-function canRetryUpstream429(status, attemptIndex, clientRes, budgetStartedMs, nowMs) {
+function canRetryUpstream429(status, attemptIndex, clientRes, sleepSpentMs) {
   if (status !== 429) return false;
   var policy = UPSTREAM_429_RETRY;
   if (attemptIndex >= policy.maxRetries) return false;
   if (clientRes && clientRes.headersSent) return false;
-  var now = Number.isFinite(nowMs) ? nowMs : Date.now();
-  if (now - budgetStartedMs >= policy.budgetMs) return false;
+  // The budget bounds backoff sleep only; attempt wall-time never counts, so a
+  // slow 429 (or a slow 5xx) still earns its retries.
+  if (sleepSpentMs >= policy.budgetMs) return false;
   return true;
 }
 
-function canRetryUpstreamStatus(status, attemptIndex, clientRes, budgetStartedMs, nowMs) {
+function canRetryUpstreamStatus(status, attemptIndex, clientRes, sleepSpentMs) {
   if (!isRetryableUpstreamStatus(status)) return false;
   var policy = UPSTREAM_5XX_RETRY;
   if (attemptIndex >= policy.maxRetries) return false;
   if (clientRes && clientRes.headersSent) return false;
-  var now = Number.isFinite(nowMs) ? nowMs : Date.now();
-  if (now - budgetStartedMs >= policy.budgetMs) return false;
+  if (sleepSpentMs >= policy.budgetMs) return false;
   return true;
 }
 
-function canRetryUpstreamError(err, attemptIndex, clientRes, budgetStartedMs, nowMs) {
+function canRetryUpstreamError(err, attemptIndex, clientRes, sleepSpentMs) {
   if (!isRetryableUpstreamError(err)) return false;
   if (attemptIndex >= UPSTREAM_5XX_RETRY.maxRetries) return false;
   if (clientRes && clientRes.headersSent) return false;
-  var now = Number.isFinite(nowMs) ? nowMs : Date.now();
-  if (now - budgetStartedMs >= UPSTREAM_5XX_RETRY.budgetMs) return false;
+  if (sleepSpentMs >= UPSTREAM_5XX_RETRY.budgetMs) return false;
   return true;
 }
 
@@ -559,9 +567,12 @@ async function postUpstreamAttempt(urlStr, body, key, inbound) {
 }
 
 async function postUpstream(urlStr, body, key, inbound) {
-  var budgetStartedMs = Date.now();
   var attemptIndex = 0;
   var retriesSpent = 0;
+  // Retry allowance is measured in backoff sleep, not wall clock: an attempt
+  // that takes 100s+ to fail (Cloudflare 524 origin timeout) must still get
+  // its retries instead of exhausting the budget before sleeping once.
+  var sleepSpentMs = 0;
   // Per-attempt chain for the request log: every upstream try records its
   // status / error / latency so retries are visible instead of collapsing
   // into a single "upstream-retries=N" suffix.
@@ -579,7 +590,7 @@ async function postUpstream(urlStr, body, key, inbound) {
     try {
       out = await postUpstreamOnce(urlStr, body, key, inbound);
     } catch (err) {
-      if (!canRetryUpstreamError(err, attemptIndex, null, budgetStartedMs)) {
+      if (!canRetryUpstreamError(err, attemptIndex, null, sleepSpentMs)) {
         attempts.push({
           attempt: attemptIndex + 1,
           status: 0,
@@ -592,7 +603,7 @@ async function postUpstream(urlStr, body, key, inbound) {
       out = { attemptFailed: true, status: 0, headers: {}, raw: Buffer.alloc(0), attemptError: err };
     }
     if (!out.attemptFailed) {
-      var retryKind = classifyUpstreamRetry(out.status, attemptIndex, null, budgetStartedMs);
+      var retryKind = classifyUpstreamRetry(out.status, attemptIndex, null, sleepSpentMs);
       if (retryKind === null) {
         attempts.push({
           attempt: attemptIndex + 1,
@@ -603,7 +614,7 @@ async function postUpstream(urlStr, body, key, inbound) {
         if (retriesSpent > 0) out.hopRetries = retriesSpent;
         return withAttempts(out);
       }
-      var delay = retryDelayMs(retryKind, attemptIndex, out.headers, Date.now(), budgetStartedMs);
+      var delay = retryDelayMs(retryKind, attemptIndex, out.headers, Date.now(), sleepSpentMs);
       if (delay === null) {
         attempts.push({
           attempt: attemptIndex + 1,
@@ -621,11 +632,12 @@ async function postUpstream(urlStr, body, key, inbound) {
         decision: "retry",
       });
       await sleepMs(delay);
+      sleepSpentMs += delay;
       attemptIndex += 1;
       retriesSpent = attemptIndex;
       continue;
     }
-    var delayErr = delayBefore5xxRetryMs(attemptIndex, out.headers, Date.now(), budgetStartedMs);
+    var delayErr = delayBefore5xxRetryMs(attemptIndex, out.headers, Date.now(), sleepSpentMs);
     if (delayErr === null) {
       attempts.push({
         attempt: attemptIndex + 1,
@@ -644,22 +656,23 @@ async function postUpstream(urlStr, body, key, inbound) {
       decision: "retry",
     });
     await sleepMs(delayErr);
+    sleepSpentMs += delayErr;
     attemptIndex += 1;
     retriesSpent = attemptIndex;
   }
 }
 
-function classifyUpstreamRetry(status, attemptIndex, clientRes, budgetStartedMs, nowMs) {
-  if (canRetryUpstream429(status, attemptIndex, clientRes, budgetStartedMs, nowMs)) return "429";
-  if (isRetryableUpstreamStatus(status) && canRetryUpstreamStatus(status, attemptIndex, clientRes, budgetStartedMs, nowMs)) {
+function classifyUpstreamRetry(status, attemptIndex, clientRes, sleepSpentMs) {
+  if (canRetryUpstream429(status, attemptIndex, clientRes, sleepSpentMs)) return "429";
+  if (isRetryableUpstreamStatus(status) && canRetryUpstreamStatus(status, attemptIndex, clientRes, sleepSpentMs)) {
     return "5xx";
   }
   return null;
 }
 
-function retryDelayMs(kind, attemptIndex, headers, nowMs, budgetStartedMs) {
-  if (kind === "429") return delayBefore429RetryMs(attemptIndex, headers, nowMs, budgetStartedMs);
-  return delayBefore5xxRetryMs(attemptIndex, headers, nowMs, budgetStartedMs);
+function retryDelayMs(kind, attemptIndex, headers, nowMs, sleepSpentMs) {
+  if (kind === "429") return delayBefore429RetryMs(attemptIndex, headers, nowMs, sleepSpentMs);
+  return delayBefore5xxRetryMs(attemptIndex, headers, nowMs, sleepSpentMs);
 }
 
 function pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeReq) {
@@ -734,10 +747,12 @@ function pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeR
 }
 
 async function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
-  var budgetStartedMs = Date.now();
+  var requestStartedMs = Date.now();
   var attemptIndex = 0;
   var activeReq = { current: null };
   var retriesSpent = 0;
+  // Same sleep-based budget as postUpstream: slow attempts never eat retries.
+  var sleepSpentMs = 0;
   var attempts = [];
   function withAttempts(out) {
     if (attempts.length) {
@@ -757,7 +772,7 @@ async function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
       try {
         out = await pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeReq);
       } catch (err) {
-        if (!canRetryUpstreamError(err, attemptIndex, clientRes, budgetStartedMs)) {
+        if (!canRetryUpstreamError(err, attemptIndex, clientRes, sleepSpentMs)) {
           attempts.push({
             attempt: attemptIndex + 1,
             status: 0,
@@ -770,7 +785,7 @@ async function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
         out = { attemptFailed: true, status: 0, headers: {}, raw: Buffer.alloc(0), attemptError: err };
       }
       if (out.attemptFailed) {
-        var delay = delayBefore5xxRetryMs(attemptIndex, out.headers, Date.now(), budgetStartedMs);
+        var delay = delayBefore5xxRetryMs(attemptIndex, out.headers, Date.now(), sleepSpentMs);
         if (delay === null) {
           attempts.push({
             attempt: attemptIndex + 1,
@@ -789,6 +804,7 @@ async function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
           decision: "retry",
         });
         await sleepMs(delay);
+        sleepSpentMs += delay;
         attemptIndex += 1;
         retriesSpent = attemptIndex;
         continue;
@@ -801,12 +817,12 @@ async function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
           decision: "final",
         });
         if (typeof out.firstContentAt === "number" && out.firstContentAt > 0) {
-          out.firstTokenMs = Math.max(0, Math.round(out.firstContentAt - budgetStartedMs));
+          out.firstTokenMs = Math.max(0, Math.round(out.firstContentAt - requestStartedMs));
         }
         if (retriesSpent > 0) out.hopRetries = retriesSpent;
         return withAttempts(out);
       }
-      var retryKind = classifyUpstreamRetry(out.status, attemptIndex, clientRes, budgetStartedMs);
+      var retryKind = classifyUpstreamRetry(out.status, attemptIndex, clientRes, sleepSpentMs);
       if (retryKind === null) {
         attempts.push({
           attempt: attemptIndex + 1,
@@ -820,7 +836,7 @@ async function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
         }
         return withAttempts(out);
       }
-      var retryDelay = retryDelayMs(retryKind, attemptIndex, out.headers, Date.now(), budgetStartedMs);
+      var retryDelay = retryDelayMs(retryKind, attemptIndex, out.headers, Date.now(), sleepSpentMs);
       if (retryDelay === null) {
         attempts.push({
           attempt: attemptIndex + 1,
@@ -841,6 +857,7 @@ async function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
         decision: "retry",
       });
       await sleepMs(retryDelay);
+      sleepSpentMs += retryDelay;
       attemptIndex += 1;
       retriesSpent = attemptIndex;
     }

@@ -21,6 +21,9 @@ var PRUNE_LOCK_NAME = "openbot-requests.lock";
 var PRUNE_LOCK_STALE_MS = 60 * 1000;
 var PRUNE_LOCK_WAIT_MS = 15 * 1000;
 var PRUNE_LOCK_WAIT_ASYNC_MS = 2000;
+// Writers wait this long for an in-flight prune before falling back to a
+// lock-free append. Short on purpose: chat logging must never stall.
+var RECORD_LOCK_WAIT_MS = 750;
 var MAX_EVENT_BYTES = 4 * 1000 * 1000;
 var MAX_EVENT_KEPT = 500;
 var STATS_DISK_SCAN_CAP = 5000;
@@ -683,6 +686,12 @@ function pruneLockFile() {
   return path.join(sandDataDir(), PRUNE_LOCK_NAME);
 }
 
+// True while this process holds the prune lock. Same-process appends must not
+// try to re-acquire it (they would stall until timeout): the async prune only
+// yields between batches, and its final merge+rename runs synchronously, so an
+// in-process append can never land inside the lost-row window.
+var pruneLockOwnedHere = false;
+
 function sleepMsSync(ms) {
   try {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -703,6 +712,7 @@ function acquirePruneLock(waitMs) {
   for (;;) {
     try {
       fs.writeFileSync(file, String(process.pid) + "\n", { flag: "wx" });
+      pruneLockOwnedHere = true;
       return true;
     } catch (err) {
       var stat = null;
@@ -726,6 +736,7 @@ function acquirePruneLock(waitMs) {
 }
 
 function releasePruneLock() {
+  pruneLockOwnedHere = false;
   try {
     fs.unlinkSync(pruneLockFile());
   } catch (err) {
@@ -1028,14 +1039,26 @@ function recordHopInner(input) {
   var origin = cleanText(src.origin, 120);
   if (origin) row.origin = origin;
 
-  // Append-only, lock-free: O_APPEND never truncates a concurrent writer's
-  // bytes, so the UI server and the host process record side by side with
-  // no read-modify-write cycle. Retention and orphan cleanup are owned by
-  // the UI server's scheduled cleanup (pruneNowAsync); the write path never
-  // prunes, so a body file can never be reaped between "body written" and
-  // "row appended".
+  // Append under the prune lock when another process holds it: an append that
+  // lands between a pruner's final read and its rename is silently dropped
+  // (CI caught this as 118/120 rows). The append itself is ~1ms so the lock
+  // hold is negligible; on timeout we still append lock-free — a stuck prune
+  // must never eat a log row. Same-process appends skip the lock entirely
+  // (single-threaded: the pruner's merge+rename section cannot interleave).
   fs.mkdirSync(path.dirname(paths.requestLog), { recursive: true });
-  fs.appendFileSync(paths.requestLog, JSON.stringify(row) + "\n", "utf8");
+  var line = JSON.stringify(row) + "\n";
+  var lockAlreadyHeldHere = pruneLockOwnedHere;
+  if (lockAlreadyHeldHere || acquirePruneLock(RECORD_LOCK_WAIT_MS)) {
+    try {
+      fs.appendFileSync(paths.requestLog, line, "utf8");
+    } finally {
+      // acquirePruneLock flips pruneLockOwnedHere as a side effect, so the
+      // release decision must use the state captured before acquiring.
+      if (!lockAlreadyHeldHere) releasePruneLock();
+    }
+  } else {
+    fs.appendFileSync(paths.requestLog, line, "utf8");
+  }
   invalidateAggregates();
 }
 

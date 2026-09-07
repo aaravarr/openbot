@@ -23,7 +23,7 @@ const hop = require(hopPath) as {
     attemptIndex: number,
     headers: http.IncomingHttpHeaders,
     nowMs: number,
-    budgetStartedMs: number,
+    sleepSpentMs: number,
   ) => number | null;
 };
 
@@ -207,7 +207,7 @@ test("hop retries upstream 429 then returns success", async () => {
 
 test("delayBefore429RetryMs honors Retry-After over exponential backoff", () => {
   const now = 1_000_000;
-  const fromHeader = hop.delayBefore429RetryMs(0, { "retry-after": "7" }, now, now);
+  const fromHeader = hop.delayBefore429RetryMs(0, { "retry-after": "7" }, now, 0);
   assert.equal(fromHeader, 7000);
 
   mock.timers.enable({ apis: ["setTimeout", "Date"] });
@@ -215,7 +215,7 @@ test("delayBefore429RetryMs honors Retry-After over exponential backoff", () => 
     // Without Retry-After, delay is jittered exponential in [base/2, base].
     const samples = new Set<number>();
     for (let i = 0; i < 30; i += 1) {
-      const d = hop.delayBefore429RetryMs(0, {}, now, now);
+      const d = hop.delayBefore429RetryMs(0, {}, now, 0);
       assert.notEqual(d, null);
       samples.add(d as number);
       assert.equal((d as number) >= 250, true);
@@ -223,8 +223,8 @@ test("delayBefore429RetryMs honors Retry-After over exponential backoff", () => 
     }
     assert.equal(samples.size >= 1, true);
 
-    // Budget clamps the wait.
-    const clamped = hop.delayBefore429RetryMs(0, { "retry-after": "60" }, now, now - 29_000);
+    // The sleep budget clamps the wait: 29s of backoff already spent leaves 1s.
+    const clamped = hop.delayBefore429RetryMs(0, { "retry-after": "60" }, now, 29_000);
     assert.equal(clamped, 1000);
   } finally {
     mock.timers.reset();

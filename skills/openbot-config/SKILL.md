@@ -17,19 +17,20 @@ Never print, commit, or paste API keys. Show `secrets.json` shape with `"<stored
 
 ## When to use
 
-Apply this skill when the user wants to configure OpenBot: set up a provider, switch models or thinking, add or rotate a key, go official or custom, turn the tunnel on/off, change log settings, or edit `/home/box/sand-data` files (`openbot-plan.json`, `secrets.json`, `openbot-logs.json`, `openbot-mode`, `openbot-expose`). Also when diagnosing an unexpected flip to official or custom: read `openbot-audit.jsonl`.
+Apply this skill when the user wants to configure OpenBot: set up a provider, switch models or thinking, add or rotate a key, go official or custom, turn the tunnel on/off, pause or resume the gateway, change log settings, or edit `/home/box/sand-data` files (`openbot-plan.json`, `secrets.json`, `openbot-logs.json`, `openbot-pause.json`, `openbot-mode`, `openbot-expose`). Also when diagnosing an unexpected flip to official or custom: read `openbot-audit.jsonl`.
 
 ## JSON vs API save vs CLI
 
 | Change | Path | Takes effect |
 |---|---|---|
-| Active model / thinking | Edit `openbot-plan.json` (`catalog.models[].activeReasoning` plus `agents["*"]`) | Next Grok Bot message, if wrap is already custom and loopback is up |
+| Active model / thinking | Edit `openbot-plan.json` (`catalog.models[].activeReasoning` plus `agents["*"]`) | Next Grok Bot message in the same session (runtime re-resolves the plan on every turn; no new session or host bounce) if wrap is already custom and loopback is up |
 | Model limits, allow-list, modalities, extra `parameters` | Edit plan JSON | Same |
 | Add/edit/remove models and providers **inside the catalog object** | Edit plan JSON; keep `model.id` = `providerId:slug`, bindings, and `agents["*"]` in sync | Same |
 | API key | Edit `secrets.json`, then `chmod 0600` | Same (hop loads secrets per request) |
 | Hop/request log flags (custom already wrapped) | Edit `openbot-logs.json` | Hop re-reads settings from disk |
+| Gateway pause on/off | `PUT /api/pause` with `{"paused":true/false}` (optional `note`) | Immediate on next hop request and next Grok Bot turn (read per request/turn; fail open) |
 | First custom wrap / `needs-reinstall` (desired custom, host stock-unmarked) | **Must** `POST /api/save` or `openbot` CLI | After reconcile; then a **new Grok Bot message** |
-| Switch Official (`kind: official`) or back to custom when wrap is missing | **Must** reconcile | Same |
+| Switch Official (`kind: official`) or back to custom when wrap is missing | **Must** reconcile | Same; reconcile always stops the guard daemon and clears its pidfile, so Official takes effect immediately and sticks |
 | Tunnel on/off (`openbot-expose` plus cloudflared) | **Must** `set-expose` / `openbot tunnel on` or `off` | Same |
 | Official host tap (logging on while mode is official) | Prefer `PUT /api/logs/settings` so prune plus wrap/reconcile run | Same |
 | Wrap bytes change (host bounce) | Reconcile only. SIGTERM sand-host; **never** `kill -9`. Do not start `node host-main.cjs` without gateway tokens | Same |
@@ -40,7 +41,7 @@ JSON-enough requires **all** of: `openbot-mode` is `custom`, `/home/box/sand-hos
 
 ## Read current config first
 
-Default sand-data is `/home/box/sand-data/` (override with `OPENBOT_SAND_DATA` / `OPENBOT_PLAN` / `OPENBOT_MODE` / `OPENBOT_SECRETS`).
+Default sand-data is `/home/box/sand-data/` (override with `OPENBOT_SAND_DATA` / `OPENBOT_PLAN` / `OPENBOT_MODE` / `OPENBOT_SECRETS` / `OPENBOT_PAUSE`).
 
 1. Read `openbot-mode` (`official` or `custom`, plus newline). The UI reads it strictly: only the literal token `official` means official — missing, empty, or garbage reads as **custom**.
 2. Read `openbot-plan.json` if present. Official still keeps this file.
@@ -70,7 +71,7 @@ curl -sS -X POST http://127.0.0.1:9280/api/save \
   -d '{"kind":"official"}'
 ```
 
-Or: `openbot official`. Do **not** delete the plan.
+Or: `openbot official`. Do **not** delete the plan. Reconcile always stops the guard daemon and clears its pidfile on the official branch, so the switch takes effect immediately and sticks.
 
 **Custom when wrap is missing** (`alignment.kind` is `needs-reinstall`, or the host file is stock unmarked): reconcile with a provider. Empty `modelSlug` is a zero-model provider (setup wizard). Example:
 
@@ -121,7 +122,7 @@ Plan rules: `agents["*"].modelId` is the **slug**; `bindings[].modelId` is **`pr
 
 JSON (custom wrap already up): set `agents["*"]` to `{ "modelId": "<slug>", "providerId": "<id>" }`, set the wildcard binding `modelId` to `"<id>:<slug>"`, set that model's `activeReasoning`. Write valid JSON plus a trailing newline.
 
-Or: `{ "kind": "use-model", "modelId": "zhipu:glm-5.3-flash", "reasoning": "high" }`.
+Or: `{ "kind": "use-model", "modelId": "zhipu:glm-5.3-flash", "reasoning": "high" }`. Takes effect on the next message in the same session -- the runtime re-resolves the plan on every turn, so no new session or host bounce is needed.
 
 Reasoning universe order: `default`, `none`, `low`, `medium`, `high`, `xhigh`, `max` (`xhigh` is one step below `max`). Default allow-list if omitted: `default`, `none`, `low`, `medium`, `high`. Always keep `default` in an edited allow-list.
 
@@ -153,6 +154,18 @@ Off: `"expose":"off"`. CLI: `openbot tunnel on`, `openbot tunnel off`, `openbot 
 
 Custom wrap: a JSON edit is enough for hop logging. **Official** host tap may keep wrap marked (`tapSession`) — prefer `PUT http://127.0.0.1:9280/api/logs/settings` so prune and reconcile side effects run.
 
+### Pause / resume the gateway
+
+Global kill-switch for new chat traffic:
+
+```bash
+curl -sS -X PUT http://127.0.0.1:9280/api/pause \
+  -H 'Content-Type: application/json' \
+  -d '{"paused":true,"note":"holding traffic during upstream maintenance"}'
+```
+
+Resume with `{"paused":false}`. `GET /api/pause` returns `{paused, at, note}`. While paused the hop answers `503 {error:{message:"openbot gateway paused", code:"paused"}}`, and Grok Bot turns fail fast with `openbot-runtime: gateway paused` (both the custom hop path and the official tap path). A missing or corrupt `openbot-pause.json` means not paused (fail open). Limit: official mode with request logging off is pure stock -- openbot is not in the chain, so pause does not apply there. Flip via the API, never by hand-editing the file (atomic write plus a `gateway.pause` log event). Shapes and the `OPENBOT_PAUSE` path override: [reference.md](reference.md).
+
 ## Disk, JSON, API, CLI
 
 Schemas, env overrides, `/api/save` kinds, 409 refusals, presets (origins only), and hop reasoning maps: [reference.md](reference.md).
@@ -173,4 +186,5 @@ After wrap or mode change, tell the user: **send a new Grok Bot message**. If wr
 - Patch the Mac asar or write Mac Grok Bot paths
 - Hand-edit `openbot-model-catalog.json` (refresh with `POST /api/model-catalog/refresh`)
 - Hand-edit or truncate `openbot-audit.jsonl` (append-only log owned by reconcile)
+- Hand-edit `openbot-pause.json` to flip the pause switch (use `PUT /api/pause`)
 - Patch `host-main.cjs.pre-openbot` as the wrap source

@@ -25,6 +25,7 @@ Default root: `/home/box/sand-data/` (see env below).
 | `openbot-mode` | text | `official` or `custom` plus newline. Do not delete the plan on official. |
 | `openbot-audit.jsonl` | JSONL, append-only | Audit trail of reconcile writes to mode / plan / wrap / backup (see below). Best-effort; diagnostics only. |
 | `secrets.json` | JSON, **0600** | `{ "providers": { "<providerId>": "<stored locally>" } }` |
+| `openbot-pause.json` | JSON | Global gateway pause flag (see below). Missing or corrupt = not paused (fail open). Trailing newline. |
 | `openbot-expose` | text | `loopback` or `cloudflare-quick` plus newline. Written by reconcile. |
 | `openbot-logs.json` | JSON | LogSettings (see below). Trailing newline. |
 | `openbot-model-catalog.json` | JSON | Source B cache — **do not hand-edit**; `POST /api/model-catalog/refresh` |
@@ -45,6 +46,7 @@ Host file: `/home/box/sand-host/host-main.cjs`.
 | `OPENBOT_MODE` | Mode file path (runtime) |
 | `OPENBOT_SECRETS` | Secrets JSON path |
 | `OPENBOT_LOGS` | Log settings path |
+| `OPENBOT_PAUSE` | Pause file path (highest priority on the payload side, above `OPENBOT_SAND_DATA` / `OPENBOT_PLAN` inference) |
 | `OPENBOT_MAPS` | Maps module path (default `payload/provider-maps.cjs` next to hop) |
 | `OPENBOT_HOST_MAIN` | Host file |
 | `OPENBOT_REPO` | Install / repo root for the loopback service |
@@ -162,6 +164,28 @@ Ranges: `logRetentionDays` 1–365; `maxBodyCaptureBytes` 1024–1048576; `maxRe
 
 `PUT /api/logs/settings` JSON body uses the same fields; response includes `wrapBytesChanged` and optional `wrapError`. Also: `GET /api/logs/settings`, `GET /api/logs`, `GET /api/logs/:id`, `POST /api/logs/clear`.
 
+-## `openbot-pause.json`
+
+Global gateway pause switch. Flip only through `GET /PUT /api/pause`; do not hand-edit the file. Writes are atomic (tmp+rename) and append a `gateway.pause` request-log event (`WARN` on pause, `INFO` on resume).
+
+```json
+-{
+-  "paused": false,
+-  "at": "2026-09-08T09:44:16.000Z",
+-  "note": null
+-}
+-```
+
+Rules:
+
+-- `paused` is a boolean; `at` is the ISO8601 write time (string) or `null`; `note` is an optional string (trimmed, max 500 chars) or `null`.
+- Missing file or corrupt JSON = not paused (fail open -- a half-written flag must never wedge the gateway shut).
+- `GET /api/pause` returns `{paused, at, note}`. `PUT /api/pause` takes `{paused: boolean, note?: string}` and returns the stored state; malformed JSON, a missing/non-boolean `paused`, or a non-string `note` returns `400`.
+- While paused, hop `POST /v1/chat/completions` short-circuits with `503 {error:{message:"openbot gateway paused", code:"paused"}}` (logged, no upstream work), and `wrapSession`/`attachSession` throw `Error("openbot-runtime: gateway paused")` on both the custom hop path and the official tap path. Reads happen per request/turn, so flipping the switch needs no restart.
+- Limit: official mode with request logging off is pure stock -- openbot is not in the chain, so pause does not apply there.
+- Hop health patrol only probes the TCP port (`deps.procs.port`), so a paused gateway answering `503` still counts as alive -- the switch never fights the patrol.
+- Path override: payload reads `OPENBOT_PAUSE` first, then `<OPENBOT_SAND_DATA>/openbot-pause.json`, then the directory inferred from `OPENBOT_PLAN`, then the default sand-data path.
+
 ## Hop per-request reload
 
 On each `POST /v1/chat/completions`:
@@ -169,9 +193,10 @@ On each `POST /v1/chat/completions`:
 - Plan: `readJson(OPENBOT_PLAN || /home/box/sand-data/openbot-plan.json)`
 - Secrets: `secrets.json` via `loadKey`
 - Maps: `require.cache` deleted, then `provider-maps.cjs`
-- Log settings: `loadSettings()` from disk
+-- Log settings: `loadSettings()` from disk
+- Pause flag: `openbot-pause.json` via `readPauseState()` (fail open)
 
-Runtime wrap (`payload/runtime.cjs`) `loadPlan()` / `readMode()` also hit disk per turn. A JSON edit while custom wrap is live applies on the **next** Grok Bot message. It does not wrap a stock host.
+Runtime wrap (`payload/runtime.cjs`) `loadPlan()` / `readMode()` also hit disk per turn, and the wrap chain re-resolves the agent on every `stream` / `getModelId` call. A JSON edit while custom wrap is live applies on the **next** Grok Bot message in the same session -- no new session or host bounce needed. It does not wrap a stock host.
 
 ## Image handling on the custom hop path
 
@@ -238,7 +263,7 @@ The upstream limit was pinned in three on-the-box rounds: the fusion gateway edg
 
 | kind | Body fields | Notes |
 |---|---|---|
-| `official` | (none) | Stock wrap when logging off; tap wrap possible if logging on. Plan stays. |
+| `official` | (none) | Stock wrap when logging off; tap wrap possible if logging on. Plan stays. Reconcile always stops the guard daemon and clears its pidfile, so the switch is immediate and permanent. |
 | `upsert-provider` or `custom` | `name`, `origin`, `modelSlug`, `secret`; optional limits | Empty `modelSlug` = zero-model provider. Provider id = slugify(name). Sets wildcard to the new model when slug is nonempty. |
 | `upsert-model` | `providerId`, `slug`; optional limits | Provider must exist. `model.id` = `providerId:slug`. |
 | `use-model` | `modelId` (`providerId:slug`); optional `reasoning` | Sets wildcard binding. |
@@ -260,6 +285,8 @@ Success `200`: `{ ok: true, wrapBytesChanged, snapshot, providers, models, keyed
 | POST | `/api/providers/:id/fetch-models` | Source A list for that provider (needs secret) |
 | GET | `/api/model-catalog` | Source B cache snapshot; `?modelId=` lookup |
 | POST | `/api/model-catalog/refresh` | `202 { ok, status: "loading", startedAt }` |
+| GET | `/api/pause` | Gateway pause state `{paused, at, note}` (see `openbot-pause.json`) |
+| PUT | `/api/pause` | Set `{paused: boolean, note?: string}`; atomic write plus `gateway.pause` event |
 | POST | `/v1/chat/completions` | Hop (not a config API) |
 
 `GET /api/state` `snapshot.alignment.kind` is `needs-reinstall` when desired custom and wrap is `stock-unmarked`.

@@ -375,7 +375,13 @@ async function finishOk(
   desired: DesiredState,
   wrapBytesChanged: boolean,
 ): Promise<ReconcileResult> {
-  if (wrapBytesChanged) {
+  // Official must never leave the custom guard patrol running: with a
+  // non-empty catalog on disk the guard treats official mode as drift and
+  // reconciles back to custom on the next tick. install.sh only starts the
+  // daemon for custom installs, so stopping it here keeps official stable.
+  // Custom keeps the previous conditional: only a new tree (wrap change)
+  // orphans the daemon from the previous tree.
+  if (desired.kind === "official" || wrapBytesChanged) {
     stopStaleGuardForUpdate(deps);
   }
   await bounceHostIfNeeded(deps, wrapBytesChanged);

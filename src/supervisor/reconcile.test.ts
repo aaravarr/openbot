@@ -60,12 +60,14 @@ function fakeProcs(state: {
   staleUi?: boolean;
   opengrokHop?: boolean;
   syntaxFail?: boolean;
+  guardRunning?: boolean;
 }): FakeProcs {
   let serviceOurs = state.serviceOurs === true;
   let serviceForeign = state.serviceForeign === true;
   let leftoverHop = state.leftoverHop === true;
   let hopPid: number | undefined = leftoverHop ? 42 : undefined;
   let uiPid: number | undefined = serviceOurs || state.staleUi === true ? 43 : undefined;
+  let guardPid: number | undefined = state.guardRunning === true ? 77 : undefined;
   const started: string[] = [];
   const stopped: number[] = [];
   const termed: number[] = [];
@@ -88,10 +90,13 @@ function fakeProcs(state: {
       if (String(path).endsWith("openbot-ui.pid")) {
         return uiPid;
       }
+      if (String(path).endsWith("openbot-guard.pid")) {
+        return guardPid;
+      }
       return undefined;
     },
     pidAlive(pid) {
-      return pid === hopPid || pid === uiPid;
+      return pid === hopPid || pid === uiPid || pid === guardPid;
     },
     start(input) {
       started.push(input.argv.join(" "));
@@ -109,6 +114,9 @@ function fakeProcs(state: {
       if (pid === uiPid) {
         serviceOurs = false;
         uiPid = undefined;
+      }
+      if (pid === guardPid) {
+        guardPid = undefined;
       }
     },
     hostPids() {
@@ -376,6 +384,66 @@ test("official with logging off still restores stock and does not wrap identity"
   assert.equal(result.kind, "ok");
   assert.equal(ctx.fs.read(ctx.paths.hostMain), STOCK);
   assert.equal(ctx.fs.read(ctx.paths.hostMain)?.includes(OPENBOT_MARKER), false);
+});
+
+test("official stops the guard daemon even when the wrap bytes do not change", async () => {
+  // The tap wrap (official + logging on) is byte-stable on the second pass,
+  // but the stale guard from the custom era must still be SIGTERMed --
+  // otherwise it flips the mode back to custom on its next tick.
+  // Seed run: install the tap wrap without a daemon around.
+  const seed = setup(STOCK);
+  seed.fs.write(seed.paths.logsSettings, JSON.stringify({ loggingEnabled: true, logBodies: false, logBodiesOnError: true }));
+  const first = await reconcile(officialBox(seed.paths), seed.deps);
+  assert.equal(first.kind, "ok");
+  const tapWrap = seed.fs.read(seed.paths.hostMain);
+  assert.equal(tapWrap?.includes(OPENBOT_MARKER), true);
+  // Steady state: tap wrap already carries the current payload stamp, so
+  // this reconcile rewrites nothing -- the daemon stop must still happen.
+  const ctx = setup(tapWrap ?? STOCK, { guardRunning: true });
+  ctx.fs.write(ctx.paths.logsSettings, JSON.stringify({ loggingEnabled: true, logBodies: false, logBodiesOnError: true }));
+  const result = await reconcile(officialBox(ctx.paths), ctx.deps);
+  assert.equal(result.kind, "ok");
+  if (result.kind === "ok") {
+    assert.equal(result.wrapBytesChanged, false);
+  }
+  assert.equal(ctx.procs.stopped.includes(77), true);
+  assert.equal(ctx.fs.read(ctx.paths.mode)?.trim(), "official");
+});
+
+test("official restore stops a running guard daemon", async () => {
+  const wrapped = wrapHostSource({ source: STOCK, runtimePath: "/tmp/runtime.cjs" });
+  assert.equal(wrapped.kind, "wrapped");
+  if (wrapped.kind !== "wrapped") {
+    return;
+  }
+  const ctx = setup(wrapped.source, { guardRunning: true });
+  ctx.fs.write(ctx.paths.knownBackup, STOCK);
+  const result = await reconcile(officialBox(ctx.paths), ctx.deps);
+  assert.equal(result.kind, "ok");
+  assert.equal(ctx.fs.read(ctx.paths.hostMain), STOCK);
+  assert.equal(ctx.procs.stopped.includes(77), true);
+  assert.equal(ctx.fs.exists(ctx.paths.guardPid), false);
+  assert.equal(ctx.fs.read(ctx.paths.mode)?.trim(), "official");
+});
+
+test("custom without a wrap change leaves a running guard daemon alone", async () => {
+  const wrapped = wrapHostSource({ source: STOCK, runtimePath: "/tmp/runtime.cjs" });
+  assert.equal(wrapped.kind, "wrapped");
+  if (wrapped.kind !== "wrapped") {
+    return;
+  }
+  const ctx = setup(wrapped.source, { guardRunning: true, serviceOurs: true });
+  // Seed the current payload stamp so installCustomWrap sees no change.
+  const before = await reconcile(zhipu(ctx.paths), ctx.deps);
+  assert.equal(before.kind, "ok");
+  ctx.procs.stopped.length = 0;
+  const again = await reconcile(zhipu(ctx.paths), ctx.deps);
+  assert.equal(again.kind, "ok");
+  if (again.kind === "ok") {
+    assert.equal(again.wrapBytesChanged, false);
+  }
+  assert.equal(ctx.procs.stopped.includes(77), false);
+  assert.equal(ctx.fs.read(ctx.paths.mode)?.trim(), "custom");
 });
 
 type AuditRow = { ts: string; action: string; from: string; to: string; source: string };

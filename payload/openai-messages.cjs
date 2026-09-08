@@ -1,6 +1,7 @@
 "use strict";
 
 var fs = require("fs");
+var crypto = require("node:crypto");
 var {
   MAX_IMAGE_BYTES,
   sniffImageMime,
@@ -421,6 +422,83 @@ function repairToolCallIds(messages) {
   return messages;
 }
 
+// Upstream providers reject tool call ids that are too long (64 is the most
+// strict known ceiling, e.g. meta/muse-spark) or that contain characters
+// outside the safe [a-zA-Z0-9_-] set. We deterministically remap any offending
+// id to a stable hash-derived value so that:
+//   - assistant.tool_calls[i].id  and  the following role=tool .tool_call_id
+//     keep pointing at the same (remapped) id, preserving pairing;
+//   - the same original id maps to the same new id within a request AND across
+//     requests (a long id that reappears in a later turn maps identically).
+// Short, safe ids are kept verbatim. Nothing other than tool call ids changes.
+
+var TOOL_CALL_ID_SAFE_RE = /^[a-zA-Z0-9_-]+$/;
+var TOOL_CALL_ID_MAX = 64;
+var TOOL_CALL_ID_PREFIX = "call_";
+
+function sanitizedToolCallId(id, cache, salt) {
+  if (typeof id !== "string" || id === "") {
+    return id;
+  }
+  if (id.length <= TOOL_CALL_ID_MAX && TOOL_CALL_ID_SAFE_RE.test(id)) {
+    return id;
+  }
+  if (Object.prototype.hasOwnProperty.call(cache, id)) {
+    return cache[id];
+  }
+  var digest = crypto.createHash("sha256").update(String(salt || "") + id).digest(); // 32 bytes
+  // Base36 of the digest (little-endian base conversion); keeps the value
+  // within [a-z0-9] and deterministic, no external dependency.
+  var num = 0n;
+  for (var i = digest.length - 1; i >= 0; i--) {
+    num = (num << 8n) | BigInt(digest[i]);
+  }
+  var chars = "0123456789abcdefghijklmnopqrstuvwxyz";
+  var encoded = "";
+  while (num > 0n) {
+    encoded = chars[Number(num % 36n)] + encoded;
+    num /= 36n;
+  }
+  var body = encoded.slice(0, TOOL_CALL_ID_MAX - TOOL_CALL_ID_PREFIX.length);
+  var result = TOOL_CALL_ID_PREFIX + body;
+  cache[id] = result;
+  return result;
+}
+
+function sanitizeToolCallIds(messages) {
+  if (!Array.isArray(messages)) {
+    return messages;
+  }
+  // A fixed namespace prefix keeps the hash stable across calls within a
+  // request, across requests in the same conversation, and across restarts of
+  // the hop service: a long id that reappears in a later turn maps identically.
+  // A random per-call salt would break that cross-turn stability.
+  var salt = "openbot:tool-call-id:";
+  var cache = {};
+  for (var i = 0; i < messages.length; i++) {
+    var row = messages[i];
+    if (!row) {
+      continue;
+    }
+    if (row.role === "assistant" && Array.isArray(row.tool_calls)) {
+      for (var j = 0; j < row.tool_calls.length; j++) {
+        var call = row.tool_calls[j];
+        if (call && typeof call === "object") {
+          var id = call.id;
+          if (typeof id === "string" && id) {
+            call.id = sanitizedToolCallId(id, cache, salt);
+          }
+        }
+      }
+    } else if (row.role === "tool") {
+      if (typeof row.tool_call_id === "string" && row.tool_call_id) {
+        row.tool_call_id = sanitizedToolCallId(row.tool_call_id, cache, salt);
+      }
+    }
+  }
+  return messages;
+}
+
 function toOpenAIMessages(msgs) {
   if (!Array.isArray(msgs)) {
     return [{ role: "user", content: String(msgs || "") }];
@@ -433,9 +511,14 @@ function toOpenAIMessages(msgs) {
     }
   }
   var repaired = repairToolCallIds(out);
-  return repaired.length ? repaired : [{ role: "user", content: "" }];
+  // repairToolCallIds fills in missing ids based on assistant ordering; the
+  // sanitizer must run AFTER repair so that a repaired id (which may itself be
+  // a synthetic long fallback) is also normalized for length/charset.
+  var sanitized = sanitizeToolCallIds(repaired);
+  return sanitized.length ? sanitized : [{ role: "user", content: "" }];
 }
 
 exports.toOpenAIMessages = toOpenAIMessages;
 exports.repairToolCallIds = repairToolCallIds;
 exports.toolCallIdOf = toolCallIdOf;
+exports.sanitizeToolCallIds = sanitizeToolCallIds;

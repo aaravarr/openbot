@@ -5,7 +5,7 @@ var http = require("http");
 var https = require("https");
 var { URL } = require("url");
 var path = require("path");
-var { toOpenAIMessages } = require("./openai-messages.cjs");
+var { toOpenAIMessages, sanitizeToolCallIds } = require("./openai-messages.cjs");
 var {
   enrichImageReads,
   enforceImageBudget,
@@ -1028,6 +1028,12 @@ async function handleCompletions(req, res) {
       body.messages = await enforceImageBudget(body.messages, {
         extraWireBytes: outboundEnvelopeBytes(body) + WIRE_HEADROOM_BYTES,
       });
+      // Normalize every outbound tool call id before the upstream sees it:
+      // repair (inside toOpenAIMessages) fills missing ids, sanitize then
+      // truncates to <= 64 chars and restricts the charset to [a-zA-Z0-9_-].
+      // Must run at the message-assembly point so both host-stream and the
+      // direct /v1/chat/completions path are covered.
+      body.messages = sanitizeToolCallIds(body.messages);
     }
     applyMaxTokens(body, route.model);
     applyMaps(body, {

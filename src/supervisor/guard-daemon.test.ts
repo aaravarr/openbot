@@ -12,6 +12,7 @@ import {
   guardDaemonPid,
   runGuardDaemon,
   runGuardTick,
+  runGuardTickWithHopHealth,
   stopGuardDaemon,
 } from "./guard-daemon.ts";
 import type { GuardResult } from "./guard.ts";
@@ -429,4 +430,32 @@ test("disabling the hop patrol keeps the tick hop-free", async (t) => {
   assert.equal(rows.length, 1);
   assert.equal(rows[0]?.hopStatus, undefined);
   assert.equal(rows[0]?.hopFailures, undefined);
+});
+
+test("a dark unified port makes the guard tick restart the UI service, never hop-server", async () => {
+  // Regression: the patrol once spawned payload/hop-server.cjs onto 9280,
+  // which won the bind race and killed the UI with EADDRINUSE (/api/* 404).
+  // Track spawns through the pidfiles the fake procs layer records.
+  const ctx = setup(false);
+  const stderr: string[] = [];
+  const io = { runOnce: async () => HEALTHY, stderr: (line: string) => stderr.push(line) };
+  await runGuardTickWithHopHealth(ctx.deps, { ...io, hopFailureThreshold: 1 });
+  const rows = guardLogRows(ctx);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.hopStatus, "restarted");
+  assert.equal(ctx.fs.read(ctx.paths.uiPid), "1\n");
+  assert.equal(ctx.fs.read(ctx.paths.hopPid), undefined);
+  assert.match(stderr[0] ?? "", /hop was down.*restarted as pid 1/);
+});
+
+test("a dark unified port with a deaf-but-listed UI pid SIGTERMs it before the restart", async () => {
+  const ctx = setup(false);
+  ctx.fs.write(ctx.paths.uiPid, "4242\n");
+  ctx.procs.live.add(4242);
+  const stderr: string[] = [];
+  const io = { runOnce: async () => HEALTHY, stderr: (line: string) => stderr.push(line) };
+  await runGuardTickWithHopHealth(ctx.deps, { ...io, hopFailureThreshold: 1 });
+  assert.deepEqual(ctx.procs.stopped, [4242]);
+  assert.equal(ctx.fs.read(ctx.paths.uiPid), "1\n");
+  assert.equal(ctx.fs.read(ctx.paths.hopPid), undefined);
 });

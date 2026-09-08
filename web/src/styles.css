@@ -301,6 +301,20 @@ code, kbd, .mono { font-family: var(--font-mono); }
 .mode-pill--custom .mode-pill__model { color: var(--ink); }
 .mode-pill--official { background: var(--neutral-tint); color: var(--body); }
 
+/* gateway pause strip (Dashboard top status area) */
+.pause-strip {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: 12px var(--sp-5); margin-bottom: var(--sp-4);
+  min-width: 0;
+}
+.pause-strip__icon { color: var(--muted); flex: none; display: inline-flex; }
+.pause-strip__icon svg { width: 16px; height: 16px; }
+.pause-strip__text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pause-strip__text strong { font-size: var(--text-md); font-weight: 600; color: var(--ink); }
+.pause-strip__text span { font-size: var(--text-base); color: var(--body); overflow-wrap: anywhere; }
+.pause-strip.is-paused { background: var(--surface-3); }
+.pause-strip.is-paused .pause-strip__icon { color: var(--warning); }
+
 /* blocking banner */
 .blocked-banner {
   display: flex; align-items: flex-start; gap: var(--sp-3);

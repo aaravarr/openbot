@@ -293,6 +293,31 @@ function planPath() {
   return process.env.OPENBOT_PLAN || "/home/box/sand-data/openbot-plan.json";
 }
 
+function sandDataDir() {
+  if (process.env.OPENBOT_SAND_DATA) return process.env.OPENBOT_SAND_DATA;
+  if (process.env.OPENBOT_PLAN) return path.dirname(process.env.OPENBOT_PLAN);
+  return "/home/box/sand-data";
+}
+
+function pausePath() {
+  if (process.env.OPENBOT_PAUSE) return process.env.OPENBOT_PAUSE;
+  return path.join(sandDataDir(), "openbot-pause.json");
+}
+
+// Global gateway pause flag. Read synchronously on every completions
+// request so flipping the switch takes effect without a hop restart.
+// Missing file = not paused. Corrupt JSON = not paused (fail open: a
+// half-written pause file must never wedge the gateway shut).
+function readPauseState() {
+  try {
+    var raw = fs.readFileSync(pausePath(), "utf8");
+    var parsed = JSON.parse(raw);
+    return parsed && parsed.paused === true;
+  } catch (err) {
+    return false;
+  }
+}
+
 function secretsPath() {
   return process.env.OPENBOT_SECRETS || "/home/box/sand-data/secrets.json";
 }
@@ -998,6 +1023,18 @@ async function handleCompletions(req, res) {
   }
 
   try {
+    // Gateway pause gate: fail fast with 503 before touching the body or
+    // the plan, so a paused gateway performs no upstream work at all.
+    if (readPauseState()) {
+      var paused = { error: { message: "openbot gateway paused", code: "paused" } };
+      record({
+        status: 503,
+        error: "openbot gateway paused",
+        responseBody: paused,
+      });
+      sendJson(res, 503, paused);
+      return;
+    }
     var raw = await readBody(req);
     // Capture header clues even when the JSON body itself is unreadable.
     clientMeta = inboundClientMeta(req, undefined);
@@ -1153,6 +1190,8 @@ async function handleHopRequest(req, res) {
 
 exports.handleHopRequest = handleHopRequest;
 exports.sendJson = sendJson;
+exports.readPauseState = readPauseState;
+exports.pausePath = pausePath;
 exports.inboundClientMeta = inboundClientMeta;
 exports.detectClientName = detectClientName;
 exports.parseClientVersion = parseClientVersion;

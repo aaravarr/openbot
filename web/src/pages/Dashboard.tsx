@@ -4,12 +4,15 @@ import {
   Copy,
   Globe,
   Info,
+  OctagonX,
+  Pause,
+  Play,
   RefreshCw,
   Rocket,
   Zap,
 } from "lucide-react";
-import { hasKey, listLogs, modelById, providerById } from "../api/client";
-import type { LogRecord, Model, SaveResult } from "../api/types";
+import { getPause, hasKey, listLogs, modelById, providerById, setPause } from "../api/client";
+import type { GatewayPause, LogRecord, Model, SaveResult } from "../api/types";
 import { channelLabel, formatLatency, formatTime, formatTokens, labelReasoning } from "../lib/format";
 import { deriveHealth } from "../lib/health";
 import { navigate } from "../lib/router";
@@ -40,11 +43,13 @@ function usedMessage(result: SaveResult): string {
 
 export function Dashboard() {
   const state = useBoxState();
-  const { save, service, refresh } = useApp();
+  const { save, service, refresh, pushToast } = useApp();
   const [confirmOfficial, setConfirmOfficial] = useState(false);
   const [confirmTunnel, setConfirmTunnel] = useState<"start" | "stop" | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [recent, setRecent] = useState<LogRecord[]>([]);
+  const [pause, setPauseState] = useState<GatewayPause | null>(null);
+  const [pauseBusy, setPauseBusy] = useState(false);
 
   const custom = state.snapshot.alignment.desired === "custom";
   const active = modelById(state, state.activeModelId);
@@ -67,6 +72,35 @@ export function Dashboard() {
       alive = false;
     };
   }, [state.activeModelId, state.snapshot.alignment.desired]);
+
+  useEffect(() => {
+    let alive = true;
+    getPause()
+      .then((next) => {
+        if (alive) setPauseState(next);
+      })
+      .catch(() => {
+        /* non-critical: pause strip stays hidden until the first read succeeds */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const togglePause = async () => {
+    if (pauseBusy) return;
+    const next = !(pause?.paused ?? false);
+    setPauseBusy(true);
+    try {
+      const updated = await setPause(next);
+      setPauseState(updated);
+      pushToast(next ? "error" : "success", next ? "Gateway paused" : "Gateway resumed", next ? "New chat traffic is held." : "Chat traffic flows again.");
+    } catch {
+      pushToast("error", "Pause switch failed", "Could not reach the pause endpoint.");
+    } finally {
+      setPauseBusy(false);
+    }
+  };
 
   const groups: ListboxGroup[] = useMemo(() => {
     return state.providers.map((p) => ({
@@ -182,6 +216,31 @@ export function Dashboard() {
         <h1>Dashboard</h1>
         <span className="sub">Is my box working? What is active right now?</span>
       </div>
+
+      {pause !== null ? (
+        <section className={pause.paused ? "card pause-strip is-paused" : "card pause-strip"} aria-label="Gateway pause">
+          <span className="pause-strip__icon" aria-hidden="true">
+            {pause.paused ? <OctagonX /> : <Pause />}
+          </span>
+          <span className="pause-strip__text">
+            <strong>{pause.paused ? "Gateway paused" : "Gateway live"}</strong>
+            <span>
+              {pause.paused
+                ? (pause.note ?? "New chat traffic is held until you resume.")
+                : "Pause all chat traffic in one switch."}
+            </span>
+          </span>
+          {pause.paused ? <Badge tone="warning">Paused</Badge> : null}
+          <Button
+            variant={pause.paused ? "primary" : "secondary-sm"}
+            icon={pause.paused ? Play : Pause}
+            loading={pauseBusy}
+            onClick={() => void togglePause()}
+          >
+            {pause.paused ? "Resume gateway" : "Pause gateway"}
+          </Button>
+        </section>
+      ) : null}
 
       <div className="grid grid--12">
         {/* Mode hero */}

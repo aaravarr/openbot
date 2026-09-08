@@ -106,6 +106,12 @@ export type BoxState = {
 
 export type SaveResult = BoxState & { ok: true; wrapBytesChanged: boolean };
 
+export type GatewayPause = {
+  paused: boolean;
+  at: string | null;
+  note: string | null;
+};
+
 export type ModelLimitsPayload = {
   contextTokens?: number;
   maxOutputTokens?: number;

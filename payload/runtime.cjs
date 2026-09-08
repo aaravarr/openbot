@@ -17,6 +17,31 @@ function sandDir() {
   return "/home/box/sand-data";
 }
 
+function pausePath() {
+  if (process.env.OPENBOT_PAUSE) return process.env.OPENBOT_PAUSE;
+  return path.join(sandDir(), "openbot-pause.json");
+}
+
+// Global gateway pause flag. Read synchronously on every session/stream
+// entry so flipping the switch takes effect without a host bounce.
+// Missing file = not paused. Corrupt JSON = not paused (fail open: a
+// half-written pause file must never wedge the gateway shut).
+function readPauseState() {
+  try {
+    var raw = fs.readFileSync(pausePath(), "utf8");
+    var parsed = JSON.parse(raw);
+    return parsed && parsed.paused === true;
+  } catch (err) {
+    return false;
+  }
+}
+
+function assertNotPaused() {
+  if (readPauseState()) {
+    throw new Error("openbot-runtime: gateway paused");
+  }
+}
+
 var PLAN = process.env.OPENBOT_PLAN || path.join(sandDir(), "openbot-plan.json");
 var MODE = process.env.OPENBOT_MODE || path.join(sandDir(), "openbot-mode");
 var LOG = process.env.OPENBOT_LOG || "/tmp/openbot-session.log";
@@ -677,6 +702,18 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
   var recordedHost = false;
   var settledResponse;
 
+  // agent may be a resolver function (from the wrap chain) or a plain plan
+  // row (direct callers, tests). Resolving here — on every stream start,
+  // not once at factory time — is what makes a model switch take effect
+  // on the next turn without a host bounce. resolveAgent is a sync read of
+  // a small JSON file, so once per turn is negligible.
+  if (typeof agent === "function") {
+    agent = agent();
+  }
+  if (!agent || !agent.modelId) {
+    throw new Error("openbot: no model binding for this turn (set a wildcard or matching agent in the control UI)");
+  }
+
   function recordCustomHost(extra) {
     if (recordedHost) return;
     recordedHost = true;
@@ -807,12 +844,17 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
   };
 }
 
-function wrapExecutor(exec, agent) {
+// resolveAgentFn is () => agent row | null, closed over the original
+// factory args. Resolving on every use (not once at factory time) is what
+// makes a model switch take effect on the next turn without a host bounce.
+// resolveAgent keeps its semantics (conversationId collection, wildcard
+// fallback, maxOutputTokens lookup); only the call timing moves to use time.
+function wrapExecutor(exec, resolveAgentFn) {
   return new Proxy(exec, {
     get: function (target, prop, receiver) {
       if (prop === "stream") {
         return function (ctx, invocationId, tools, options2) {
-          return hopFullStream(target, agent, ctx, invocationId, tools, options2);
+          return hopFullStream(target, resolveAgentFn, ctx, invocationId, tools, options2);
         };
       }
       var val = Reflect.get(target, prop, receiver);
@@ -822,30 +864,37 @@ function wrapExecutor(exec, agent) {
   });
 }
 
-function wrapPromptSession(inner, agent, middleware) {
+function currentModelId(resolveAgentFn, fallbackAgent) {
+  var live = resolveAgentFn();
+  if (live && live.modelId) return live.modelId;
+  if (fallbackAgent && fallbackAgent.modelId) return fallbackAgent.modelId;
+  throw new Error("openbot: no model binding for this turn (set a wildcard or matching agent in the control UI)");
+}
+
+function wrapPromptSession(inner, resolveAgentFn, fallbackAgent, middleware) {
   return {
     getExecutor: function (state) {
       var raw = inner.getExecutor(state);
-      var hopExec = wrapExecutor(raw, agent);
+      var hopExec = wrapExecutor(raw, resolveAgentFn);
       return middleware ? middleware(hopExec) : hopExec;
     },
     getModelId: function () {
-      return agent.modelId;
+      return currentModelId(resolveAgentFn, fallbackAgent);
     },
   };
 }
 
-function wrapProvider(stockProvider, agent) {
+function wrapProvider(stockProvider, resolveAgentFn, fallbackAgent) {
   return {
     getSession: function (middleware) {
       var inner = stockProvider.getSession(undefined);
-      return wrapPromptSession(inner, agent, middleware);
+      return wrapPromptSession(inner, resolveAgentFn, fallbackAgent, middleware);
     },
     getProviderName: function () {
       return typeof stockProvider.getProviderName === "function" ? stockProvider.getProviderName() : "proto";
     },
     getModelId: function () {
-      return agent.modelId;
+      return currentModelId(resolveAgentFn, fallbackAgent);
     },
     getThinkingDetails: function () {
       return typeof stockProvider.getThinkingDetails === "function" ? stockProvider.getThinkingDetails() : undefined;
@@ -1002,14 +1051,25 @@ function tapSession(stockFn, args) {
 
 function wrapHopSession(stockFn, args) {
   var arr = Array.prototype.slice.call(args);
+  // Factory-time resolve is a fast fail only: the returned chain keeps a
+  // resolver over the original args and re-resolves on every stream() and
+  // getModelId() call, so a plan rewrite (model switch) takes effect on
+  // the next turn without a host bounce.
   var agent = resolveAgent(arr);
   if (!agent || !agent.modelId) {
     throw new Error("openbot: no model binding for this turn (set a wildcard or matching agent in the control UI)");
   }
-  return wrapProvider(callStock(stockFn, arr), agent);
+  function resolveLive() {
+    return resolveAgent(arr);
+  }
+  return wrapProvider(callStock(stockFn, arr), resolveLive, agent);
 }
 
 function wrapSession(stockFn, args) {
+  // Gateway pause gate: sync throw before any mode branch so both the
+  // custom hop path and the official tap path are frozen by one switch.
+  // tapSession stays sync (contract); nothing async is introduced here.
+  assertNotPaused();
   if (!isCustomMode()) {
     return tapSession(stockFn, args);
   }
@@ -1017,6 +1077,7 @@ function wrapSession(stockFn, args) {
 }
 
 function attachSession(stockFn, args) {
+  assertNotPaused();
   if (isCustomMode()) {
     return wrapHopSession(stockFn, args);
   }
@@ -1034,6 +1095,8 @@ module.exports = {
   mapFinishReason: mapFinishReason,
   defaultMaxTokens: defaultMaxTokens,
   resolveAgent: resolveAgent,
+  readPauseState: readPauseState,
+  pausePath: pausePath,
   lookupMaxOutput: lookupMaxOutput,
   toOpenAIMessages: toOpenAIMessages,
   hopFullStream: hopFullStream,

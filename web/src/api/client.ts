@@ -10,6 +10,7 @@ import type {
   FetchModelsError,
   FetchModelsErrorKind,
   FetchModelsResult,
+  GatewayPause,
   GrokSkillsReport,
   LogChannelFilter,
   LogDetail,
@@ -151,6 +152,19 @@ export async function loadState(): Promise<BoxState> {
 
 export async function save(command: Command): Promise<SaveResult> {
   return (await request("/api/save", jsonInit(command))) as SaveResult;
+}
+
+/* ---- Gateway pause (global kill-switch; the payload interceptor reads it) ---- */
+export async function getPause(): Promise<GatewayPause> {
+  return (await request("/api/pause")) as GatewayPause;
+}
+
+export async function setPause(paused: boolean, note?: string): Promise<GatewayPause> {
+  return (await request("/api/pause", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(note !== undefined ? { paused, note } : { paused }),
+  })) as GatewayPause;
 }
 
 export async function healthz(): Promise<{ ok: true; service: string }> {

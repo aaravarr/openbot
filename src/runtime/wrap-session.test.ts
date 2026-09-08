@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
+import http from "node:http";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -93,4 +94,114 @@ test("wrapSession is sync, replaces stream, and throws without a binding", () =>
 
   writeFileSync(planPath, JSON.stringify({ kind: "custom", agents: {}, catalog: { providers: [], models: [], bindings: [] } }));
   assert.throws(() => runtime.wrapSession(stockFn, [{}]), /no model binding/);
+});
+
+test("wrapSession chain re-resolves the plan on every stream and getModelId", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "openbot-rt-lazy-"));
+  const planPath = path.join(dir, "plan.json");
+  const writePlan = (modelId: string) =>
+    writeFileSync(
+      planPath,
+      JSON.stringify({
+        kind: "custom",
+        agents: { "*": { modelId, providerId: "p" } },
+        catalog: { providers: [], models: [], bindings: [] },
+      }),
+    );
+  writePlan("model-a");
+
+  const prevPlan = process.env.OPENBOT_PLAN;
+  const prevHost = process.env.OPENBOT_HOP_HOST;
+  const prevPort = process.env.OPENBOT_HOP_PORT;
+  process.env.OPENBOT_PLAN = planPath;
+
+  const seen: string[] = [];
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      try {
+        seen.push((JSON.parse(Buffer.concat(chunks).toString("utf8")) as { model?: string }).model ?? "");
+      } catch {
+        seen.push("");
+      }
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end('data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n');
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const addr = server.address();
+  if (!addr || typeof addr === "string") throw new Error("no port");
+  process.env.OPENBOT_HOP_HOST = "127.0.0.1";
+  process.env.OPENBOT_HOP_PORT = String(addr.port);
+
+  delete require.cache[runtimePath];
+  const runtime = require(runtimePath) as {
+    wrapSession: (stockFn: (...args: unknown[]) => unknown, args: unknown) => unknown;
+  };
+  try {
+    function stockFn() {
+      return {
+        getSession() {
+          return {
+            getExecutor() {
+              return {
+                stream() {
+                  throw new Error("stock stream should not run on custom wrap");
+                },
+                getMessages() {
+                  return [{ role: "user", content: "hi" }];
+                },
+              };
+            },
+            getModelId() {
+              return "stock";
+            },
+          };
+        },
+        getProviderName() {
+          return "proto";
+        },
+        getModelId() {
+          return "stock";
+        },
+      };
+    }
+
+    const provider = runtime.wrapSession(stockFn, [{}]) as {
+      getModelId: () => string;
+      getSession: (mw: unknown) => { getExecutor: () => { stream: Function }; getModelId: () => string };
+    };
+    assert.equal(provider.getModelId(), "model-a");
+
+    const drain = async () => {
+      const session = provider.getSession((exec: unknown) => exec);
+      const result = session.getExecutor().stream({}, "inv-1", [], {}) as {
+        fullStream: AsyncIterable<unknown>;
+      };
+      for await (const _part of result.fullStream) {
+        /* drain */
+      }
+    };
+    await drain();
+    assert.deepEqual(seen, ["model-a"]);
+
+    // Rewrite the plan without bouncing the host: the very next stream and
+    // getModelId must use the new model.
+    writePlan("model-b");
+    assert.equal(provider.getModelId(), "model-b");
+    const session = provider.getSession((exec: unknown) => exec);
+    assert.equal(session.getModelId(), "model-b");
+    await drain();
+    assert.deepEqual(seen, ["model-a", "model-b"]);
+  } finally {
+    server.close();
+    server.closeAllConnections();
+    if (prevPlan === undefined) delete process.env.OPENBOT_PLAN;
+    else process.env.OPENBOT_PLAN = prevPlan;
+    if (prevHost === undefined) delete process.env.OPENBOT_HOP_HOST;
+    else process.env.OPENBOT_HOP_HOST = prevHost;
+    if (prevPort === undefined) delete process.env.OPENBOT_HOP_PORT;
+    else process.env.OPENBOT_HOP_PORT = prevPort;
+  }
 });

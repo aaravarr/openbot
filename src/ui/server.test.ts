@@ -71,6 +71,71 @@ test("wrapMode is strict: only an exact official mode file means official", () =
   assert.equal(wrapMode("official-mode"), "custom");
 });
 
+test("GET /api/pause defaults to unpaused when no state file exists", async () => {
+  const { server, port } = await listen();
+  try {
+    const fss = await import("node:fs");
+    fss.rmSync("/tmp/openbot-sand-data/openbot-pause.json", { force: true });
+    const res = await request(port, "/api/pause", "GET");
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, { paused: false, at: null, note: null });
+  } finally {
+    server.close();
+    server.closeAllConnections();
+  }
+});
+
+test("PUT /api/pause flips the flag, persists atomically, and logs an event", async () => {
+  const { server, port } = await listen();
+  try {
+    const fss = await import("node:fs");
+    fss.rmSync("/tmp/openbot-sand-data/openbot-pause.json", { force: true });
+    const put = await request(port, "/api/pause", "PUT", Buffer.from(JSON.stringify({ paused: true, note: "deploy freeze" })));
+    assert.equal(put.status, 200);
+    const state = put.json as { paused: boolean; at: string; note: string };
+    assert.equal(state.paused, true);
+    assert.equal(state.note, "deploy freeze");
+    assert.equal(typeof state.at, "string");
+    assert.equal(fss.existsSync("/tmp/openbot-sand-data/openbot-pause.json.tmp"), false);
+    const onDisk = JSON.parse(fss.readFileSync("/tmp/openbot-sand-data/openbot-pause.json", "utf8")) as typeof state;
+    assert.deepEqual(onDisk, state);
+    const got = await request(port, "/api/pause", "GET");
+    assert.equal(got.status, 200);
+    assert.deepEqual(got.json, state);
+    const events = await request(port, "/api/logs/events", "GET");
+    assert.equal(events.status, 200);
+    const items = (events.json as { items: { type: string; severity: string }[] }).items;
+    const pauseEvents = items.filter((row) => row.type === "gateway.pause");
+    assert.ok(pauseEvents.length >= 1);
+    assert.equal(pauseEvents[0]?.severity, "WARN");
+    const resume = await request(port, "/api/pause", "PUT", Buffer.from(JSON.stringify({ paused: false })));
+    assert.equal(resume.status, 200);
+    assert.equal((resume.json as { paused: boolean }).paused, false);
+    assert.equal((resume.json as { note: string | null }).note, null);
+    const after = await request(port, "/api/logs/events", "GET");
+    const latest = ((after.json as { items: { type: string; severity: string }[] }).items).filter((row) => row.type === "gateway.pause")[0];
+    assert.equal(latest?.severity, "INFO");
+  } finally {
+    server.close();
+    server.closeAllConnections();
+  }
+});
+
+test("PUT /api/pause rejects malformed payloads", async () => {
+  const { server, port } = await listen();
+  try {
+    const badJson = await request(port, "/api/pause", "PUT", Buffer.from("{nope"));
+    assert.equal(badJson.status, 400);
+    const badType = await request(port, "/api/pause", "PUT", Buffer.from(JSON.stringify({ paused: "yes" })));
+    assert.equal(badType.status, 400);
+    const badNote = await request(port, "/api/pause", "PUT", Buffer.from(JSON.stringify({ paused: true, note: 42 })));
+    assert.equal(badNote.status, 400);
+  } finally {
+    server.close();
+    server.closeAllConnections();
+  }
+});
+
 test("GET /api/logs/usage returns grouped usage with an approximate flag", async () => {
   const { server, port } = await listen();
   try {

@@ -10,7 +10,7 @@ import { fetchModelsForProvider } from "../catalog/provider-models.ts";
 import { createCatalogManager } from "../catalog/model-catalog.ts";
 import { catalogAfterSave, parseUiProviderSave } from "../parse/ui.ts";
 import { renderQrAscii } from "../qrcode.ts";
-import { boxPathsFrom } from "../supervisor/paths.ts";
+import { boxPathsFrom, joinAbs } from "../supervisor/paths.ts";
 import { catalogFromPlanJson } from "../supervisor/plan.ts";
 import { observe, type SupervisorDeps } from "../supervisor/observe.ts";
 import { nodeFs, nodeProcs } from "../supervisor/procs.ts";
@@ -463,6 +463,103 @@ function parseInstallSlug(parsed: unknown): { ok: true; slug?: string } | { ok: 
   return { ok: true, slug: raw };
 }
 
+export type GatewayPause = {
+  paused: boolean;
+  at: string | null;
+  note: string | null;
+};
+
+/**
+ * Global gateway pause flag. The payload-side interceptor (another worker's
+ * area) reads this file; the UI layer here only owns the read/write API.
+ * Missing or unreadable file means "not paused" -- pausing must be an
+ * explicit user act, never a crash default.
+ */
+export function readPause(current: SupervisorDeps): GatewayPause {
+  const raw = current.fs.read(current.paths.pause);
+  if (raw === undefined) {
+    return { paused: false, at: null, note: null };
+  }
+  try {
+    const parsed = JSON.parse(raw) as { paused?: unknown; at?: unknown; note?: unknown };
+    return {
+      paused: parsed.paused === true,
+      at: typeof parsed.at === "string" && parsed.at ? parsed.at : null,
+      note: typeof parsed.note === "string" && parsed.note ? parsed.note : null,
+    };
+  } catch {
+    return { paused: false, at: null, note: null };
+  }
+}
+
+/**
+ * Persist the pause flag with tmp+rename atomicity (same discipline as the
+ * request-log rewrites) so a crash can never leave a truncated JSON behind.
+ */
+export function writePause(current: SupervisorDeps, input: { paused: boolean; note?: string | undefined }): GatewayPause {
+  const state: GatewayPause = {
+    paused: input.paused,
+    at: new Date().toISOString(),
+    note: typeof input.note === "string" && input.note.trim() ? input.note.trim().slice(0, 500) : null,
+  };
+  const body = `${JSON.stringify(state, null, 2)}\n`;
+  // Tmp+rename: FsDeps has no rename, so build the sibling tmp path with
+  // joinAbs (keeps the AbsPath brand) and move it with node:fs -- the UI
+  // server always runs on real fs (deps() wires nodeFs).
+  const lastSlash = current.paths.pause.lastIndexOf("/");
+  const dir = current.paths.pause.slice(0, lastSlash + 1) as typeof current.paths.pause;
+  const tmpPath = joinAbs(dir, "openbot-pause.json.tmp");
+  current.fs.mkdirp(current.paths.sandData);
+  fs.writeFileSync(tmpPath, body, { encoding: "utf8", mode: 0o644 });
+  fs.renameSync(tmpPath, current.paths.pause);
+  try {
+    requestLog.appendEvent({
+      type: "gateway.pause",
+      severity: state.paused ? "WARN" : "INFO",
+      message: state.paused
+        ? `Gateway paused${state.note ? `: ${state.note}` : "."} New chat traffic is held.`
+        : "Gateway resumed. Chat traffic flows again.",
+    });
+  } catch {
+    /* event write is best-effort */
+  }
+  return state;
+}
+
+async function handlePauseApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+  const current = deps();
+  if (req.method === "GET" && url.pathname === "/api/pause") {
+    sendJson(res, 200, readPause(current));
+    return true;
+  }
+  if (req.method === "PUT" && url.pathname === "/api/pause") {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readBody(req)) as unknown;
+    } catch {
+      sendJson(res, 400, { error: "invalid json" });
+      return true;
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      sendJson(res, 400, { error: "body must be an object" });
+      return true;
+    }
+    const { paused, note } = parsed as { paused?: unknown; note?: unknown };
+    if (typeof paused !== "boolean") {
+      sendJson(res, 400, { error: "paused must be a boolean" });
+      return true;
+    }
+    if (note !== undefined && typeof note !== "string") {
+      sendJson(res, 400, { error: "note must be a string" });
+      return true;
+    }
+    const state = await enqueueSave(async () => writePause(current, { paused, note }));
+    sendJson(res, 200, state);
+    return true;
+  }
+  return false;
+}
+
 async function handleGrokSkillsApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
   if (req.method === "GET" && url.pathname === "/api/grok-skills") {
     const report = await grokSkillsStatus({ repoRoot });
@@ -529,6 +626,9 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     }
   }
   if (await handleGrokSkillsApi(req, res, url)) {
+    return;
+  }
+  if (await handlePauseApi(req, res, url)) {
     return;
   }
   if (await handleLogsApi(req, res, url)) {

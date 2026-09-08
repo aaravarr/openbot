@@ -1,5 +1,6 @@
 import {
   HIGH_AGENT_MAX_TOKENS,
+  MAX_OUTPUT_TOKENS_CEILING,
   type Model,
   type ModelId,
   type Modality,
@@ -30,6 +31,25 @@ const MODALITY_SET = new Set<string>(MODALITIES);
 export function parsePositiveTokens(value: unknown, fallback: number): number {
   const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
   if (!Number.isFinite(n) || n <= 0 || n > MAX_TOKEN_CAP) {
+    return fallback;
+  }
+  return Math.floor(n);
+}
+
+/**
+ * Clamp a catalog max-output value to the global safety ceiling.
+ *
+ * Upstream aggregators occasionally report the context window (or a
+ * context-minus-prompt remainder, e.g. the 943718 seen on
+ * meta/muse-spark-1.3-contributor in 2026-09) in a max-completion field.
+ * Anything above MAX_OUTPUT_TOKENS_CEILING is data corruption, never a real
+ * model limit, so it falls back to HIGH_AGENT_MAX_TOKENS instead of
+ * poisoning the plan row and sailing through hop-side capping untouched
+ * (hop caps against the same poisoned row).
+ */
+export function parseMaxOutputTokens(value: unknown, fallback: number = HIGH_AGENT_MAX_TOKENS): number {
+  const n = parsePositiveTokens(value, Number.NaN);
+  if (!Number.isFinite(n) || n <= 0 || n > MAX_OUTPUT_TOKENS_CEILING) {
     return fallback;
   }
   return Math.floor(n);
@@ -135,7 +155,8 @@ export function makeModel(input: {
     providerId: input.providerId,
     slug: input.slug,
     contextTokens: parsePositiveTokens(input.contextTokens, DEFAULT_CONTEXT_TOKENS),
-    maxOutputTokens: parsePositiveTokens(input.maxOutputTokens, HIGH_AGENT_MAX_TOKENS),
+    // Clamped (not just parsed): see parseMaxOutputTokens for the 943718 story.
+    maxOutputTokens: parseMaxOutputTokens(input.maxOutputTokens, HIGH_AGENT_MAX_TOKENS),
     reasoningLevels,
     activeReasoning: pickActiveReasoning(reasoningLevels, input.activeReasoning, input.reasoningLevels),
     modalities: parseModalities(input.modalities),

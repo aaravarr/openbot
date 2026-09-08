@@ -20,6 +20,17 @@ export const DEFAULT_SECRETS_PATH = "/home/box/sand-data/secrets.json" as const;
 export const SERVICE_PORT = 9280 as const;
 export const LOOPBACK = "127.0.0.1" as const;
 export const HIGH_AGENT_MAX_TOKENS = 65536 as const;
+/**
+ * Outbound max_tokens safety ceiling.
+ *
+ * Rationale: no shipping chat/completions provider accepts a larger single
+ * completion (largest known maxima are ~128K output, e.g. Meta Llama 4 class
+ * and large-context Gemini/GPT variants top out at 64-128K). Catalog rows
+ * come from third-party aggregators that occasionally report the context
+ * window (or context-minus-prompt remainder) in a max-completion field, so a
+ * value above this ceiling is data corruption, never a real model limit.
+ */
+export const MAX_OUTPUT_TOKENS_CEILING = 131072 as const;
 export const KNOWN_HOST_BACKUP = "/home/box/sand-data/host-main.cjs.pre-openbot" as const;
 
 export type Brand<T, B extends string> = T & { readonly __brand: B };

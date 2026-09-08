@@ -9,12 +9,13 @@ import {
   makeModel,
   normalizeModel,
   parseModalities,
+  parseMaxOutputTokens,
   parsePositiveTokens,
   parseReasoningLevels,
   pickActiveReasoning,
   REASONING_LEVELS,
 } from "./model.ts";
-import { HIGH_AGENT_MAX_TOKENS, type ModelId, type ProviderId } from "./types.ts";
+import { HIGH_AGENT_MAX_TOKENS, MAX_OUTPUT_TOKENS_CEILING, type ModelId, type ProviderId } from "./types.ts";
 import { parseModelSlug } from "../supervisor/plan.ts";
 
 function sample(overrides: Record<string, unknown> = {}) {
@@ -110,4 +111,16 @@ test("hasSelectableReasoning is false when only default is listed", () => {
   assert.equal(hasSelectableReasoning({ reasoningLevels: ["default"] }), false);
   assert.equal(hasSelectableReasoning({ reasoningLevels: ["none"] }), true);
   assert.equal(hasSelectableReasoning({ reasoningLevels: ["default", "none"] }), true);
+});
+
+test("parseMaxOutputTokens clamps poisoned catalog values to the default", () => {
+  assert.equal(parseMaxOutputTokens(943718), HIGH_AGENT_MAX_TOKENS);
+  assert.equal(parseMaxOutputTokens(131072), MAX_OUTPUT_TOKENS_CEILING);
+  assert.equal(parseMaxOutputTokens(4096), 4096);
+  assert.equal(parseMaxOutputTokens(undefined), HIGH_AGENT_MAX_TOKENS);
+});
+
+test("makeModel clamps a poisoned maxOutputTokens instead of storing it", () => {
+  const model = sample({ maxOutputTokens: 943718 });
+  assert.equal(model.maxOutputTokens, HIGH_AGENT_MAX_TOKENS);
 });

@@ -1,4 +1,4 @@
-import { type AbsPath } from "../domain/types.ts";
+import { type AbsPath, MAX_OUTPUT_TOKENS_CEILING } from "../domain/types.ts";
 import { defaultFetch, filterModalities, type FetchLike } from "./provider-models.ts";
 import {
   buildReasoningAllowList,
@@ -90,6 +90,23 @@ function firstPositiveInt(...values: unknown[]): number | null {
   for (const value of values) {
     const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
     if (Number.isFinite(n) && n > 0) {
+      return Math.floor(n);
+    }
+  }
+  return null;
+}
+
+/**
+ * firstPositiveInt scoped to max-output fields: drops values above the
+ * global safety ceiling so a poisoned upstream max_completion_tokens (e.g.
+ * the 943718 seen on meta/muse-spark-1.3-contributor in 2026-09, really a
+ * context-window figure) never lands in the catalog or the plan. Falls
+ * through to the next candidate, so a sane fallback still wins.
+ */
+function firstSaneOutputTokens(...values: unknown[]): number | null {
+  for (const value of values) {
+    const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+    if (Number.isFinite(n) && n > 0 && n <= MAX_OUTPUT_TOKENS_CEILING) {
       return Math.floor(n);
     }
   }
@@ -279,7 +296,7 @@ function normalizeOpenRouterEntry(item: unknown): CatalogModel | undefined {
       id: item.id.trim(),
       name: stringOrNull(item.name),
       contextLength: firstPositiveInt(item.context_length, item.contextLength, architecture?.context_length),
-      maxOutputTokens: firstPositiveInt(
+      maxOutputTokens: firstSaneOutputTokens(
         topProvider?.max_completion_tokens,
         item.max_completion_tokens,
         item.maxOutputTokens,
@@ -312,7 +329,7 @@ function normalizeModelsDevEntry(item: unknown): CatalogModel | undefined {
       id: item.id.trim(),
       name: stringOrNull(item.name),
       contextLength: firstPositiveInt(limit?.context, item.context_length, item.contextLength),
-      maxOutputTokens: firstPositiveInt(limit?.output, item.max_output_tokens, item.maxOutputTokens),
+      maxOutputTokens: firstSaneOutputTokens(limit?.output, item.max_output_tokens, item.maxOutputTokens),
       modalities: filterModalities(firstArray(modalities?.input, item.input_modalities, item.modalities)),
       pricing: normalizePricing(item.cost ?? item.pricing),
     },
@@ -375,7 +392,8 @@ function parseCatalogModel(value: unknown): CatalogModel | undefined {
     id: value.id.trim(),
     name: typeof value.name === "string" ? value.name : null,
     contextLength: firstPositiveInt(value.contextLength),
-    maxOutputTokens: firstPositiveInt(value.maxOutputTokens),
+    // Disk cache may predate the ceiling (poisoned rows like 943718); clamp here too.
+    maxOutputTokens: firstSaneOutputTokens(value.maxOutputTokens),
     modalities,
     reasoning: value.reasoning === true,
     reasoningLevels: parseStoredReasoningLevels(value.reasoningLevels),

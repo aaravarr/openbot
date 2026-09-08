@@ -1,4 +1,4 @@
-import { type Catalog } from "../domain/types.ts";
+import { type Catalog, MAX_OUTPUT_TOKENS_CEILING } from "../domain/types.ts";
 import { keepReasoningOrder } from "../domain/model.ts";
 import { secretFor, type SecretStore } from "../supervisor/secrets.ts";
 import { fetchedReasoningLevels, mapVendorEffort } from "./reasoning-efforts.ts";
@@ -54,6 +54,22 @@ function firstPositiveInt(...values: unknown[]): number | null {
   for (const value of values) {
     const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
     if (Number.isFinite(n) && n > 0) {
+      return Math.floor(n);
+    }
+  }
+  return null;
+}
+
+/**
+ * Max-output variant: values above MAX_OUTPUT_TOKENS_CEILING are upstream
+ * data corruption (context-window figures in a max-completion field), so
+ * they are skipped in favor of the next candidate instead of poisoning the
+ * fetched row.
+ */
+function firstSaneOutputTokens(...values: unknown[]): number | null {
+  for (const value of values) {
+    const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+    if (Number.isFinite(n) && n > 0 && n <= MAX_OUTPUT_TOKENS_CEILING) {
       return Math.floor(n);
     }
   }
@@ -125,7 +141,7 @@ function normalizeEntry(item: Record<string, unknown>, id: string): FetchedModel
     id,
     name: stringOrNull(item.name),
     contextLength: firstPositiveInt(item.context_length, item.contextLength, architecture?.context_length),
-    maxOutputTokens: firstPositiveInt(
+    maxOutputTokens: firstSaneOutputTokens(
       topProvider?.max_completion_tokens,
       item.max_completion_tokens,
       item.maxOutputTokens,

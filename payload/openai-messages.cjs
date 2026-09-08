@@ -510,6 +510,17 @@ function toOpenAIMessages(msgs) {
       out.push(rows[j]);
     }
   }
+  // Generic outbound governance (all providers): drop empty assistant rows.
+  // An assistant message with empty/null content and no tool_calls carries
+  // no information (typically an upstream SSE accumulation leftover) and
+  // strict providers reject it with 400. Dropped, not rewritten: a
+  // placeholder string would pollute context, and null is just another
+  // rejectable shape. Rows WITH tool_calls are always kept -- null/empty
+  // content + tool_calls is the legal OpenAI tool-call turn shape.
+  // Safe for pairing: dropped rows have no tool_calls, so they contribute
+  // nothing to repairToolCallIds' pending-id queue; runs before repair so
+  // ghost rows are never counted.
+  out = dropEmptyAssistantMessages(out);
   var repaired = repairToolCallIds(out);
   // repairToolCallIds fills in missing ids based on assistant ordering; the
   // sanitizer must run AFTER repair so that a repaired id (which may itself be
@@ -518,7 +529,32 @@ function toOpenAIMessages(msgs) {
   return sanitized.length ? sanitized : [{ role: "user", content: "" }];
 }
 
+function isEmptyContent(content) {
+  return content == null || content === "";
+}
+
+function dropEmptyAssistantMessages(messages) {
+  if (!Array.isArray(messages)) {
+    return messages;
+  }
+  var kept = [];
+  for (var i = 0; i < messages.length; i++) {
+    var row = messages[i];
+    if (
+      row &&
+      row.role === "assistant" &&
+      isEmptyContent(row.content) &&
+      (!Array.isArray(row.tool_calls) || row.tool_calls.length === 0)
+    ) {
+      continue;
+    }
+    kept.push(row);
+  }
+  return kept;
+}
+
 exports.toOpenAIMessages = toOpenAIMessages;
+exports.dropEmptyAssistantMessages = dropEmptyAssistantMessages;
 exports.repairToolCallIds = repairToolCallIds;
 exports.toolCallIdOf = toolCallIdOf;
 exports.sanitizeToolCallIds = sanitizeToolCallIds;

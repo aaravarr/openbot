@@ -18,6 +18,18 @@ var requestLog = require("./request-log.cjs");
 var TIMEOUT_MS = Number(process.env.OPENBOT_HOP_TIMEOUT || "1800000");
 var HIGH_AGENT_MAX_TOKENS = 65536;
 
+// Global safety ceiling for outbound max_tokens. No shipping
+// chat/completions provider accepts a larger single completion (largest
+// known maxima are ~128K output); catalog rows come from third-party
+// aggregators that occasionally report the context window (or a
+// context-minus-prompt remainder, e.g. the 943718 seen on
+// meta/muse-spark-1.3-contributor in 2026-09) in a max-completion field.
+// Anything above this is data corruption, never a real model limit.
+// (Mirrors MAX_OUTPUT_TOKENS_CEILING in src/domain/types.ts; payload is
+// zero-dependency CJS injected into the host, so the constant is duplicated
+// rather than imported.)
+var MAX_OUTPUT_TOKENS_CEILING = 131072;
+
 /** Policy for retrying upstream HTTP 429 before any client bytes are sent. */
 var UPSTREAM_429_RETRY = {
   maxRetries: 3,
@@ -411,8 +423,16 @@ function hopParameters(model) {
 }
 
 function applyMaxTokens(body, model) {
-  var cap = Number(model && model.maxOutputTokens);
-  if (!Number.isFinite(cap) || cap <= 0) cap = HIGH_AGENT_MAX_TOKENS;
+  // Generic outbound governance (all providers): the model cap itself is
+  // clamped to the global ceiling first, because a poisoned catalog row
+  // (e.g. 943718) would otherwise pass a self-comparison and sail through.
+  // Missing/unreliable caps fall back to HIGH_AGENT_MAX_TOKENS (existing
+  // default); the ceiling only truncates, never inflates.
+  var rawCap = Number(model && model.maxOutputTokens);
+  var cap = HIGH_AGENT_MAX_TOKENS;
+  if (Number.isFinite(rawCap) && rawCap > 0) {
+    cap = Math.min(Math.floor(rawCap), MAX_OUTPUT_TOKENS_CEILING);
+  }
   var requested = Number(body.max_tokens);
   if (!Number.isFinite(requested) || requested <= 0) {
     body.max_tokens = cap;

@@ -551,3 +551,46 @@ test("catalog disk cache without reasoningLevels stays boolean-only", async () =
     assert.deepEqual(result.model.reasoningLevels, []);
   }
 });
+
+test("catalog drops a poisoned openrouter max_completion_tokens and keeps a sane fallback", async () => {
+  // Regression: meta/muse-spark-1.3-contributor reported 943718 (a
+  // context-window figure) via top_provider.max_completion_tokens in 2026-09.
+  const fs = memFs();
+  const fetchFn: FetchLike = async (url) => {
+    if (url.includes("openrouter")) {
+      return jsonResponse(200, {
+        data: [
+          {
+            id: "meta/muse-spark",
+            name: "Muse Spark",
+            context_length: 1000000,
+            top_provider: { max_completion_tokens: 943718 },
+          },
+          {
+            id: "sane/model",
+            name: "Sane",
+            context_length: 200000,
+            top_provider: { max_completion_tokens: 943718 },
+            max_completion_tokens: 65536,
+          },
+        ],
+      });
+    }
+    return jsonResponse(200, {});
+  };
+  const manager = createCatalogManager({ fs, cachePath, fetchFn, now: clock() });
+  await manager.start();
+
+  const poisoned = manager.snapshot("meta/muse-spark").lookup;
+  assert.ok(poisoned);
+  assert.equal(poisoned.found, true);
+  if (poisoned.found) {
+    assert.equal(poisoned.model.maxOutputTokens, null);
+  }
+  const fallback = manager.snapshot("sane/model").lookup;
+  assert.ok(fallback);
+  assert.equal(fallback.found, true);
+  if (fallback.found) {
+    assert.equal(fallback.model.maxOutputTokens, 65536);
+  }
+});

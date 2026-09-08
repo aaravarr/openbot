@@ -24,6 +24,15 @@ var HOP_HOST = process.env.OPENBOT_HOP_HOST || "127.0.0.1";
 var HOP_PORT = Number(process.env.OPENBOT_HOP_PORT || "9280");
 var HIGH_AGENT_MAX_TOKENS = 65536;
 var MAX_SAFE_STRING = 32768;
+
+// Global safety ceiling for outbound max_tokens (mirrors
+// MAX_OUTPUT_TOKENS_CEILING in src/domain/types.ts; payload is
+// zero-dependency CJS injected into the host, so the constant is duplicated
+// rather than imported). A catalog row above this is data corruption (e.g.
+// the 943718 seen on meta/muse-spark-1.3-contributor in 2026-09: a
+// context-window figure in a max-completion field), never a real model
+// limit, and must never reach the wire: providers reject it with 400.
+var MAX_OUTPUT_TOKENS_CEILING = 131072;
 var HOP_RETRY = {
   maxRetries: 3,
   baseDelayMs: 1000,
@@ -143,7 +152,12 @@ function unwrapJsonSchemaTools(tools) {
 }
 
 function defaultMaxTokens(requested, cap) {
-  var limit = Number.isFinite(cap) && cap > 0 ? Math.floor(cap) : HIGH_AGENT_MAX_TOKENS;
+  // The cap itself is clamped first: a poisoned plan row (e.g. 943718)
+  // must not become the limit. Unreliable caps fall back to the default.
+  var limit = HIGH_AGENT_MAX_TOKENS;
+  if (Number.isFinite(cap) && cap > 0) {
+    limit = Math.min(Math.floor(cap), MAX_OUTPUT_TOKENS_CEILING);
+  }
   if (requested != null && Number.isFinite(requested) && requested > 0) {
     return Math.min(Math.floor(requested), limit);
   }
@@ -158,7 +172,11 @@ function lookupMaxOutput(plan, agent) {
     if (!row) continue;
     if (row.slug === agent.modelId || row.id === agent.modelId) {
       var n = Number(row.maxOutputTokens);
-      if (Number.isFinite(n) && n > 0) return Math.floor(n);
+      // Clamp at the source: a poisoned row (e.g. 943718) falls back to the
+      // default instead of flowing into max_tokens and sailing through the
+      // hop-side self-comparison.
+      if (Number.isFinite(n) && n > 0 && n <= MAX_OUTPUT_TOKENS_CEILING) return Math.floor(n);
+      return HIGH_AGENT_MAX_TOKENS;
     }
   }
   return HIGH_AGENT_MAX_TOKENS;

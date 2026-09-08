@@ -112,6 +112,32 @@ test("normalizeProviderModels reads nested reasoning_options", () => {
   assert.deepEqual(result.models[0]?.reasoningLevels, ["default", "none", "low", "high", "max"]);
 });
 
+test("normalizeProviderModels drops a poisoned max_completion_tokens above the ceiling", () => {
+  // Regression: commandcode reported 943718 (a context-window figure) in a
+  // max-completion field; it must not land in the fetched row.
+  const result = normalizeProviderModels({
+    data: [{ id: "meta/muse-spark", top_provider: { max_completion_tokens: 943718 } }],
+  });
+  assert.ok(result);
+  assert.equal(result.models[0]?.maxOutputTokens, null);
+});
+
+test("normalizeProviderModels falls through to a sane max_completion_tokens candidate", () => {
+  const result = normalizeProviderModels({
+    data: [{ id: "m", top_provider: { max_completion_tokens: 943718 }, max_completion_tokens: 65536 }],
+  });
+  assert.ok(result);
+  assert.equal(result.models[0]?.maxOutputTokens, 65536);
+});
+
+test("normalizeProviderModels keeps a max-output value at the ceiling boundary", () => {
+  const result = normalizeProviderModels({
+    data: [{ id: "m", max_completion_tokens: 131072 }],
+  });
+  assert.ok(result);
+  assert.equal(result.models[0]?.maxOutputTokens, 131072);
+});
+
 test("fetch-models succeeds and forwards the stored secret server-side", async () => {
   const catalog = makeCatalog([{ id: "zhipu", name: "Zhipu", origin: "https://open.bigmodel.cn/api/paas/v4" }]);
   const store = makeSecrets({ zhipu: "sk-live" });

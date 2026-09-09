@@ -70,6 +70,20 @@ test("bot-status reports missing, running, success, and failed result files", (t
     writeFileSync(result, JSON.stringify({ status: "running", startedAt: new Date().toISOString() }));
     assert.match(runStatus(data), /OPENBOT_STATUS=running/);
 
+    writeFileSync(result, JSON.stringify({
+      status: "running",
+      startedAt: new Date().toISOString(),
+      progress: { stage: "deploying", summary: "Switching the staged release into place." },
+      timings: { downloadMs: 1200, deployMs: 340, restartMs: 90, totalMs: 1630 },
+    }));
+    const progress = runStatus(data);
+    assert.match(progress, /OPENBOT_PROGRESS_STAGE=deploying/);
+    assert.match(progress, /OPENBOT_PROGRESS_SUMMARY=Switching the staged release into place./);
+    assert.match(progress, /OPENBOT_TIMING_DOWNLOAD_MS=1200/);
+    assert.match(progress, /OPENBOT_TIMING_DEPLOY_MS=340/);
+    assert.match(progress, /OPENBOT_TIMING_RESTART_MS=90/);
+    assert.match(progress, /OPENBOT_TIMING_TOTAL_MS=1630/);
+
     writeFileSync(result, JSON.stringify({ status: "running", startedAt: "2026-09-09T09:00:00Z" }));
     assert.match(runStatus(data), /OPENBOT_WARNING=.*15 minutes/);
 
@@ -155,6 +169,25 @@ test("bot-mode returns immediately before requiring Node and preserves default a
     });
     assert.match(started, /OPENBOT_STATUS=started/);
     assert.equal(JSON.parse(readFileSync(result, "utf8")).status, "running");
+  } finally {
+    rmSync(data, { recursive: true, force: true });
+  }
+});
+
+test("bot-mode prepares and switches a staged release with one directory cutover", (t) => {
+  if (!requireBash(t) || skipOnWindows(t)) return;
+  const source = readFileSync(install, "utf8");
+  assert.match(source, /STAGING_DIR=\"\$DATA\/openbot-staging\"/);
+  assert.match(source, /node --experimental-strip-types --check src\/cli\.ts/);
+  assert.match(source, /mv -T \"\$DEST\" \"\$DATA\/openbot-previous\"/);
+  assert.match(source, /mv -T \"\$STAGING_DIR\" \"\$DEST\"/);
+
+  const data = mkdtempSync(path.join(os.tmpdir(), "openbot-staging-switch-"));
+  try {
+    runBash(
+      "set -euo pipefail; data=$1; dest=$data/openbot; staging=$data/openbot-staging; mkdir -p $dest $staging; printf old > $dest/version; printf new > $staging/version; rm -rf $data/openbot-previous; mv -T $dest $data/openbot-previous; mv -T $staging $dest; test $(cat $dest/version) = new; test $(cat $data/openbot-previous/version) = old",
+      ["bash", data],
+    );
   } finally {
     rmSync(data, { recursive: true, force: true });
   }

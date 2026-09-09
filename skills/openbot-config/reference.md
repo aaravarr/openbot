@@ -4,15 +4,15 @@ Read this from [SKILL.md](SKILL.md) when you need disk shapes, HTTP/CLI contract
 
 ## Detached bot-mode installer protocol
 
-`install.sh --bot-mode` starts a detached Linux worker with `setsid`, `nohup`, redirected output, and `/dev/null` stdin, then exits 0. The worker reuses the normal installer, tunnel reconcile, and QR generation path. A second invocation while the pid in `openbot-install.pid` is alive reports that an install is already running.
+`install.sh --bot-mode` starts a detached Linux worker with `setsid`, `nohup`, redirected output, and `/dev/null` stdin, then exits 0. The worker downloads into `/home/box/sand-data/openbot-staging`, syntax-checks the new tree, warms runtime dependencies, and cuts it over immediately before one final reconcile. The existing cloudflared process is kept; the host bounce is still unavoidable when payload bytes change, but is deferred to the final cutover and happens once. A second invocation while the pid in `openbot-install.pid` is alive reports that an install is already running.
 
 Default files under `/home/box/sand-data` (override with `OPENBOT_SAND_DATA`; individual overrides are `OPENBOT_BOT_RESULT`, `OPENBOT_BOT_LOG`, and `OPENBOT_BOT_PID`):
 
-- `openbot-install-result.json`: atomically replaced JSON with `status` (`running`, `success`, or `failed`), `startedAt`, and optional `finishedAt`, `url`, `qrPath`, `error`, and `logTail`.
+- `openbot-install-result.json`: atomically replaced JSON with `status` (`running`, `success`, or `failed`), `startedAt`, and optional `finishedAt`, `url`, `qrPath`, `error`, and `logTail`. While running, `progress` is `{stage, summary, updatedAt}` where stage is `starting`, `downloading`, `deploying`, `restarting`, `tunnel`, or `qr`. `timings` always contains `downloadMs`, `deployMs`, `restartMs`, and `totalMs`.
 - `openbot-install.log`: detached worker stdout/stderr.
 - `openbot-install.pid`: worker pid, removed on worker exit.
 
-Run `install.sh --bot-status` repeatedly. A running result older than 15 minutes keeps `OPENBOT_STATUS=running` but adds a warning that the process may have been interrupted and points to the log. Missing result files report `not-installed`. Do not treat a stale running record as success.
+Run `install.sh --bot-status` every 30-60 seconds. It prints `OPENBOT_PROGRESS_STAGE`, `OPENBOT_PROGRESS_SUMMARY`, and `OPENBOT_TIMING_*_MS` for bot-friendly progress updates. A running result older than 15 minutes keeps `OPENBOT_STATUS=running` but adds a warning that the process may have been interrupted and points to the log. Missing result files report `not-installed`. Do not treat a stale running record as success.
 
 ## Architecture
 

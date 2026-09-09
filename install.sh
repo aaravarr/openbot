@@ -14,19 +14,36 @@ BOT_RESULT_FILE="${OPENBOT_BOT_RESULT:-$DATA/openbot-install-result.json}"
 BOT_LOG_FILE="${OPENBOT_BOT_LOG:-$DATA/openbot-install.log}"
 BOT_PID_FILE="${OPENBOT_BOT_PID:-$DATA/openbot-install.pid}"
 bot_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
-bot_write_running_result() {
-  local started="$1" started_json tmp="${BOT_RESULT_FILE}.$$"
-  # bot_now emits an ISO-8601 timestamp containing no JSON-significant characters.
-  started_json="$started"
+bot_epoch_ms() { date +%s%3N; }
+bot_write_state() {
+  local status="$1" started="$2" finished="$3" url="$4" qr="$5" error="$6" tail_text="$7" stage="$8" summary="$9" tmp="${BOT_RESULT_FILE}.$$"
   mkdir -p "$(dirname "$BOT_RESULT_FILE")"
-  printf '{"status":"running","startedAt":"%s"}\n' "$started_json" >"$tmp"
+  node -e 'const fs=require("fs");const [file,status,startedAt,finishedAt,url,qrPath,error,logTail,stage,summary,downloadMs,deployMs,restartMs,totalMs]=process.argv.slice(1);let result={};try{result=JSON.parse(fs.readFileSync(file,"utf8"));}catch{};result.status=status;result.startedAt=startedAt;if(finishedAt)result.finishedAt=finishedAt;else delete result.finishedAt;if(url)result.url=url;else delete result.url;if(qrPath)result.qrPath=qrPath;else delete result.qrPath;if(error)result.error=error;else delete result.error;if(logTail)result.logTail=logTail;else delete result.logTail;if(stage)result.progress={stage,summary:summary||"",updatedAt:new Date().toISOString()};result.timings={downloadMs:Number(downloadMs)||0,deployMs:Number(deployMs)||0,restartMs:Number(restartMs)||0,totalMs:Number(totalMs)||0};fs.writeFileSync(file,JSON.stringify(result,null,2)+"\n");' "$tmp" "$status" "$started" "$finished" "$url" "$qr" "$error" "$tail_text" "$stage" "$summary" "${BOT_DOWNLOAD_MS:-0}" "${BOT_DEPLOY_MS:-0}" "${BOT_RESTART_MS:-0}" "${BOT_TOTAL_MS:-0}"
   mv -f "$tmp" "$BOT_RESULT_FILE"
 }
+bot_write_running_result() {
+  bot_write_state running "$1" '' '' '' '' '' starting 'Installation worker started.'
+}
 bot_write_result() {
-  local status="$1" started="$2" finished="$3" url="$4" qr="$5" error="$6" tail_text="$7" tmp="${BOT_RESULT_FILE}.$$"
-  mkdir -p "$(dirname "$BOT_RESULT_FILE")"
-  node -e 'const fs=require("fs");const [file,status,startedAt,finishedAt,url,qrPath,error,logTail]=process.argv.slice(1);const result={status,startedAt};if(finishedAt)result.finishedAt=finishedAt;if(url)result.url=url;if(qrPath)result.qrPath=qrPath;if(error)result.error=error;if(logTail)result.logTail=logTail;fs.writeFileSync(file,JSON.stringify(result,null,2)+"\n");' "$tmp" "$status" "$started" "$finished" "$url" "$qr" "$error" "$tail_text"
-  mv -f "$tmp" "$BOT_RESULT_FILE"
+  bot_write_state "$1" "$2" "$3" "$4" "$5" "$6" "$7" "${BOT_PROGRESS_STAGE:-}" "${BOT_PROGRESS_SUMMARY:-}"
+}
+bot_write_progress() {
+  BOT_PROGRESS_STAGE="$1" BOT_PROGRESS_SUMMARY="$2" bot_write_state running "${BOT_STARTED_AT:-$(bot_now)}" '' '' '' '' '' "$1" "$2"
+}
+bot_mark_stage() {
+  local stage="$1" summary="$2" now="$(bot_epoch_ms)"
+  if [[ -n "${BOT_STAGE_STARTED_MS:-}" ]]; then
+    local elapsed=$((now - BOT_STAGE_STARTED_MS))
+    case "${BOT_PROGRESS_STAGE:-}" in
+      downloading) BOT_DOWNLOAD_MS="$elapsed" ;;
+      deploying) BOT_DEPLOY_MS="$elapsed" ;;
+      restarting) BOT_RESTART_MS="$elapsed" ;;
+    esac
+  fi
+  BOT_STAGE_STARTED_MS="$now"
+  BOT_PROGRESS_STAGE="$stage"
+  BOT_PROGRESS_SUMMARY="$summary"
+  bot_write_progress "$stage" "$summary"
 }
 bot_pid_running() {
   local pid="$(tr -d '[:space:]' <"$BOT_PID_FILE" 2>/dev/null || true)"
@@ -38,18 +55,21 @@ bot_print_status() {
     printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=not-installed' "OPENBOT_RESULT_FILE=$BOT_RESULT_FILE" 'OPENBOT_BOT_INSTRUCTION=No detached OpenBot installation has been recorded yet. Run install.sh --bot-mode to start one.' '===== END OPENBOT BOT RESULT ====='
     return 0
   fi
-  BOT_LOG_FILE="$BOT_LOG_FILE" node -e 'const fs=require("fs");const file=process.argv[1];let v;try{v=JSON.parse(fs.readFileSync(file,"utf8"));}catch{console.log("===== OPENBOT BOT RESULT =====\nOPENBOT_STATUS=failed\nOPENBOT_ERROR=Result file is not valid JSON.\nOPENBOT_RESULT_FILE="+file+"\n===== END OPENBOT BOT RESULT =====");process.exit(0);}const age=v.status==="running"&&v.startedAt?Date.now()-Date.parse(v.startedAt):0;const lines=["===== OPENBOT BOT RESULT =====","OPENBOT_STATUS="+(v.status||"failed"),"OPENBOT_RESULT_FILE="+file];if(v.startedAt)lines.push("OPENBOT_STARTED_AT="+v.startedAt);if(v.finishedAt)lines.push("OPENBOT_FINISHED_AT="+v.finishedAt);if(v.url)lines.push("OPENBOT_URL="+v.url);if(v.qrPath)lines.push("OPENBOT_QR_PATH="+v.qrPath);if(age>900000)lines.push("OPENBOT_WARNING=Installation may have been interrupted after 15 minutes; check "+(process.env.BOT_LOG_FILE||"the install log")+".");if(v.error)lines.push("OPENBOT_ERROR="+v.error);if(v.logTail)lines.push("OPENBOT_LOG_TAIL="+v.logTail.replace(/\n/g,"\\n"));if(v.status==="running")lines.push("OPENBOT_BOT_INSTRUCTION=Wait 60-120 seconds, then run install.sh --bot-status again.");if(v.status==="success")lines.push("OPENBOT_BOT_INSTRUCTION=Send the tunnel URL and QR image to the user with the host SendToUser tool. Do not expose secrets.");if(v.status==="failed")lines.push("OPENBOT_BOT_INSTRUCTION=Tell the user the installation failed, include the log path, and retry install.sh --bot-mode.");lines.push("===== END OPENBOT BOT RESULT =====");console.log(lines.join("\n"));' "$BOT_RESULT_FILE"
+  BOT_LOG_FILE="$BOT_LOG_FILE" node -e 'const fs=require("fs");const file=process.argv[1];let v;try{v=JSON.parse(fs.readFileSync(file,"utf8"));}catch{console.log("===== OPENBOT BOT RESULT =====\nOPENBOT_STATUS=failed\nOPENBOT_ERROR=Result file is not valid JSON.\nOPENBOT_RESULT_FILE="+file+"\n===== END OPENBOT BOT RESULT =====");process.exit(0);}const age=v.status==="running"&&v.startedAt?Date.now()-Date.parse(v.startedAt):0;const lines=["===== OPENBOT BOT RESULT =====","OPENBOT_STATUS="+(v.status||"failed"),"OPENBOT_RESULT_FILE="+file];if(v.startedAt)lines.push("OPENBOT_STARTED_AT="+v.startedAt);if(v.finishedAt)lines.push("OPENBOT_FINISHED_AT="+v.finishedAt);if(v.progress?.stage)lines.push("OPENBOT_PROGRESS_STAGE="+v.progress.stage);if(v.progress?.summary)lines.push("OPENBOT_PROGRESS_SUMMARY="+v.progress.summary);if(v.timings)for(const k of ["downloadMs","deployMs","restartMs","totalMs"])if(Number.isFinite(v.timings[k]))lines.push("OPENBOT_TIMING_"+k.replace(/Ms$/,"").toUpperCase()+"_MS="+v.timings[k]);if(v.url)lines.push("OPENBOT_URL="+v.url);if(v.qrPath)lines.push("OPENBOT_QR_PATH="+v.qrPath);if(age>900000)lines.push("OPENBOT_WARNING=Installation may have been interrupted after 15 minutes; check "+(process.env.BOT_LOG_FILE||"the install log")+".");if(v.error)lines.push("OPENBOT_ERROR="+v.error);if(v.logTail)lines.push("OPENBOT_LOG_TAIL="+v.logTail.replace(/\n/g,"\\n"));if(v.status==="running")lines.push("OPENBOT_BOT_INSTRUCTION=Run install.sh --bot-status again in 30-60 seconds and relay OPENBOT_PROGRESS_STAGE, OPENBOT_PROGRESS_SUMMARY, and timings.");if(v.status==="success")lines.push("OPENBOT_BOT_INSTRUCTION=Send the tunnel URL and QR image to the user with the host SendToUser tool. Do not expose secrets.");if(v.status==="failed")lines.push("OPENBOT_BOT_INSTRUCTION=Tell the user the installation failed, include the log path, and retry install.sh --bot-mode.");lines.push("===== END OPENBOT BOT RESULT =====");console.log(lines.join("\n"));' "$BOT_RESULT_FILE"
 }
 bot_worker_exit() {
   local code="$?"
   trap - EXIT
   if [[ "${BOT_WORKER_DONE:-0}" != "1" ]]; then
+    BOT_TOTAL_MS="$(( $(bot_epoch_ms) - ${BOT_START_EPOCH_MS:-$(bot_epoch_ms)} ))"
     bot_write_result failed "${BOT_STARTED_AT:-$(bot_now)}" "$(bot_now)" '' '' "OpenBot detached installation exited with code $code." "$(tail -n 20 "$BOT_LOG_FILE" 2>/dev/null || true)" || true
   fi
   rm -f "$BOT_PID_FILE"
   exit "$code"
 }
 install_main() {
+local BOT_WORKER_MODE=0
+[[ "${1:-}" == "--bot-mode-worker" ]] && BOT_WORKER_MODE=1
 if [[ ! -f "$HOST" ]]; then
   echo "OpenBot installs on the Grok Bot Computer. Missing $HOST." >&2
   echo "Do not run this script on a Mac. A laptop hop never sees a Bot turn." >&2
@@ -113,10 +133,17 @@ resolve_install_commit() {
   if [[ "${REPO_TARBALL}" == "${DEFAULT_TARBALL}" ]] && command -v node >/dev/null 2>&1; then
     local api_sha
     api_sha="$(
-      curl -fsSL \
-        -H "Accept: application/vnd.github+json" \
-        -H "User-Agent: openbot-install" \
-        "https://api.github.com/repos/aaravarr/openbot/commits/main" \
+      if [[ "${BOT_WORKER_MODE:-0}" == "1" ]]; then
+        curl --connect-timeout 5 --max-time 10 --retry 0 -fsSL \
+          -H "Accept: application/vnd.github+json" \
+          -H "User-Agent: openbot-install" \
+          "https://api.github.com/repos/aaravarr/openbot/commits/main"
+      else
+        curl -fsSL \
+          -H "Accept: application/vnd.github+json" \
+          -H "User-Agent: openbot-install" \
+          "https://api.github.com/repos/aaravarr/openbot/commits/main"
+      fi \
         | node -e '
           let s = "";
           process.stdin.on("data", (d) => { s += d; });
@@ -163,27 +190,55 @@ fi
 
 mkdir -p "$DATA"
 
+if [[ "$BOT_WORKER_MODE" == "1" ]]; then
+  bot_mark_stage downloading 'Fetching the OpenBot release into staging.'
+fi
 COMMIT="$(resolve_install_commit)"
 
+DEPLOY_DIR="$DEST"
+STAGING_DIR=""
+if [[ "$BOT_WORKER_MODE" == "1" ]]; then
+  STAGING_DIR="$DATA/openbot-staging"
+  rm -rf "$STAGING_DIR"
+  mkdir -p "$STAGING_DIR"
+  DEPLOY_DIR="$STAGING_DIR"
+fi
 if [[ -n "${OPENBOT_SRC:-}" ]]; then
-  rm -rf "$DEST"
-  mkdir -p "$DEST"
-  cp -R "$OPENBOT_SRC"/. "$DEST"
+  if [[ "$BOT_WORKER_MODE" == "1" ]]; then
+    cp -R "$OPENBOT_SRC"/. "$DEPLOY_DIR"
+  else
+    rm -rf "$DEST"
+    mkdir -p "$DEST"
+    cp -R "$OPENBOT_SRC"/. "$DEST"
+  fi
 else
   TMP="$(mktemp -d)"
   TARBALL="$REPO_TARBALL"
   if [[ "$COMMIT" != "unknown" && "$REPO_TARBALL" == "$DEFAULT_TARBALL" ]]; then
     TARBALL="https://codeload.github.com/aaravarr/openbot/tar.gz/${COMMIT}"
   fi
-  curl -fsSL "$TARBALL" | tar -xz -C "$TMP"
-  rm -rf "$DEST"
-  mv "$TMP"/openbot-* "$DEST"
+  if [[ "$BOT_WORKER_MODE" == "1" ]]; then
+    curl --retry 3 --retry-delay 2 --connect-timeout 15 -fsSL "$TARBALL" | tar -xz -C "$TMP"
+  else
+    curl -fsSL "$TARBALL" | tar -xz -C "$TMP"
+  fi
+  if [[ "$BOT_WORKER_MODE" == "1" ]]; then
+    cp -a "$TMP"/openbot-*/. "$DEPLOY_DIR"/
+  else
+    rm -rf "$DEST"
+    mv "$TMP"/openbot-* "$DEST"
+  fi
   rmdir "$TMP" 2>/dev/null || true
 fi
 
-stamp_payload_version "$DEST" "$COMMIT"
+stamp_payload_version "$DEPLOY_DIR" "$COMMIT"
 
-cd "$DEST"
+cd "$DEPLOY_DIR"
+if [[ "$BOT_WORKER_MODE" == "1" ]]; then
+  node --experimental-strip-types --check src/cli.ts
+  node --check payload/runtime.cjs
+  node --check payload/hop-server.cjs
+fi
 
 # Compression deps for payload/image-read.cjs. Two layers keep them available:
 #
@@ -200,7 +255,7 @@ cd "$DEST"
 #    degrade to omit placeholders instead of being re-encoded.
 # OPENBOT_SKIP_NPM_INSTALL=1 skips the npm step (tests and offline mirrors).
 payload_vendor_compression_present() {
-  [[ -f "$DEST/payload/vendor/pngjs/package.json" && -f "$DEST/payload/vendor/jpeg-js/package.json" ]]
+  [[ -f "$DEPLOY_DIR/payload/vendor/pngjs/package.json" && -f "$DEPLOY_DIR/payload/vendor/jpeg-js/package.json" ]]
 }
 
 warn_npm_install_failed() {
@@ -220,13 +275,27 @@ warn_npm_install_failed() {
   } >&2
 }
 
+if [[ "$BOT_WORKER_MODE" == "1" ]]; then
+  bot_mark_stage deploying 'Release downloaded; preparing runtime dependencies.'
+fi
 if [[ "${OPENBOT_SKIP_NPM_INSTALL:-}" != "1" ]] && ! payload_vendor_compression_present; then
+  NPM_FLAGS=(--omit=dev --no-audit --no-fund --loglevel=error)
+  [[ "$BOT_WORKER_MODE" == "1" ]] && NPM_FLAGS+=(--prefer-offline)
   if ! command -v npm >/dev/null 2>&1; then
     warn_npm_install_failed "npm is not on PATH"
-  elif ! npm install --omit=dev --no-audit --no-fund --loglevel=error >/dev/null 2>&1 &&
-    ! npm install --omit=dev --no-audit --no-fund --loglevel=error --registry=https://registry.npmmirror.com >/dev/null 2>&1; then
+  elif ! npm install "${NPM_FLAGS[@]}" >/dev/null 2>&1 &&
+    ! npm install "${NPM_FLAGS[@]}" --registry=https://registry.npmmirror.com >/dev/null 2>&1; then
     warn_npm_install_failed "the default npm registry and registry.npmmirror.com both failed"
   fi
+fi
+if [[ "$BOT_WORKER_MODE" == "1" ]]; then
+  if [[ -e "$DEST" || -L "$DEST" ]]; then
+    rm -rf "$DATA/openbot-previous"
+    mv -T "$DEST" "$DATA/openbot-previous"
+  fi
+  mv -T "$STAGING_DIR" "$DEST"
+  cd "$DEST"
+  bot_mark_stage restarting 'Staging is warm; switching the new release into place.'
 fi
 
 # Update path: an old guard daemon (pidfile lock) would otherwise keep running
@@ -296,10 +365,16 @@ stop_stale_hop_for_update() {
 
 # Guard first (it patrols hop health and could otherwise restart the hop),
 # then the standalone hop. Both are no-ops on a first install.
+if [[ "$BOT_WORKER_MODE" == "1" ]]; then
+  bot_write_progress restarting 'Release is active; stopping old workers and reconciling once.'
+fi
 stop_old_guard_for_update || true
 stop_stale_hop_for_update || true
 
 node --experimental-strip-types src/cli.ts install --host-main "$HOST" --sand-data "$DATA"
+if [[ "$BOT_WORKER_MODE" == "1" ]]; then
+  bot_mark_stage tunnel 'The host is ready; ensuring the tunnel stays available.'
+fi
 
 # Start the in-project guard daemon when the box is custom so drift heals
 # without an external scheduler. It never starts on official, never writes the
@@ -319,6 +394,7 @@ if [[ "${1:-}" == "--bot-mode-worker" ]]; then
   BOT_URL=""
   BOT_TUNNEL_ERROR=""
   for BOT_ATTEMPT in 1 2 3; do
+    bot_write_progress tunnel "Tunnel attempt ${BOT_ATTEMPT}/3."
     if OPENBOT_TUNNEL=cloudflare node --experimental-strip-types src/cli.ts tunnel on --json >"$BOT_RESULT"; then
       BOT_URL="$(node -e '
         const fs = require("fs");
@@ -353,7 +429,8 @@ if [[ "${1:-}" == "--bot-mode-worker" ]]; then
     exit 1
   fi
   rm -f "$BOT_RESULT"
-  bot_write_result success "$BOT_STARTED_AT" "$(bot_now)" "$BOT_URL" "$BOT_QR_PATH" "" ""
+  BOT_TOTAL_MS="$(( $(bot_epoch_ms) - ${BOT_START_EPOCH_MS:-$(bot_epoch_ms)} ))"
+  BOT_PROGRESS_STAGE=qr BOT_PROGRESS_SUMMARY='Tunnel is ready; QR code generated.' bot_write_state success "$BOT_STARTED_AT" "$(bot_now)" "$BOT_URL" "$BOT_QR_PATH" "" "" qr 'Tunnel is ready; QR code generated.'
   BOT_WORKER_DONE=1
 
   cat <<EOF
@@ -374,18 +451,19 @@ fi
 if [[ "${1:-}" == "--bot-mode" ]]; then
   mkdir -p "$DATA"
   if bot_pid_running; then
-    printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=started' "OPENBOT_RESULT_FILE=$BOT_RESULT_FILE" "OPENBOT_LOG_FILE=$BOT_LOG_FILE" 'OPENBOT_BOT_INSTRUCTION=Installation is already running; run install.sh --bot-status again after 60-120 seconds.' '===== END OPENBOT BOT RESULT ====='
+    printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=started' "OPENBOT_RESULT_FILE=$BOT_RESULT_FILE" "OPENBOT_LOG_FILE=$BOT_LOG_FILE" 'OPENBOT_BOT_INSTRUCTION=Installation is already running; run install.sh --bot-status again in 30-60 seconds and relay progress.' '===== END OPENBOT BOT RESULT ====='
     exit 0
   fi
   rm -f "$BOT_PID_FILE"
   BOT_STARTED_AT="$(bot_now)"
-  export BOT_RESULT_FILE BOT_LOG_FILE BOT_PID_FILE BOT_STARTED_AT
+  BOT_START_EPOCH_MS="$(bot_epoch_ms)"
+  export BOT_RESULT_FILE BOT_LOG_FILE BOT_PID_FILE BOT_STARTED_AT BOT_START_EPOCH_MS
   bot_write_running_result "$BOT_STARTED_AT"
-  export -f bot_now bot_write_result bot_pid_running bot_print_status bot_worker_exit install_main
+  export -f bot_now bot_epoch_ms bot_write_state bot_write_running_result bot_write_result bot_write_progress bot_mark_stage bot_pid_running bot_print_status bot_worker_exit install_main
   (setsid nohup bash -euo pipefail -c 'trap bot_worker_exit EXIT; BOT_WORKER_DONE=0; install_main --bot-mode-worker' </dev/null >>"$BOT_LOG_FILE" 2>&1) &
   printf '%s\n' "$!" >"${BOT_PID_FILE}.tmp"
   mv -f "${BOT_PID_FILE}.tmp" "$BOT_PID_FILE"
-  printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=started' "OPENBOT_RESULT_FILE=$BOT_RESULT_FILE" "OPENBOT_LOG_FILE=$BOT_LOG_FILE" 'OPENBOT_BOT_INSTRUCTION=Reply to the user now: OpenBot installation has started. After 60-120 seconds (or in the next turn), run install.sh --bot-status. When status=success, send the tunnel URL and QR image to the user with the host SendToUser tool. Do not expose secrets.' '===== END OPENBOT BOT RESULT ====='
+  printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=started' "OPENBOT_RESULT_FILE=$BOT_RESULT_FILE" "OPENBOT_LOG_FILE=$BOT_LOG_FILE" 'OPENBOT_BOT_INSTRUCTION=Reply to the user now: OpenBot installation has started. In the next turn and every 30-60 seconds, run install.sh --bot-status and relay progress. When status=success, send the tunnel URL and QR image to the user with the host SendToUser tool. Do not expose secrets.' '===== END OPENBOT BOT RESULT ====='
   exit 0
 fi
 install_main "$@"

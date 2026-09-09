@@ -19,6 +19,7 @@ import { parseProviderId, parseSecretBytes } from "../supervisor/secrets.ts";
 import { clampIntervalMinutes, DEFAULT_GUARD_INTERVAL_MINUTES } from "../supervisor/guard-daemon.ts";
 
 export type CliCommand =
+  | { readonly kind: "qrcode"; readonly text: string; readonly out: string }
   | { readonly kind: "status" }
   | { readonly kind: "census-only" }
   | { readonly kind: "dry-run" }
@@ -105,13 +106,25 @@ export function parseInstallCommand(input: {
     throw new Error("OpenBot: do not put an API key on the command line; use OPENBOT_API_KEY");
   }
 
-  const repoRoot = input.repoRoot ?? (input.metaUrl ? repoRootFromMeta(input.metaUrl) : process.cwd());
+  const isQrcode = argv.includes("qrcode");
+  const repoRoot = isQrcode
+    ? "/"
+    : input.repoRoot ?? (input.metaUrl ? repoRootFromMeta(input.metaUrl) : process.cwd());
   const paths = boxPathsFrom({
     repoRoot,
-    hostMain: takeFlag(argv, "--host-main"),
-    sandData: takeFlag(argv, "--sand-data"),
+    hostMain: isQrcode ? "/tmp/openbot-host" : takeFlag(argv, "--host-main"),
+    sandData: isQrcode ? "/tmp/openbot-sand-data" : takeFlag(argv, "--sand-data"),
   });
   const json = hasFlag(argv, "--json");
+
+  if (argv.includes("qrcode")) {
+    const text = takeFlag(argv, "--text");
+    const out = takeFlag(argv, "--out");
+    if (!text || !out) {
+      throw new Error("OpenBot: qrcode needs --text and --out");
+    }
+    return { command: { kind: "qrcode", text, out }, paths, json };
+  }
 
   if (hasFlag(argv, "--census-only") && hasFlag(argv, "--dry-run")) {
     throw new Error("OpenBot: --census-only is observe; --dry-run is proveWrap; pick one");

@@ -272,3 +272,54 @@ if [[ "$(tr -d '[:space:]' <"$DATA/openbot-mode" 2>/dev/null)" == "custom" ]]; t
     --host-main "$HOST" --sand-data "$DATA" </dev/null >/dev/null 2>&1 &
   disown 2>/dev/null || true
 fi
+
+if [[ "${1:-}" == "--bot-mode" ]]; then
+  BOT_QR_PATH="${OPENBOT_BOT_QR_PATH:-/tmp/openbot-install-qr.png}"
+  BOT_RESULT="$(mktemp)"
+  BOT_URL=""
+  BOT_TUNNEL_ERROR=""
+  for BOT_ATTEMPT in 1 2 3; do
+    if OPENBOT_TUNNEL=cloudflare node --experimental-strip-types src/cli.ts tunnel on --json >"$BOT_RESULT"; then
+      BOT_URL="$(node -e '
+        const fs = require("fs");
+        try {
+          const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+          const url = value?.snapshot?.tunnel?.url;
+          if (typeof url === "string" && /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i.test(url)) process.stdout.write(url);
+        } catch {}
+      ' "$BOT_RESULT")"
+      if [[ -n "$BOT_URL" ]]; then
+        break
+      fi
+      BOT_TUNNEL_ERROR="Tunnel command succeeded but returned no trycloudflare URL."
+    else
+      BOT_TUNNEL_ERROR="Tunnel attempt ${BOT_ATTEMPT} failed."
+    fi
+    sleep 2
+  done
+
+  if [[ -z "$BOT_URL" ]]; then
+    rm -f "$BOT_RESULT"
+    echo "OpenBot bot-mode could not obtain a Cloudflare Tunnel URL after 3 attempts." >&2
+    echo "${BOT_TUNNEL_ERROR:-Check $DATA/openbot-tunnel.log and retry with: openbot tunnel on}" >&2
+    echo "The local control page may still be available at http://127.0.0.1:9280." >&2
+    exit 1
+  fi
+
+  if ! node --experimental-strip-types src/cli.ts qrcode --text "$BOT_URL" --out "$BOT_QR_PATH" >/dev/null; then
+    rm -f "$BOT_RESULT"
+    echo "OpenBot bot-mode obtained $BOT_URL but could not write QR PNG to $BOT_QR_PATH." >&2
+    echo "Retry with OPENBOT_BOT_QR_PATH set to a writable path." >&2
+    exit 1
+  fi
+  rm -f "$BOT_RESULT"
+
+  cat <<EOF
+
+===== OPENBOT BOT RESULT =====
+OPENBOT_URL=$BOT_URL
+OPENBOT_QR_PATH=$BOT_QR_PATH
+OPENBOT_BOT_INSTRUCTION=Send the OpenBot URL to the user. Attach the PNG file at OPENBOT_QR_PATH as an image using the host's SendToUser tool, using the exact image/file parameter names from its installed tool definition. Then briefly confirm that OpenBot is installed and the link is ready. Do not expose secrets or invent a tool name or parameter.
+===== END OPENBOT BOT RESULT =====
+EOF
+fi

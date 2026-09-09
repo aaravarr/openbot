@@ -175,6 +175,10 @@ Schemas, env overrides, `/api/save` kinds, 409 refusals, presets (origins only),
 
 Use the Bots page or PUT /api/pause-bots with { "botId": "<agent UUID>", "paused": true }; resume with paused: false. The bot ID comes from the system message path /home/box/agent-data/agents/<uuid>/profile.json. GET /api/bots lists discovered profiles and GET /api/pause-bots returns { "pausedBotIds": [] }. A matching hop request returns 503 with message openbot bot paused, code bot_paused, and botId; runtime turns throw openbot-runtime: bot paused. Both paths read openbot-pause-bots.json on every request/turn, so changes are hot. Missing or corrupt JSON means no bot is paused. See reference.md for the schema and validation rules.
 
+## Grok Bot one-command install
+
+When the user asks to arrange `aaravarr/openbot`, run the installer on the Computer with `bash -s -- --bot-mode`. This mode is non-interactive and idempotent: it updates the install, enables Cloudflare through the normal reconcile path, waits for a public URL, and writes a QR PNG to `/tmp/openbot-install-qr.png`. Parse the final `OPENBOT BOT RESULT` block, then use the installed host `SendToUser` tool according to its live definition to send the URL and image. Never guess image/file parameter names; if the tool definition is unavailable, report that limitation instead of inventing a call. On tunnel failure, preserve the local URL and tell the user to retry `openbot tunnel on`.
+
 ## Aftercare
 
 After wrap or mode change, tell the user: **send a new Grok Bot message**. If wrap is missing (`needs-reinstall` or stock unmarked host) and they wanted custom, reconcile — do not stop at a JSON edit.

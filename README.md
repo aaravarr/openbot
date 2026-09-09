@@ -22,6 +22,19 @@ Then open [http://127.0.0.1:9280](http://127.0.0.1:9280) in the **Computer** bro
 
 ## Install
 
+<details>
+<summary>Grok Bot: one-command install</summary>
+
+If the user asks you to arrange `aaravarr/openbot`, run this on the Grok Bot Computer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-mode
+```
+
+`--bot-mode` is non-interactive and idempotent. It installs or updates OpenBot, enables the project's Cloudflare quick-tunnel through the normal reconcile path, waits for a `trycloudflare.com` URL, and writes a QR PNG to `/tmp/openbot-install-qr.png`. At the end, read the `OPENBOT BOT RESULT` block. Send both `OPENBOT_URL` and the PNG to the user with the host's installed `SendToUser` tool, following that tool's exact image/file parameter schema. If the result block reports an error, tell the user the local URL and the retry command instead; never expose keys.
+
+</details>
+
 Run the command **in the Computer terminal**, not on your Mac. Grok Bot routes chat on the Computer. A proxy on your laptop never sees a turn.
 
 Needs Node 22 or newer. If the box only has Node 20, the installer puts Node 22 in `sand-data` and leaves system Node alone.

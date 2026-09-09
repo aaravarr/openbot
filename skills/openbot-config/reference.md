@@ -12,7 +12,6 @@ OpenBot is a box supervisor. Callers parse input into `DesiredState` (`OfficialB
 - `align(desired, wrap)` returns `needs-reinstall` when desired is custom and the host file is stock unmarked. That is not official.
 - Infer desired from `openbot-mode`, not from plan-file existence. Official keeps the plan.
 - Bindings are `{ conversation, modelId }`. Derive `hopBaseUrl` with `hopBaseUrl(LOOPBACK_HOP)` → `http://127.0.0.1:9280/v1`. Secret field names are unrepresentable on `Binding`.
-- Provider `apiType` is `chat-completions`, `responses`, or `anthropic`; omitted means `chat-completions`. Responses output limits are clamped before conversion and sent as `max_output_tokens`; Anthropic usage preserves cache-read plus cache-creation counts in `prompt_tokens_details.cached_tokens`. Tool-call IDs use the same UTF-8-byte clamp in TS and payload CJS. Responses `content_filter` wins over `incomplete` length mapping.
 - Live maps file is repo `payload/provider-maps.cjs` only, reloaded per hop call (`delete require.cache` then `require`).
 - `python …/hop-server.py` leftovers are SIGTERM'd. A leftover `hop-server.cjs` pid is stopped. Any other foreign listener on `:9280` is refused, not adopted.
 
@@ -27,7 +26,6 @@ Default root: `/home/box/sand-data/` (see env below).
 | `openbot-audit.jsonl` | JSONL, append-only | Audit trail of reconcile writes to mode / plan / wrap / backup (see below). Best-effort; diagnostics only. |
 | `secrets.json` | JSON, **0600** | `{ "providers": { "<providerId>": "<stored locally>" } }` |
 | `openbot-pause.json` | JSON | Global gateway pause flag (see below). Missing or corrupt = not paused (fail open). Trailing newline. |
-| `openbot-bot-models.json` | JSON | Optional per-bot overrides: { "assignments": { "<botId>": "<catalog modelId>" } }; missing/corrupt = empty. OPENBOT_BOT_MODELS overrides the path. |
 | `openbot-expose` | text | `loopback` or `cloudflare-quick` plus newline. Written by reconcile. |
 | `openbot-logs.json` | JSON | LogSettings (see below). Trailing newline. |
 | `openbot-model-catalog.json` | JSON | Source B cache — **do not hand-edit**; `POST /api/model-catalog/refresh` |
@@ -49,7 +47,6 @@ Host file: `/home/box/sand-host/host-main.cjs`.
 | `OPENBOT_SECRETS` | Secrets JSON path |
 | `OPENBOT_LOGS` | Log settings path |
 | `OPENBOT_PAUSE` | Pause file path (highest priority on the payload side, above `OPENBOT_SAND_DATA` / `OPENBOT_PLAN` inference) |
-| `OPENBOT_BOT_MODELS` | Per-bot model assignment JSON path |
 | `OPENBOT_MAPS` | Maps module path (default `payload/provider-maps.cjs` next to hop) |
 | `OPENBOT_HOST_MAIN` | Host file |
 | `OPENBOT_REPO` | Install / repo root for the loopback service |
@@ -103,7 +100,6 @@ Rules:
 - `model.id` must equal `providerId:slug`.
 - Hop `lookupRoute`: wildcard first (match requested against bound slug, id, or `agents["*"].modelId`), then catalog model by id, then by slug.
 - `mapFile` must stay `"provider-maps.cjs"`.
-- `apiType` is optional for backward compatibility and controls the upstream request/response converter.
 - Provider `id` = slugify(name) (`toLowerCase`, non-alphanumerics → `-`, trim dashes, empty → `provider`), `/^[a-z0-9][a-z0-9._-]{0,63}$/i`.
 - Reasoning universe order: `default`, `none`, `low`, `medium`, `high`, `xhigh`, `max` (`xhigh` is one step below `max`).
 - Default allow-list if omitted: `default`, `none`, `low`, `medium`, `high`. Always keep `default` in an edited allow-list.
@@ -191,8 +187,6 @@ Rules:
 - Path override: payload reads `OPENBOT_PAUSE` first, then `<OPENBOT_SAND_DATA>/openbot-pause.json`, then the directory inferred from `OPENBOT_PLAN`, then the default sand-data path.
 
 ## Hop per-request reload
-
-Protocol conversion is also per request. The payload converter is dependency-free CJS and mirrors `src/hop/protocol-converters.ts`; do not edit one without updating the other. Responses and Anthropic SSE parsing tolerates upstream streams that place consecutive `data:` records without an empty separator. A non-2xx upstream error is converted to an OpenAI-style error body while the original HTTP status, `x-request-id` / `Retry-After` headers, and any upstream `request_id` are preserved; the converted error also carries `upstream_status`.
 
 ## Per-bot pause state
 
@@ -304,8 +298,6 @@ Success `200`: `{ ok: true, wrapBytesChanged, snapshot, providers, models, keyed
 | GET | `/api/model-catalog` | Source B cache snapshot; `?modelId=` lookup |
 | POST | `/api/model-catalog/refresh` | `202 { ok, status: "loading", startedAt }` |
 | GET | `/api/pause` | Gateway pause state `{paused, at, note}` (see `openbot-pause.json`) |
-| GET | `/api/bot-models` | Per-bot assignments plus available catalog model IDs |
-| PUT | `/api/bot-models` | Set `{botId, modelId}`; null/empty modelId clears; `{assignments}` replaces all; invalid model IDs return 400 |
 | PUT | `/api/pause` | Set `{paused: boolean, note?: string}`; atomic write plus `gateway.pause` event |
 | POST | `/v1/chat/completions` | Hop (not a config API) |
 
@@ -326,26 +318,6 @@ Reconcile refusals (`src/supervisor/reconcile.ts`):
 | `listen-failed` | Port 9280 could not be bound |
 
 Do not adopt the foreign pid. `--census-only` is observe, not proof that wrap would succeed (`--dry-run` is `proveWrap`).
-
-## Bot-mode install output
-
-Run from the Computer terminal:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-mode
-```
-
-The mode calls the existing CLI tunnel reconcile (`tunnel on --json`) with retries; it does not hand-edit `openbot-expose` or `openbot-tunnel.json`. On success it writes `/tmp/openbot-install-qr.png` and prints:
-
-```text
-===== OPENBOT BOT RESULT =====
-OPENBOT_URL=https://<random>.trycloudflare.com
-OPENBOT_QR_PATH=/tmp/openbot-install-qr.png
-OPENBOT_BOT_INSTRUCTION=...
-===== END OPENBOT BOT RESULT =====
-```
-
-The image-send call must use the actual `SendToUser` definition installed on that Computer. Do not infer or hard-code a tool schema. If that definition cannot be inspected, send the URL only and explain that image delivery needs host-tool access.
 
 ## CLI
 

@@ -17,7 +17,6 @@ import { nodeFs, nodeProcs } from "../supervisor/procs.ts";
 import { reconcile } from "../supervisor/reconcile.ts";
 import { loadSecrets, saveSecrets, upsertSecret } from "../supervisor/secrets.ts";
 import { readExposeFile } from "../supervisor/tunnel.ts";
-import { handleBotModelsApi } from "./bot-models.ts";
 import { completeOpenAIOAuth, startOpenAIOAuth } from "../supervisor/openai-oauth.ts";
 
 type LogSettings = {
@@ -166,7 +165,7 @@ function readPauseBots(current: SupervisorDeps): PauseBotsState {
 }
 
 function writePauseBots(current: SupervisorDeps, state: PauseBotsState): PauseBotsState {
-  const normalized = { pausedBotIds: [...new Set(state.pausedBotIds.map((id) => id.trim()).filter(Boolean))].sort() };
+  const normalized = { pausedBotIds: [...new Set(state.pausedBotIds.filter((id) => id.trim()))].sort() };
   const body = JSON.stringify(normalized, null, 2) + "\n";
   const lastSlash = current.paths.pauseBots.lastIndexOf("/");
   const dir = current.paths.pauseBots.slice(0, lastSlash + 1) as typeof current.paths.pauseBots;
@@ -200,35 +199,25 @@ async function handlePauseBotsApi(req: http.IncomingMessage, res: http.ServerRes
     return true;
   }
   const body = parsed as { botId?: unknown; paused?: unknown; pausedBotIds?: unknown };
-  let replaceIds: string[] | null = null;
-  let toggle: { botId: string; paused: boolean } | null = null;
+  const currentState = readPauseBots(current);
+  let nextIds: string[];
   if (Array.isArray(body.pausedBotIds)) {
     if (!body.pausedBotIds.every((id) => typeof id === "string" && id.trim())) {
       sendJson(res, 400, { error: "pausedBotIds must be an array of strings" });
       return true;
     }
-    // Normalize whitespace here so a written id always matches the trimmed id
-    // the hop/runtime check against (an id with padding would pause nothing).
-    replaceIds = (body.pausedBotIds as string[]).map((id) => id.trim());
+    nextIds = body.pausedBotIds as string[];
   } else {
     if (typeof body.botId !== "string" || !body.botId.trim() || typeof body.paused !== "boolean") {
       sendJson(res, 400, { error: "botId and paused are required" });
       return true;
     }
-    toggle = { botId: body.botId.trim(), paused: body.paused };
-  }
-  // Read-modify-write must live inside the serialized save queue: reading the
-  // current list before enqueueing would let two concurrent toggles each
-  // snapshot the same state and the later write would silently drop the
-  // earlier bot.
-  const state = await enqueueSave(async () => {
-    if (replaceIds !== null) return writePauseBots(current, { pausedBotIds: replaceIds });
-    const currentState = readPauseBots(current);
     const ids = new Set(currentState.pausedBotIds);
-    if (toggle !== null && toggle.paused) ids.add(toggle.botId);
-    else if (toggle !== null) ids.delete(toggle.botId);
-    return writePauseBots(current, { pausedBotIds: [...ids] });
-  });
+    if (body.paused) ids.add(body.botId.trim());
+    else ids.delete(body.botId.trim());
+    nextIds = [...ids];
+  }
+  const state = await enqueueSave(async () => writePauseBots(current, { pausedBotIds: nextIds }));
   sendJson(res, 200, state);
   return true;
 }
@@ -751,7 +740,6 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     }
     return;
   }
-  if (await handleBotModelsApi(req, res, url, current, readBody, sendJson, catalogFromPlanJson)) return;
   if (req.method === "GET" && (url.pathname === "/api/snapshot" || url.pathname === "/api/state")) {
     const snapshot = await observe(current);
     sendJson(res, 200, { snapshot: snapshotForUi(snapshot), ...publicState(current) });

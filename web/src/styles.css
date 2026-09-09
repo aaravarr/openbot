@@ -414,9 +414,6 @@ code, kbd, .mono { font-family: var(--font-mono); }
 .bot-row__main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .bot-row__main strong { color: var(--ink); font-size: var(--text-base); overflow-wrap: anywhere; }
 .bot-row__main .mono { color: var(--muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
-.bot-row__model { display: flex; align-items: center; gap: var(--sp-2); flex: none; }
-.bot-row__model select { height: 32px; max-width: 240px; border: 1px solid var(--hairline-strong); border-radius: var(--r-md); background: var(--surface); color: var(--ink); padding: 0 8px; font: inherit; font-size: var(--text-sm); }
-@media (max-width: 768px) { .bot-row { flex-wrap: wrap; } .bot-row__model { flex: 1 1 100%; } .bot-row__model select { flex: 1; max-width: none; } }
 
 .origin-line {
   font-family: var(--font-mono);

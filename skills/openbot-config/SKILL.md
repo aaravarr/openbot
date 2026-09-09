@@ -170,6 +170,10 @@ Resume with `{"paused":false}`. `GET /api/pause` returns `{paused, at, note}`. W
 
 Schemas, env overrides, `/api/save` kinds, 409 refusals, presets (origins only), and hop reasoning maps: [reference.md](reference.md).
 
+### Pause one bot
+
+Use the Bots page or PUT /api/pause-bots with { "botId": "<agent UUID>", "paused": true }; resume with paused: false. The bot ID comes from the system message path /home/box/agent-data/agents/<uuid>/profile.json. GET /api/bots lists discovered profiles and GET /api/pause-bots returns { "pausedBotIds": [] }. A matching hop request returns 503 with message openbot bot paused, code bot_paused, and botId; runtime turns throw openbot-runtime: bot paused. Both paths read openbot-pause-bots.json on every request/turn, so changes are hot. Missing or corrupt JSON means no bot is paused. See reference.md for the schema and validation rules.
+
 ## Aftercare
 
 After wrap or mode change, tell the user: **send a new Grok Bot message**. If wrap is missing (`needs-reinstall` or stock unmarked host) and they wanted custom, reconcile — do not stop at a JSON edit.

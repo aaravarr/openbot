@@ -15,6 +15,8 @@ type Runtime = {
   tapSession: (stockFn: (...args: unknown[]) => unknown, args: unknown) => unknown;
   isCustomMode: () => boolean;
   readPauseState: () => boolean;
+  hopFullStream: (exec: unknown, agent: unknown, ctx: unknown, invocationId: string, tools: unknown[], options: unknown) => unknown;
+  readPauseBotsState: () => string[];
 };
 
 function setup(mode: "official" | "custom"): { dir: string; runtime: Runtime } {
@@ -106,4 +108,25 @@ test("official wrapSession entry is gated, tapSession stays a sync passthrough",
   assert.doesNotThrow(() => runtime.tapSession(stockFn, [{}]));
   rmSync(path.join(dir, "openbot-pause.json"));
   assert.doesNotThrow(() => runtime.wrapSession(stockFn, [{}]));
+});
+
+test("custom runtime stream throws a bot-specific pause error and fails open", async () => {
+  const { dir, runtime } = setup("custom");
+  const botId = "123e4567-e89b-12d3-a456-426614174000";
+  const exec = {
+    getMessages() {
+      return [{ role: "system", content: "/home/box/agent-data/agents/" + botId + "/profile.json" }];
+    },
+  };
+  writeFileSync(path.join(dir, "openbot-pause-bots.json"), JSON.stringify({ pausedBotIds: [botId] }));
+  assert.deepEqual(runtime.readPauseBotsState(), [botId]);
+  const stream = runtime.hopFullStream(exec, { modelId: "m", providerId: "p" }, {}, "test", [], {}) as { fullStream: AsyncIterable<unknown> };
+  await assert.rejects(async () => {
+    for await (const _part of stream.fullStream) {
+      /* the paused bot must fail before any hop request */
+    }
+  }, /openbot-runtime: bot paused/);
+  writeFileSync(path.join(dir, "openbot-pause-bots.json"), "{broken");
+  assert.deepEqual(runtime.readPauseBotsState(), []);
+  rmSync(dir, { recursive: true, force: true });
 });

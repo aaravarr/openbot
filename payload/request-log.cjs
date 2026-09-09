@@ -1958,6 +1958,7 @@ exports.statsNow = statsNow;
 exports.facetsNow = facetsNow;
 exports.usageNow = usageNow;
 exports.extractUsage = extractUsage;
+exports.extractChatContext = extractChatContext;
 exports.mergeUsage = mergeUsage;
 exports.extractResponseFromSse = extractResponseFromSse;
 exports.sseChunkHasContent = sseChunkHasContent;

@@ -124,6 +124,113 @@ const requestLog = require("../../payload/request-log.cjs") as {
   usageNow: (query: Record<string, unknown>) => LogUsage;
 };
 
+export type BotInfo = { botId: string; botName: string };
+export type PauseBotsState = { pausedBotIds: string[] };
+
+function readBots(): BotInfo[] {
+  const root = process.env.OPENBOT_AGENT_DATA ?? "/home/box/agent-data";
+  const agentsDir = path.join(root, "agents");
+  try {
+    return fs.readdirSync(agentsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => {
+        const botId = entry.name;
+        try {
+          const profile = JSON.parse(fs.readFileSync(path.join(agentsDir, botId, "profile.json"), "utf8")) as { name?: unknown };
+          const name = typeof profile.name === "string" && profile.name.trim() ? profile.name.trim() : botId;
+          return { botId, botName: name };
+        } catch {
+          return { botId, botName: botId };
+        }
+      })
+      .sort((a, b) => a.botName.localeCompare(b.botName) || a.botId.localeCompare(b.botId));
+  } catch {
+    return [];
+  }
+}
+
+function readPauseBots(current: SupervisorDeps): PauseBotsState {
+  const raw = current.fs.read(current.paths.pauseBots);
+  if (raw === undefined) return { pausedBotIds: [] };
+  try {
+    const parsed = JSON.parse(raw) as { pausedBotIds?: unknown };
+    const ids = Array.isArray(parsed.pausedBotIds)
+      ? parsed.pausedBotIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      : [];
+    return { pausedBotIds: [...new Set(ids)] };
+  } catch {
+    return { pausedBotIds: [] };
+  }
+}
+
+function writePauseBots(current: SupervisorDeps, state: PauseBotsState): PauseBotsState {
+  const normalized = { pausedBotIds: [...new Set(state.pausedBotIds.map((id) => id.trim()).filter(Boolean))].sort() };
+  const body = JSON.stringify(normalized, null, 2) + "\n";
+  const lastSlash = current.paths.pauseBots.lastIndexOf("/");
+  const dir = current.paths.pauseBots.slice(0, lastSlash + 1) as typeof current.paths.pauseBots;
+  const tmpPath = joinAbs(dir, "openbot-pause-bots.json.tmp");
+  current.fs.mkdirp(current.paths.sandData);
+  fs.writeFileSync(tmpPath, body, { encoding: "utf8", mode: 0o644 });
+  fs.renameSync(tmpPath, current.paths.pauseBots);
+  return normalized;
+}
+
+async function handlePauseBotsApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+  const current = deps();
+  if (req.method === "GET" && url.pathname === "/api/bots") {
+    sendJson(res, 200, readBots());
+    return true;
+  }
+  if (req.method === "GET" && url.pathname === "/api/pause-bots") {
+    sendJson(res, 200, readPauseBots(current));
+    return true;
+  }
+  if (req.method !== "PUT" || url.pathname !== "/api/pause-bots") return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readBody(req)) as unknown;
+  } catch {
+    sendJson(res, 400, { error: "invalid json" });
+    return true;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    sendJson(res, 400, { error: "body must be an object" });
+    return true;
+  }
+  const body = parsed as { botId?: unknown; paused?: unknown; pausedBotIds?: unknown };
+  let replaceIds: string[] | null = null;
+  let toggle: { botId: string; paused: boolean } | null = null;
+  if (Array.isArray(body.pausedBotIds)) {
+    if (!body.pausedBotIds.every((id) => typeof id === "string" && id.trim())) {
+      sendJson(res, 400, { error: "pausedBotIds must be an array of strings" });
+      return true;
+    }
+    // Normalize whitespace here so a written id always matches the trimmed id
+    // the hop/runtime check against (an id with padding would pause nothing).
+    replaceIds = (body.pausedBotIds as string[]).map((id) => id.trim());
+  } else {
+    if (typeof body.botId !== "string" || !body.botId.trim() || typeof body.paused !== "boolean") {
+      sendJson(res, 400, { error: "botId and paused are required" });
+      return true;
+    }
+    toggle = { botId: body.botId.trim(), paused: body.paused };
+  }
+  // Read-modify-write must live inside the serialized save queue: reading the
+  // current list before enqueueing would let two concurrent toggles each
+  // snapshot the same state and the later write would silently drop the
+  // earlier bot.
+  const state = await enqueueSave(async () => {
+    if (replaceIds !== null) return writePauseBots(current, { pausedBotIds: replaceIds });
+    const currentState = readPauseBots(current);
+    const ids = new Set(currentState.pausedBotIds);
+    if (toggle !== null && toggle.paused) ids.add(toggle.botId);
+    else if (toggle !== null) ids.delete(toggle.botId);
+    return writePauseBots(current, { pausedBotIds: [...ids] });
+  });
+  sendJson(res, 200, state);
+  return true;
+}
+
 const repoRoot = process.env.OPENBOT_REPO ?? fileURLToPath(new URL("../..", import.meta.url));
 const uiDir = path.join(repoRoot, "ui");
 const host = process.env.OPENBOT_UI_HOST ?? LOOPBACK;
@@ -654,6 +761,9 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     return;
   }
   if (await handlePauseApi(req, res, url)) {
+    return;
+  }
+  if (await handlePauseBotsApi(req, res, url)) {
     return;
   }
   if (await handleLogsApi(req, res, url)) {

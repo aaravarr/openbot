@@ -6,11 +6,13 @@
  */
 import type {
   BoxState,
+  BotInfo,
   Command,
   FetchModelsError,
   FetchModelsErrorKind,
   FetchModelsResult,
   GatewayPause,
+  PauseBotsState,
   GrokSkillsReport,
   LogChannelFilter,
   LogDetail,
@@ -165,6 +167,22 @@ export async function setPause(paused: boolean, note?: string): Promise<GatewayP
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(note !== undefined ? { paused, note } : { paused }),
   })) as GatewayPause;
+}
+
+export async function getBots(): Promise<BotInfo[]> {
+  return (await request("/api/bots")) as BotInfo[];
+}
+
+export async function getPauseBots(): Promise<PauseBotsState> {
+  return (await request("/api/pause-bots")) as PauseBotsState;
+}
+
+export async function setPauseBot(botId: string, paused: boolean): Promise<PauseBotsState> {
+  return (await request("/api/pause-bots", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ botId, paused }),
+  })) as PauseBotsState;
 }
 
 export async function healthz(): Promise<{ ok: true; service: string }> {

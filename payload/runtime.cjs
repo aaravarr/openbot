@@ -37,6 +37,25 @@ function readPauseState() {
   }
 }
 
+function pauseBotsPath() {
+  if (process.env.OPENBOT_PAUSE_BOTS) return process.env.OPENBOT_PAUSE_BOTS;
+  return path.join(sandDir(), "openbot-pause-bots.json");
+}
+
+function readPauseBotsState() {
+  try {
+    var parsed = JSON.parse(fs.readFileSync(pauseBotsPath(), "utf8"));
+    if (!parsed || !Array.isArray(parsed.pausedBotIds)) return [];
+    return parsed.pausedBotIds.filter(function (id) { return typeof id === "string" && id.trim(); });
+  } catch (err) {
+    return [];
+  }
+}
+
+function isBotPaused(botId) {
+  return typeof botId === "string" && readPauseBotsState().indexOf(botId) >= 0;
+}
+
 function assertNotPaused() {
   if (readPauseState()) {
     throw new Error("openbot-runtime: gateway paused");
@@ -865,6 +884,10 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
   var fullStream = (async function* () {
     try {
       hostMsgs = typeof exec.getMessages === "function" ? exec.getMessages() : [];
+      var botContext = extractChatContextCjs(toOpenAIMessages(hostMsgs));
+      if (botContext.botId && isBotPaused(botContext.botId)) {
+        throw new Error("openbot-runtime: bot paused");
+      }
       var body = {
         model: agent.modelId,
         messages: toOpenAIMessages(hostMsgs),
@@ -1193,6 +1216,9 @@ module.exports = {
   resolveAgent: resolveAgent,
   readPauseState: readPauseState,
   pausePath: pausePath,
+  pauseBotsPath: pauseBotsPath,
+  readPauseBotsState: readPauseBotsState,
+  isBotPaused: isBotPaused,
   lookupMaxOutput: lookupMaxOutput,
   toOpenAIMessages: toOpenAIMessages,
   hopFullStream: hopFullStream,

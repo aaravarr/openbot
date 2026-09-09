@@ -112,6 +112,9 @@ export type GatewayPause = {
   note: string | null;
 };
 
+export type BotInfo = { botId: string; botName: string };
+export type PauseBotsState = { pausedBotIds: string[] };
+
 export type ModelLimitsPayload = {
   contextTokens?: number;
   maxOutputTokens?: number;

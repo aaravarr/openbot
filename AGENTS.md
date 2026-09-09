@@ -43,6 +43,26 @@ Before changing `ui/`, read `DESIGN.md`. It comes from `npx getdesign@latest add
 
 The first commit is on `main`. Every later change is a PR, then merge. Conventional Commits: `type(scope): subject`.
 
+## Worktree development
+
+Use Git worktrees for parallel feature development. Keep all task worktrees under the repository-local `./.agents/worktrees/` directory so they stay organized and are ignored by Git.
+
+Create a worktree from the latest `origin/main`:
+
+```powershell
+git fetch origin
+git worktree add -b feature/<feature-name> ./.agents/worktrees/<feature-name> origin/main
+```
+
+Each feature should be developed in its own worktree and branch. Use conventional branch names such as `feature/<feature-name>`, `fix/<bug-name>`, or `chore/<task-name>`. Do not base a new feature branch on another feature branch. After implementation and verification, commit with a Conventional Commit message, push the branch, and open a GitHub pull request for review and merge.
+
+Inspect and clean up worktrees with:
+
+```powershell
+git worktree list
+git worktree remove ./.agents/worktrees/<feature-name>
+```
+
 ## OpenBot config skill
 
 Path: `skills/openbot-config/` (`SKILL.md` plus `reference.md`) at the repository root. Grok Bot loads **project-root `skills/`**, not `.cursor/skills/`. The control page can copy that tree into `/home/box/agent-data/workflows/<slug>/` so Grok Bot loads it as a user skill.

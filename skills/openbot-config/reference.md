@@ -12,7 +12,14 @@ Default files under `/home/box/sand-data` (override with `OPENBOT_SAND_DATA`; in
 - `openbot-install.log`: detached worker stdout/stderr.
 - `openbot-install.pid`: worker pid, removed on worker exit.
 
-Run `install.sh --bot-status` every 30-60 seconds. It prints `OPENBOT_PROGRESS_STAGE`, `OPENBOT_PROGRESS_SUMMARY`, and `OPENBOT_TIMING_*_MS` for bot-friendly progress updates. A running result older than 15 minutes keeps `OPENBOT_STATUS=running` but adds a warning that the process may have been interrupted and points to the log. Missing result files report `not-installed`. Do not treat a stale running record as success.
+Bot-facing protocol:
+
+1. Start with the exact `install.sh --bot-mode` invocation, using either the complete local path or `curl -fsSL --location <installer-url> | bash -s -- --bot-mode`. Require the immediate `started` acknowledgement.
+2. Immediately use the host `SendToUser` tool to say that installation has started and that progress will be checked every minute. Never block the Bot turn on the detached worker and never issue multiple private tool calls without a user-visible update.
+3. Poll `install.sh --bot-status` every 30–60 seconds while `OPENBOT_STATUS=running`; relay `progress.stage`, `progress.summary`, and any `OPENBOT_TIMING_*_MS` values after each poll.
+4. On `success`, relay `url` and `qrPath`. On `failed`, relay `error` and `logTail`/log path. If the status remains `running` for 10 minutes, stop polling and tell the user that installation is stuck, including the log path.
+
+A running result older than 15 minutes keeps `OPENBOT_STATUS=running` but adds a warning that the process may have been interrupted and points to the log. Missing result files report `not-installed`. Do not treat a stale running record as success.
 
 ## Architecture
 

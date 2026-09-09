@@ -313,7 +313,7 @@ Success `200`: `{ ok: true, wrapBytesChanged, snapshot, providers, models, keyed
 | POST | `/api/model-catalog/refresh` | `202 { ok, status: "loading", startedAt }` |
 | GET | `/api/pause` | Gateway pause state `{paused, at, note}` (see `openbot-pause.json`) |
 | GET | `/api/bot-models` | Per-bot assignments plus available catalog model IDs |
-| PUT | `/api/bot-models` | Set `{botId, modelId}`; null/empty modelId clears; `{assignments}` replaces all; invalid model IDs return 400 |
+| PUT | `/api/bot-models` | Set `{botId, modelId}` or batch `{botIds, modelId}`; null/empty modelId clears targeted assignments; `{assignments}` replaces all; invalid model IDs return 400 |
 | PUT | `/api/pause` | Set `{paused: boolean, note?: string}`; atomic write plus `gateway.pause` event |
 | POST | `/v1/chat/completions` | Hop (not a config API) |
 

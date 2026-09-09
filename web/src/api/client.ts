@@ -165,6 +165,14 @@ export async function setBotModel(botId: string, modelId: string | null): Promis
   })) as BotModels;
 }
 
+export async function setBotModels(botIds: readonly string[], modelId: string | null): Promise<BotModels> {
+  return (await request("/api/bot-models", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ botIds, modelId }),
+  })) as BotModels;
+}
+
 export async function save(command: Command): Promise<SaveResult> {
   return (await request("/api/save", jsonInit(command))) as SaveResult;
 }
@@ -203,6 +211,14 @@ export async function setPauseBot(botId: string, paused: boolean): Promise<Pause
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ botId, paused }),
+  })) as PauseBotsState;
+}
+
+export async function setPauseBots(pausedBotIds: readonly string[]): Promise<PauseBotsState> {
+  return (await request("/api/pause-bots", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pausedBotIds }),
   })) as PauseBotsState;
 }
 

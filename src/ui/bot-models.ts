@@ -79,6 +79,22 @@ export async function handleBotModelsApi(
     Object.keys(next).forEach((botId) => delete next[botId]);
     Object.assign(next, replacement);
   } else {
+    const botIds = body.botIds;
+    if (Array.isArray(botIds)) {
+      if (!botIds.every((botId) => typeof botId === "string" && botId.trim())) {
+        sendJson(res, 400, { error: "botIds must be an array of strings" });
+        return true;
+      }
+      const modelId = body.modelId;
+      if (modelId === null || modelId === "") {
+        for (const botId of botIds) delete next[botId as string];
+      } else if (typeof modelId !== "string" || !available.includes(modelId)) {
+        sendJson(res, 400, { error: `unknown modelId: ${String(modelId)}` });
+        return true;
+      } else {
+        for (const botId of botIds) next[botId as string] = modelId;
+      }
+    } else {
     const botId = body.botId;
     const modelId = body.modelId;
     if (typeof botId !== "string" || !botId.trim()) {
@@ -90,6 +106,7 @@ export async function handleBotModelsApi(
       sendJson(res, 400, { error: `unknown modelId: ${String(modelId)}` });
       return true;
     } else next[botId] = modelId;
+    }
   }
   try {
     writeAssignments(current, next);

@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { Bot as BotIcon } from "lucide-react";
-import { getBotModels, getBots, getPauseBots, setBotModel, setPauseBot } from "../api/client";
+import { Bot as BotIcon, Check, Minus } from "lucide-react";
+import { getBotModels, getBots, getPauseBots, setBotModel, setBotModels, setPauseBot, setPauseBots } from "../api/client";
 import type { BotInfo, BotModels } from "../api/types";
 import { useApp, useBoxState } from "../store";
 import { Badge, EmptyState, Spinner, Switch } from "../components/ui";
-import { Listbox, type ListboxGroup } from "../components/Listbox";
+import { Listbox } from "../components/Listbox";
+import { modelGroupsForState } from "../lib/model-options";
 
 function formatBotTime(value: number | null): string {
   if (value === null) return "Time unavailable";
@@ -19,11 +20,14 @@ export function Bots() {
   const { pushToast } = useApp();
   const [bots, setBots] = useState<BotInfo[]>([]);
   const [pausedBotIds, setPausedBotIds] = useState<Set<string>>(() => new Set());
-  const [botModels, setBotModels] = useState<BotModels | null>(null);
+  const [botModels, setBotModelsState] = useState<BotModels | null>(null);
   const [modelDraft, setModelDraft] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [busyBotId, setBusyBotId] = useState<string | null>(null);
   const [modelBusyBotId, setModelBusyBotId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchModel, setBatchModel] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -32,7 +36,7 @@ export function Bots() {
         if (!alive) return;
         setBots(nextBots);
         setPausedBotIds(new Set(pauseState.pausedBotIds));
-        setBotModels(nextBotModels);
+         setBotModelsState(nextBotModels);
         setModelDraft(nextBotModels.assignments);
       })
       .catch(() => {
@@ -74,7 +78,7 @@ export function Bots() {
     setModelDraft((current) => ({ ...current, [bot.botId]: modelId }));
     try {
       const next = await setBotModel(bot.botId, modelId || null);
-      setBotModels(next);
+       setBotModelsState(next);
       setModelDraft(next.assignments);
       pushToast(
         "success",
@@ -89,13 +93,36 @@ export function Bots() {
     }
   };
 
-  const modelGroups = (bot: BotInfo): ListboxGroup[] => [{
-    label: "Models",
-    options: [
-      { value: "", label: "Default (global)" },
-      ...(botModels?.available ?? []).map((id) => ({ value: id, label: state.models.find((model) => model.id === id)?.slug ?? id })),
-    ],
-  }];
+  const activeBots = bots.filter((bot) => !bot.deleted);
+  const selectedActiveIds = activeBots.filter((bot) => selectedIds.has(bot.botId)).map((bot) => bot.botId);
+  const allSelected = activeBots.length > 0 && selectedActiveIds.length === activeBots.length;
+  const toggleSelected = (botId: string) => setSelectedIds((current) => {
+    const next = new Set(current);
+    if (next.has(botId)) next.delete(botId); else next.add(botId);
+    return next;
+  });
+  const toggleAll = () => setSelectedIds(allSelected ? new Set() : new Set(activeBots.map((bot) => bot.botId)));
+
+  const runBatch = async (kind: "model" | "pause" | "resume") => {
+    if (batchBusy || selectedActiveIds.length === 0) return;
+    setBatchBusy(true);
+    try {
+      if (kind === "model") {
+        const next = await setBotModels(selectedActiveIds, batchModel || null);
+        setBotModelsState(next);
+        setModelDraft(next.assignments);
+        pushToast("success", "Models updated", `Updated ${selectedActiveIds.length} bot${selectedActiveIds.length === 1 ? "" : "s"}.`);
+      } else {
+        const next = await setPauseBots(kind === "pause" ? [...new Set([...pausedBotIds, ...selectedActiveIds])] : [...pausedBotIds].filter((id) => !selectedActiveIds.includes(id)));
+        setPausedBotIds(new Set(next.pausedBotIds));
+        pushToast("success", kind === "pause" ? "Bots paused" : "Bots resumed", `Updated ${selectedActiveIds.length} bot${selectedActiveIds.length === 1 ? "" : "s"}.`);
+      }
+    } catch (err) {
+      pushToast("error", "Batch update failed", err instanceof Error ? err.message : "Some bots could not be updated.");
+    } finally {
+      setBatchBusy(false);
+    }
+  };
 
   return (
     <div className="stack">
@@ -128,12 +155,27 @@ export function Bots() {
             />
           </div>
         ) : (
+          <>
+          {selectedActiveIds.length > 0 ? (
+            <div className="bot-batch-bar" aria-live="polite">
+              <strong>{selectedActiveIds.length} selected</strong>
+              <Listbox label="Batch model" groups={modelGroupsForState(state, state.models.filter((model) => botModels?.available.includes(model.id)))} value={batchModel} placeholder="Set model" disabled={batchBusy || botModels === null} onChange={setBatchModel} />
+              <button className="btn btn--secondary" type="button" disabled={batchBusy || botModels === null} onClick={() => void runBatch("model")}>{batchBusy ? "Applying..." : "Apply"}</button>
+              <button className="btn btn--secondary" type="button" disabled={batchBusy} onClick={() => void runBatch("resume")}>Resume</button>
+              <button className="btn btn--secondary" type="button" disabled={batchBusy} onClick={() => void runBatch("pause")}>Pause</button>
+            </div>
+          ) : null}
           <div className="bot-list">
+            <div className="bot-row bot-row--header">
+              <label className="checkbox"><input type="checkbox" aria-label="Select all active bots" checked={allSelected} onChange={toggleAll} /><span className="checkbox__box">{allSelected ? <Check aria-hidden="true" /> : selectedActiveIds.length > 0 ? <Minus aria-hidden="true" /> : null}</span></label>
+              <span className="bot-row__main">Select active bots</span>
+            </div>
             {bots.map((bot) => {
               const paused = pausedBotIds.has(bot.botId);
               const busy = busyBotId === bot.botId;
               return (
                 <div className={"bot-row" + (bot.deleted ? " is-deleted" : "")} key={bot.botId} title={bot.deleted ? "Deleted" : undefined}>
+                  <label className="checkbox"><input type="checkbox" aria-label={`Select ${bot.botName}`} checked={selectedIds.has(bot.botId)} disabled={bot.deleted || batchBusy} onChange={() => toggleSelected(bot.botId)} /><span className="checkbox__box">{selectedIds.has(bot.botId) ? <Check aria-hidden="true" /> : null}</span></label>
                   <span className="bot-row__icon" aria-hidden="true"><BotIcon /></span>
                   <div className="bot-row__main">
                     <strong>{bot.botName}</strong>
@@ -143,7 +185,7 @@ export function Bots() {
                   <div className="bot-row__model">
                     <Listbox
                       label={"Model for " + bot.botName}
-                      groups={modelGroups(bot)}
+                       groups={[{ label: "Global", options: [{ value: "", label: "Default (global)" }] }, ...modelGroupsForState(state, state.models.filter((model) => botModels?.available.includes(model.id)))]}
                       value={modelDraft[bot.botId] ?? ""}
                       disabled={bot.deleted || modelBusyBotId === bot.botId || botModels === null}
                       onChange={(id) => void saveModel(bot, id)}
@@ -159,6 +201,7 @@ export function Bots() {
               );
             })}
           </div>
+          </>
         )}
       </section>
     </div>

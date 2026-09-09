@@ -154,6 +154,25 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
 
   const pairs = useMemo(() => pairLogRows(records), [records]);
   const botNames = useMemo(() => new Map(bots.map((bot) => [bot.botId, bot.botName])), [bots]);
+  const botFilterOptions = useMemo(() => {
+    const seen = new Map<string, { name: string; deleted: boolean }>();
+    for (const bot of bots) seen.set(bot.botId, { name: bot.botName, deleted: bot.deleted });
+    for (const bot of facets?.bots ?? []) {
+      if (bot.botId && !seen.has(bot.botId)) seen.set(bot.botId, { name: bot.botName ?? bot.botId, deleted: true });
+    }
+    for (const record of records) {
+      if (record.botId && !seen.has(record.botId)) seen.set(record.botId, { name: record.botName ?? record.botId, deleted: true });
+    }
+    const live = [...seen.entries()]
+      .filter(([, bot]) => !bot.deleted)
+      .sort((a, b) => a[1].name.localeCompare(b[1].name, undefined, { sensitivity: "base" }));
+    const loggedIds = new Set([...(facets?.bots ?? []).map((bot) => bot.botId).filter((id): id is string => Boolean(id)), ...records.map((row) => row.botId).filter((id): id is string => Boolean(id))]);
+    const deleted = [...seen.entries()]
+      .filter(([botId, bot]) => bot.deleted && loggedIds.has(botId))
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([botId]) => ({ value: botId, label: `Deleted · ${botId}` }));
+    return [{ label: "Bot", options: [{ value: "", label: "All bots" }, ...live.map(([botId, bot]) => ({ value: botId, label: bot.name })), ...deleted] }];
+  }, [bots, facets, records]);
   // The source column only appears once the backend stamps source fields; older
   // rows render without it instead of a column of dashes.
   const hasSourceColumn = useMemo(() => records.some(hasSource), [records]);
@@ -428,19 +447,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
     [],
   );
 
-  const botGroups: ListboxGroup[] = useMemo(
-    () => [{
-      label: "Bot",
-      options: [
-        { value: "", label: "All bots" },
-        ...(facets?.bots ?? []).map((bot) => ({
-          value: bot.botName ?? bot.botId ?? "",
-          label: bot.botName ?? bot.botId ?? "Unnamed bot",
-        })),
-      ],
-    }],
-    [facets],
-  );
+  const botGroups: ListboxGroup[] = botFilterOptions;
 
   const chatTypeGroups: ListboxGroup[] = useMemo(
     () => [{

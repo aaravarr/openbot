@@ -112,7 +112,6 @@ test("bot-mode guards duplicate workers and cleans stale pid files", async (t) =
 
     // Once the worker is dead, the same stale pid file must fail the guard.
     worker.kill("SIGKILL");
-    worker.unref();
     await new Promise<void>((resolve) => worker.once("exit", () => resolve()));
     assert.equal(
       runBash("kill -0 $1 2>/dev/null && echo live || echo dead", ["bash", String(worker.pid)]).trim(),

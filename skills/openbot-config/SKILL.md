@@ -71,7 +71,11 @@ If `openbot` is on `PATH`, `openbot status` is the same.
 
 ### Bot-mode install and status
 
-`install.sh --bot-mode` and `install.sh --bot-status` print bot-facing instructions in `OPENBOT_BOT_INSTRUCTION`; follow that stdout guidance.
+`install.sh --bot-mode` is detached and normally completes in about **15-60 seconds**. Treat the result block as the verification record: it already contains the install commit, progress stage, tunnel URL, QR path, timings, and failure log tail. Do not verify those facts by reading source files, running `status`, curling 9280, or checking plan/secrets/providers/keys one by one.
+
+Use a strict **four-turn budget** for the agent loop: one start turn, at most two `install.sh --bot-status --brief` polls, and one final result turn. The start result must be relayed immediately with `SendToUser`: “安装已开始，预计 1 分钟内完成”. Each poll must be relayed before any next tool call; if the stage is `tunnel`, say “进行到 tunnel 阶段”. On success, copy the result block’s URL and QR path and send “完成，链接+二维码”. Do not add extra verification turns.
+
+If `running` is older than **3 minutes**, stop polling, send the tail of `OPENBOT_LOG_TAIL` (and `OPENBOT_LOG_FILE`) to the user, and do not continue checking. `--bot-status` without `--brief` is for troubleshooting only; prefer the 3-5-line brief during the normal budget.
 
 ### Official / custom
 

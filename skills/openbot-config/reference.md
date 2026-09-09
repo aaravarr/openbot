@@ -12,9 +12,9 @@ Default files under `/home/box/sand-data` (override with `OPENBOT_SAND_DATA`; in
 - `openbot-install.log`: detached worker stdout/stderr.
 - `openbot-install.pid`: worker pid, removed on worker exit.
 
-Bot-facing instructions are emitted by `install.sh --bot-mode` and `install.sh --bot-status` in `OPENBOT_BOT_INSTRUCTION`; follow that stdout guidance.
+Bot-facing instructions are emitted by `install.sh --bot-mode` and `install.sh --bot-status` in `OPENBOT_BOT_INSTRUCTION`; follow that stdout guidance. Normal installation is budgeted to four agent turns: start once, poll `--bot-status --brief` no more than twice, then report the final result. The result block is authoritative; do not run separate source/version/HTTP/config checks. If a `running` result is older than 3 minutes, send the log tail and stop polling.
 
-A running result older than 15 minutes keeps `OPENBOT_STATUS=running` but adds a warning that the process may have been interrupted and points to the log. Missing result files report `not-installed`. Do not treat a stale running record as success.
+A running result older than 3 minutes keeps `OPENBOT_STATUS=running` but adds the log tail and instructs the bot to stop polling. Missing result files report `not-installed`. Do not treat a stale running record as success.
 
 ## Architecture
 

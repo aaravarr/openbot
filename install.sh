@@ -20,7 +20,7 @@ bot_epoch_ms() { date +%s%3N; }
 bot_write_state() {
   local status="$1" started="$2" finished="$3" url="$4" qr="$5" error="$6" tail_text="$7" stage="$8" summary="$9" rolled_back="${10:-}" download_source="${11:-${OPENBOT_DOWNLOAD_SOURCE:-}}" tmp="${BOT_RESULT_FILE}.$$"
   mkdir -p "$(dirname "$BOT_RESULT_FILE")"
-  node -e 'const fs=require("fs");const [file,status,startedAt,finishedAt,url,qrPath,error,logTail,stage,summary,downloadMs,deployMs,restartMs,totalMs,rolledBack,downloadSource]=process.argv.slice(1);let result={};try{result=JSON.parse(fs.readFileSync(file,"utf8"));}catch{};result.status=status;result.startedAt=startedAt;if(finishedAt)result.finishedAt=finishedAt;else delete result.finishedAt;if(url)result.url=url;else delete result.url;if(qrPath)result.qrPath=qrPath;else delete result.qrPath;if(error)result.error=error;else delete result.error;if(logTail)result.logTail=logTail;else delete result.logTail;if(stage)result.progress={stage,summary:summary||"",updatedAt:new Date().toISOString()};if(downloadSource)result.downloadSource=downloadSource;else delete result.downloadSource;if(rolledBack==="true")result.rolled_back=true;else delete result.rolled_back;result.timings={downloadMs:Number(downloadMs)||0,deployMs:Number(deployMs)||0,restartMs:Number(restartMs)||0,totalMs:Number(totalMs)||0};fs.writeFileSync(file,JSON.stringify(result,null,2)+"\n");' "$tmp" "$status" "$started" "$finished" "$url" "$qr" "$error" "$tail_text" "$stage" "$summary" "${BOT_DOWNLOAD_MS:-0}" "${BOT_DEPLOY_MS:-0}" "${BOT_RESTART_MS:-0}" "${BOT_TOTAL_MS:-0}" "$rolled_back" "$download_source"
+  OPENBOT_INSTALL_COMMIT="${OPENBOT_INSTALL_COMMIT:-}" node -e 'const fs=require("fs");const [file,status,startedAt,finishedAt,url,qrPath,error,logTail,stage,summary,downloadMs,deployMs,restartMs,totalMs,rolledBack,downloadSource]=process.argv.slice(1);let result={};try{result=JSON.parse(fs.readFileSync(file,"utf8"));}catch{};result.status=status;result.startedAt=startedAt;if(finishedAt)result.finishedAt=finishedAt;else delete result.finishedAt;if(url)result.url=url;else delete result.url;if(qrPath)result.qrPath=qrPath;else delete result.qrPath;if(error)result.error=error;else delete result.error;if(logTail)result.logTail=logTail;else delete result.logTail;if(stage)result.progress={stage,summary:summary||"",updatedAt:new Date().toISOString()};if(process.env.OPENBOT_INSTALL_COMMIT)result.commit=process.env.OPENBOT_INSTALL_COMMIT;if(downloadSource)result.downloadSource=downloadSource;else delete result.downloadSource;if(rolledBack==="true")result.rolled_back=true;else delete result.rolled_back;result.timings={downloadMs:Number(downloadMs)||0,deployMs:Number(deployMs)||0,restartMs:Number(restartMs)||0,totalMs:Number(totalMs)||0};fs.writeFileSync(file,JSON.stringify(result,null,2)+"\n");' "$tmp" "$status" "$started" "$finished" "$url" "$qr" "$error" "$tail_text" "$stage" "$summary" "${BOT_DOWNLOAD_MS:-0}" "${BOT_DEPLOY_MS:-0}" "${BOT_RESTART_MS:-0}" "${BOT_TOTAL_MS:-0}" "$rolled_back" "$download_source"
   mv -f "$tmp" "$BOT_RESULT_FILE"
 }
 bot_write_running_result() {
@@ -53,11 +53,13 @@ bot_pid_running() {
   ps -p "$pid" -o args= 2>/dev/null | grep -F -- '--bot-mode-worker' >/dev/null
 }
 bot_print_status() {
+  local brief=0
+  [[ "${2:-}" == "--brief" ]] && brief=1
   if [[ ! -f "$BOT_RESULT_FILE" ]]; then
     printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=not-installed' "OPENBOT_RESULT_FILE=$BOT_RESULT_FILE" 'OPENBOT_BOT_INSTRUCTION=No detached OpenBot installation has been recorded yet. Run install.sh --bot-mode to start one.' '===== END OPENBOT BOT RESULT ====='
     return 0
   fi
-  BOT_LOG_FILE="$BOT_LOG_FILE" node -e 'const fs=require("fs");const file=process.argv[1];let v;try{v=JSON.parse(fs.readFileSync(file,"utf8"));}catch{console.log("===== OPENBOT BOT RESULT =====\nOPENBOT_STATUS=failed\nOPENBOT_ERROR=Result file is not valid JSON.\nOPENBOT_RESULT_FILE="+file+"\n===== END OPENBOT BOT RESULT =====");process.exit(0);}const age=v.status==="running"&&v.startedAt?Date.now()-Date.parse(v.startedAt):0;const logPath=process.env.BOT_LOG_FILE||"the install log";const lines=["===== OPENBOT BOT RESULT =====","OPENBOT_STATUS="+(v.status||"failed"),"OPENBOT_RESULT_FILE="+file];if(v.startedAt)lines.push("OPENBOT_STARTED_AT="+v.startedAt);if(v.finishedAt)lines.push("OPENBOT_FINISHED_AT="+v.finishedAt);if(v.progress?.stage)lines.push("OPENBOT_PROGRESS_STAGE="+v.progress.stage);if(v.progress?.summary)lines.push("OPENBOT_PROGRESS_SUMMARY="+v.progress.summary);if(v.downloadSource)lines.push("OPENBOT_DOWNLOAD_SOURCE="+v.downloadSource);if(v.timings)for(const k of ["downloadMs","deployMs","restartMs","totalMs"])if(Number.isFinite(v.timings[k]))lines.push("OPENBOT_TIMING_"+k.replace(/Ms$/,"").toUpperCase()+"_MS="+v.timings[k]);if(v.url)lines.push("OPENBOT_URL="+v.url);if(v.qrPath)lines.push("OPENBOT_QR_PATH="+v.qrPath);if(age>900000)lines.push("OPENBOT_WARNING=Installation may have been interrupted after 15 minutes; check "+logPath+".");if(v.error)lines.push("OPENBOT_ERROR="+v.error);if(v.logTail)lines.push("OPENBOT_LOG_TAIL="+v.logTail.replace(/\n/g,"\\n"));if(v.status==="running")lines.push("OPENBOT_BOT_INSTRUCTION="+(age>900000?"Tell the user the installation appears stuck, include the log path "+logPath+", and stop polling until the user asks.":"Run install.sh --bot-status again in 30-60 seconds; relay OPENBOT_PROGRESS_STAGE and OPENBOT_PROGRESS_SUMMARY to the user with SendToUser before the next poll, along with timings."));if(v.status==="success")lines.push("OPENBOT_BOT_INSTRUCTION=Send OPENBOT_URL to the user and attach OPENBOT_QR_PATH as an image using the host SendToUser tool, using the exact image/file parameter names from its installed tool definition. Do not expose secrets.");if(v.status==="failed")lines.push("OPENBOT_BOT_INSTRUCTION=Tell the user the installation failed; summarize OPENBOT_ERROR and OPENBOT_LOG_TAIL, include the log path "+logPath+", and retry install.sh --bot-mode. Do not claim success.");lines.push("===== END OPENBOT BOT RESULT =====");console.log(lines.join("\n"));' "$BOT_RESULT_FILE"
+  BOT_LOG_FILE="$BOT_LOG_FILE" OPENBOT_BOT_STATUS_BRIEF="$brief" node -e 'const fs=require("fs");const file=process.argv[1];let v;try{v=JSON.parse(fs.readFileSync(file,"utf8"));}catch{console.log("===== OPENBOT BOT RESULT =====\nOPENBOT_STATUS=failed\nOPENBOT_ERROR=Result file is not valid JSON.\nOPENBOT_RESULT_FILE="+file+"\n===== END OPENBOT BOT RESULT =====");process.exit(0);}const age=v.status==="running"&&v.startedAt?Date.now()-Date.parse(v.startedAt):0;const logPath=process.env.BOT_LOG_FILE||"the install log";const brief=process.env.OPENBOT_BOT_STATUS_BRIEF==="1";const lines=["===== OPENBOT BOT RESULT =====","OPENBOT_STATUS="+(v.status||"failed")];if(v.progress?.stage)lines.push("OPENBOT_PROGRESS_STAGE="+v.progress.stage);if(v.url)lines.push("OPENBOT_URL="+v.url);if(v.qrPath)lines.push("OPENBOT_QR_PATH="+v.qrPath);if(brief){if(v.status==="running"&&age>180000){lines.push("OPENBOT_WARNING=Installation exceeded 3 minutes; stop polling.");lines.push("OPENBOT_LOG_FILE="+logPath);let tail=v.logTail;try{tail=tail||fs.readFileSync(logPath,"utf8").split(/\r?\n/).slice(-20).join("\n");}catch{}if(tail)lines.push("OPENBOT_LOG_TAIL="+tail.replace(/\n/g,"\\n"));}if(v.status==="running")lines.push("OPENBOT_BOT_INSTRUCTION="+(age>180000?"Send the log tail to the user and stop polling.":"Relay the current stage to the user; poll --bot-status --brief no more than once more after 30-60 seconds."));else if(v.status==="success")lines.push("OPENBOT_BOT_INSTRUCTION=Send OPENBOT_URL and attach OPENBOT_QR_PATH as an image using the installed SendToUser tool.");else lines.push("OPENBOT_BOT_INSTRUCTION=Tell the user the installation failed and include the log path "+logPath+".");lines.push("===== END OPENBOT BOT RESULT =====");console.log(lines.join("\n"));process.exit(0);}lines.splice(2,0,"OPENBOT_RESULT_FILE="+file);if(v.startedAt)lines.push("OPENBOT_STARTED_AT="+v.startedAt);if(v.finishedAt)lines.push("OPENBOT_FINISHED_AT="+v.finishedAt);if(v.progress?.summary)lines.push("OPENBOT_PROGRESS_SUMMARY="+v.progress.summary);if(v.commit)lines.push("OPENBOT_COMMIT="+v.commit);if(v.downloadSource)lines.push("OPENBOT_DOWNLOAD_SOURCE="+v.downloadSource);if(v.timings)for(const k of ["downloadMs","deployMs","restartMs","totalMs"])if(Number.isFinite(v.timings[k]))lines.push("OPENBOT_TIMING_"+k.replace(/Ms$/,"").toUpperCase()+"_MS="+v.timings[k]);if(age>180000)lines.push("OPENBOT_WARNING=Installation exceeded 3 minutes; include the log tail and stop polling. Check "+logPath+".");if(v.error)lines.push("OPENBOT_ERROR="+v.error);if(v.logTail)lines.push("OPENBOT_LOG_TAIL="+v.logTail.replace(/\n/g,"\\n"));if(v.status==="running")lines.push("OPENBOT_BOT_INSTRUCTION="+(age>180000?"Send the log tail to the user and stop polling.":"Run install.sh --bot-status --brief again in 30-60 seconds; relay OPENBOT_PROGRESS_STAGE and OPENBOT_PROGRESS_SUMMARY to the user before the next poll, with no extra verification."));if(v.status==="success")lines.push("OPENBOT_BOT_INSTRUCTION=OpenBot is installed (commit "+(v.commit||"unknown")+"). Send OPENBOT_URL="+(v.url||"")+" to the user and attach OPENBOT_QR_PATH="+(v.qrPath||"")+" as an image using the installed SendToUser tool; do not expose secrets.");if(v.status==="failed")lines.push("OPENBOT_BOT_INSTRUCTION=Tell the user the installation failed; summarize OPENBOT_ERROR and OPENBOT_LOG_TAIL, include the log path "+logPath+", and retry install.sh --bot-mode. Do not claim success.");lines.push("===== END OPENBOT BOT RESULT =====");console.log(lines.join("\n"));' "$BOT_RESULT_FILE"
 }
 bot_worker_exit() {
   local code="$?"
@@ -204,6 +206,7 @@ if [[ "$BOT_WORKER_MODE" == "1" ]]; then
   bot_mark_stage downloading 'Fetching the OpenBot release into staging.'
 fi
 COMMIT="$(resolve_install_commit)"
+export OPENBOT_INSTALL_COMMIT="$COMMIT"
 
 DEPLOY_DIR="$DEST"
 STAGING_DIR=""
@@ -540,20 +543,21 @@ if [[ "${1:-}" == "--bot-mode-worker" ]]; then
 ===== OPENBOT BOT RESULT =====
 OPENBOT_URL=$BOT_URL
 OPENBOT_QR_PATH=$BOT_QR_PATH
-OPENBOT_BOT_INSTRUCTION=Send the OpenBot URL to the user. Attach the PNG file at OPENBOT_QR_PATH as an image using the host's SendToUser tool, using the exact image/file parameter names from its installed tool definition. Then briefly confirm that OpenBot is installed and the link is ready. Do not expose secrets or invent a tool name or parameter.
+OPENBOT_COMMIT=$COMMIT
+OPENBOT_BOT_INSTRUCTION=OpenBot is installed (commit $COMMIT). Send OPENBOT_URL=$BOT_URL to the user and attach OPENBOT_QR_PATH=$BOT_QR_PATH as an image using the installed SendToUser tool; do not expose secrets.
 ===== END OPENBOT BOT RESULT =====
 EOF
 fi
 
 }
 if [[ "${1:-}" == "--bot-status" ]]; then
-  bot_print_status
+  bot_print_status "$@"
   exit 0
 fi
 if [[ "${1:-}" == "--bot-mode" ]]; then
   mkdir -p "$DATA"
   if bot_pid_running; then
-    printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=started' "OPENBOT_RESULT_FILE=$BOT_RESULT_FILE" "OPENBOT_LOG_FILE=$BOT_LOG_FILE" 'OPENBOT_BOT_INSTRUCTION=FIRST call the host SendToUser tool to tell the user installation has started; THEN poll --bot-status every 30-60 seconds. Do not perform other tool calls before the first SendToUser.' '===== END OPENBOT BOT RESULT ====='
+    printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=started' "OPENBOT_RESULT_FILE=$BOT_RESULT_FILE" "OPENBOT_LOG_FILE=$BOT_LOG_FILE" 'OPENBOT_BOT_INSTRUCTION=SendToUser now: installation has started and should finish in about 15-60 seconds. Then poll --bot-status --brief at most twice, 30-60 seconds apart; do not run extra verification.' '===== END OPENBOT BOT RESULT ====='
     exit 0
   fi
   rm -f "$BOT_PID_FILE"
@@ -569,7 +573,7 @@ if [[ "${1:-}" == "--bot-mode" ]]; then
   (setsid nohup bash -euo pipefail -c 'trap bot_worker_exit EXIT; BOT_WORKER_DONE=0; install_main --bot-mode-worker' </dev/null >>"$BOT_LOG_FILE" 2>&1) &
   printf '%s\n' "$!" >"${BOT_PID_FILE}.tmp"
   mv -f "${BOT_PID_FILE}.tmp" "$BOT_PID_FILE"
-  printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=started' "OPENBOT_RESULT_FILE=$BOT_RESULT_FILE" "OPENBOT_LOG_FILE=$BOT_LOG_FILE" 'OPENBOT_BOT_INSTRUCTION=FIRST call the host SendToUser tool to tell the user installation has started; THEN poll --bot-status every 30-60 seconds. Do not perform other tool calls before the first SendToUser.' '===== END OPENBOT BOT RESULT ====='
+  printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=started' "OPENBOT_RESULT_FILE=$BOT_RESULT_FILE" "OPENBOT_LOG_FILE=$BOT_LOG_FILE" 'OPENBOT_BOT_INSTRUCTION=SendToUser now: installation has started and should finish in about 15-60 seconds. Then poll --bot-status --brief at most twice, 30-60 seconds apart; do not run extra verification.' '===== END OPENBOT BOT RESULT ====='
   exit 0
 fi
 if [[ "${1:-}" == "--bot-mode-worker" ]]; then

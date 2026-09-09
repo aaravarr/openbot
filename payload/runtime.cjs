@@ -10,6 +10,7 @@ var { URL } = require("url");
 var { toOpenAIMessages } = require("./openai-messages.cjs");
 var openaiStream = require("./openai-stream.cjs");
 var requestLog = require("./request-log.cjs");
+var botModels = require("./bot-models.cjs");
 var profileNameCache = Object.create(null);
 
 function sandDir() {
@@ -823,6 +824,11 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
   if (!agent || !agent.modelId) {
     throw new Error("openbot: no model binding for this turn (set a wildcard or matching agent in the control UI)");
   }
+  // The effective model starts at the binding/global model and may be
+  // replaced by a per-bot assignment once the host messages are read inside
+  // the stream. Declared at function scope so request logging and the settled
+  // response metadata report the model that actually went on the wire.
+  var effectiveModelId = agent.modelId;
 
   function recordCustomHost(extra) {
     if (recordedHost) return;
@@ -836,7 +842,7 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
       completedAt: new Date().toISOString(),
       latencyMs: Date.now() - startedMs,
       stream: true,
-      model: agent.modelId,
+      model: effectiveModelId,
       providerId: agent.providerId,
       status: extra.status,
       error: extra.error,
@@ -888,13 +894,26 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
       if (botContext.botId && isBotPaused(botContext.botId)) {
         throw new Error("openbot-runtime: bot paused");
       }
+      // Per-bot model override: read assignments and the plan fresh on every
+      // turn. A stale assignment (model removed from the catalog) falls back
+      // to the global model with a log line instead of failing the chat.
+      try {
+        var assignment = botModels.resolveAssignment(hostMsgs, loadPlan());
+        if (assignment && assignment.stale) {
+          log("bot model assignment " + assignment.modelId + " for bot " + assignment.botId + " is not in the catalog; using the global model");
+        } else if (assignment) {
+          effectiveModelId = assignment.modelId;
+        }
+      } catch (err) {
+        /* plan or assignments unreadable: keep the global model */
+      }
       var body = {
-        model: agent.modelId,
+        model: effectiveModelId,
         messages: toOpenAIMessages(hostMsgs),
         stream: true,
         max_tokens: defaultMaxTokens(options2 && options2.maxTokens, agent.maxOutputTokens),
       };
-      var openaiTools = unwrapJsonSchemaTools(tools, agent.modelId);
+      var openaiTools = unwrapJsonSchemaTools(tools, effectiveModelId);
       if (openaiTools) body.tools = openaiTools;
       var voiceTool = findVoiceTool(tools) || findVoiceTool(openaiTools);
       log("stream messages=" + body.messages.length + " tools=" + ((body.tools && body.tools.length) || 0));
@@ -928,7 +947,7 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
       if (hopId) assistant.id = hopId;
       settledResponse = {
         id: hopId,
-        modelId: agent.modelId,
+        modelId: effectiveModelId,
         timestamp: new Date(),
         messages: [assistant],
       };

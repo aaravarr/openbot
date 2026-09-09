@@ -1949,6 +1949,7 @@ exports.getRequest = getRequest;
 exports.clearRequests = clearRequests;
 exports.redact = redact;
 exports.extractBodyError = extractBodyError;
+exports.extractChatContext = extractChatContext;
 exports.safeCloneBody = safeCloneBody;
 exports.pruneRows = pruneRows;
 exports.pruneNow = pruneNow;

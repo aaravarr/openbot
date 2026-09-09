@@ -14,6 +14,7 @@ var {
 } = require("./image-read.cjs");
 var { applyOpenBotVersionHeader } = require("./version.cjs");
 var requestLog = require("./request-log.cjs");
+var botModels = require("./bot-models.cjs");
 
 var TIMEOUT_MS = Number(process.env.OPENBOT_HOP_TIMEOUT || "1800000");
 var HIGH_AGENT_MAX_TOKENS = 65536;
@@ -979,6 +980,14 @@ function recordHopSafe(entry) {
   }
 }
 
+function appendEventSafe(entry) {
+  try {
+    requestLog.appendEvent(entry);
+  } catch (err) {
+    /* best-effort: a warning write must never break chat */
+  }
+}
+
 function errorMessage(err, fallback) {
   if (err && typeof err.message === "string" && err.message.trim()) return err.message;
   return fallback || "hop failed";
@@ -1093,7 +1102,31 @@ async function handleCompletions(req, res) {
       sendJson(res, 503, missing);
       return;
     }
+    // Per-bot model override, resolved before routing. A stale assignment
+    // (model removed from the catalog) must never fail the chat: warn once
+    // per request and fall back. When the runtime already rewrote body.model
+    // to the stale value, fall back to the wildcard (global) binding.
     var requested = body && body.model;
+    var assignment = null;
+    try {
+      assignment = botModels.resolveAssignment(body && body.messages, plan);
+    } catch (err) {
+      assignment = null;
+    }
+    if (assignment && assignment.stale) {
+      appendEventSafe({
+        type: "bot-models.stale",
+        severity: "WARN",
+        message: "Bot model assignment " + assignment.modelId + " for bot " + assignment.botId + " is no longer in the catalog; using the global model.",
+        metadata: { botId: assignment.botId, modelId: assignment.modelId },
+      });
+      if (requested === assignment.modelId) {
+        var wildcardAgent = plan && plan.agents && plan.agents["*"];
+        if (wildcardAgent && typeof wildcardAgent.modelId === "string") requested = wildcardAgent.modelId;
+      }
+    } else if (assignment) {
+      requested = assignment.modelId;
+    }
     var route = lookupRoute(plan, requested);
     if (!route) {
       var unknown = { error: { message: "unknown model slug" } };

@@ -26,6 +26,7 @@ Default root: `/home/box/sand-data/` (see env below).
 | `openbot-audit.jsonl` | JSONL, append-only | Audit trail of reconcile writes to mode / plan / wrap / backup (see below). Best-effort; diagnostics only. |
 | `secrets.json` | JSON, **0600** | `{ "providers": { "<providerId>": "<stored locally>" } }` |
 | `openbot-pause.json` | JSON | Global gateway pause flag (see below). Missing or corrupt = not paused (fail open). Trailing newline. |
+| `openbot-bot-models.json` | JSON | Optional per-bot overrides: { "assignments": { "<botId>": "<catalog modelId>" } }; missing/corrupt = empty. OPENBOT_BOT_MODELS overrides the path. |
 | `openbot-expose` | text | `loopback` or `cloudflare-quick` plus newline. Written by reconcile. |
 | `openbot-logs.json` | JSON | LogSettings (see below). Trailing newline. |
 | `openbot-model-catalog.json` | JSON | Source B cache — **do not hand-edit**; `POST /api/model-catalog/refresh` |
@@ -47,6 +48,7 @@ Host file: `/home/box/sand-host/host-main.cjs`.
 | `OPENBOT_SECRETS` | Secrets JSON path |
 | `OPENBOT_LOGS` | Log settings path |
 | `OPENBOT_PAUSE` | Pause file path (highest priority on the payload side, above `OPENBOT_SAND_DATA` / `OPENBOT_PLAN` inference) |
+| `OPENBOT_BOT_MODELS` | Per-bot model assignment JSON path |
 | `OPENBOT_MAPS` | Maps module path (default `payload/provider-maps.cjs` next to hop) |
 | `OPENBOT_HOST_MAIN` | Host file |
 | `OPENBOT_REPO` | Install / repo root for the loopback service |
@@ -298,6 +300,8 @@ Success `200`: `{ ok: true, wrapBytesChanged, snapshot, providers, models, keyed
 | GET | `/api/model-catalog` | Source B cache snapshot; `?modelId=` lookup |
 | POST | `/api/model-catalog/refresh` | `202 { ok, status: "loading", startedAt }` |
 | GET | `/api/pause` | Gateway pause state `{paused, at, note}` (see `openbot-pause.json`) |
+| GET | `/api/bot-models` | Per-bot assignments plus available catalog model IDs |
+| PUT | `/api/bot-models` | Set `{botId, modelId}`; null/empty modelId clears; `{assignments}` replaces all; invalid model IDs return 400 |
 | PUT | `/api/pause` | Set `{paused: boolean, note?: string}`; atomic write plus `gateway.pause` event |
 | POST | `/v1/chat/completions` | Hop (not a config API) |
 

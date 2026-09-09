@@ -16,9 +16,9 @@ BOT_PID_FILE="${OPENBOT_BOT_PID:-$DATA/openbot-install.pid}"
 bot_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 bot_epoch_ms() { date +%s%3N; }
 bot_write_state() {
-  local status="$1" started="$2" finished="$3" url="$4" qr="$5" error="$6" tail_text="$7" stage="$8" summary="$9" tmp="${BOT_RESULT_FILE}.$$"
+  local status="$1" started="$2" finished="$3" url="$4" qr="$5" error="$6" tail_text="$7" stage="$8" summary="$9" rolled_back="${10:-}" tmp="${BOT_RESULT_FILE}.$$"
   mkdir -p "$(dirname "$BOT_RESULT_FILE")"
-  node -e 'const fs=require("fs");const [file,status,startedAt,finishedAt,url,qrPath,error,logTail,stage,summary,downloadMs,deployMs,restartMs,totalMs]=process.argv.slice(1);let result={};try{result=JSON.parse(fs.readFileSync(file,"utf8"));}catch{};result.status=status;result.startedAt=startedAt;if(finishedAt)result.finishedAt=finishedAt;else delete result.finishedAt;if(url)result.url=url;else delete result.url;if(qrPath)result.qrPath=qrPath;else delete result.qrPath;if(error)result.error=error;else delete result.error;if(logTail)result.logTail=logTail;else delete result.logTail;if(stage)result.progress={stage,summary:summary||"",updatedAt:new Date().toISOString()};result.timings={downloadMs:Number(downloadMs)||0,deployMs:Number(deployMs)||0,restartMs:Number(restartMs)||0,totalMs:Number(totalMs)||0};fs.writeFileSync(file,JSON.stringify(result,null,2)+"\n");' "$tmp" "$status" "$started" "$finished" "$url" "$qr" "$error" "$tail_text" "$stage" "$summary" "${BOT_DOWNLOAD_MS:-0}" "${BOT_DEPLOY_MS:-0}" "${BOT_RESTART_MS:-0}" "${BOT_TOTAL_MS:-0}"
+  node -e 'const fs=require("fs");const [file,status,startedAt,finishedAt,url,qrPath,error,logTail,stage,summary,downloadMs,deployMs,restartMs,totalMs,rolledBack]=process.argv.slice(1);let result={};try{result=JSON.parse(fs.readFileSync(file,"utf8"));}catch{};result.status=status;result.startedAt=startedAt;if(finishedAt)result.finishedAt=finishedAt;else delete result.finishedAt;if(url)result.url=url;else delete result.url;if(qrPath)result.qrPath=qrPath;else delete result.qrPath;if(error)result.error=error;else delete result.error;if(logTail)result.logTail=logTail;else delete result.logTail;if(stage)result.progress={stage,summary:summary||"",updatedAt:new Date().toISOString()};if(rolledBack==="true")result.rolled_back=true;else delete result.rolled_back;result.timings={downloadMs:Number(downloadMs)||0,deployMs:Number(deployMs)||0,restartMs:Number(restartMs)||0,totalMs:Number(totalMs)||0};fs.writeFileSync(file,JSON.stringify(result,null,2)+"\n");' "$tmp" "$status" "$started" "$finished" "$url" "$qr" "$error" "$tail_text" "$stage" "$summary" "${BOT_DOWNLOAD_MS:-0}" "${BOT_DEPLOY_MS:-0}" "${BOT_RESTART_MS:-0}" "${BOT_TOTAL_MS:-0}" "$rolled_back"
   mv -f "$tmp" "$BOT_RESULT_FILE"
 }
 bot_write_running_result() {
@@ -289,11 +289,39 @@ if [[ "${OPENBOT_SKIP_NPM_INSTALL:-}" != "1" ]] && ! payload_vendor_compression_
   fi
 fi
 if [[ "$BOT_WORKER_MODE" == "1" ]]; then
-  if [[ -e "$DEST" || -L "$DEST" ]]; then
-    rm -rf "$DATA/openbot-previous"
-    mv -T "$DEST" "$DATA/openbot-previous"
+  staging_swap() {
+    local previous="$DATA/openbot-previous"
+    (
+      set -euo pipefail
+      local old_release_moved=0
+      staging_swap_exit() {
+        local code="$?"
+        trap - EXIT
+        if [[ "$code" -ne 0 && "$old_release_moved" -eq 1 && ! -e "$DEST" && -e "$previous" ]]; then
+          if mv -T "$previous" "$DEST" || mv -T "$previous" "$DEST"; then
+            bot_write_state failed "${BOT_STARTED_AT:-$(bot_now)}" "$(bot_now)" '' '' 'Staging switch failed; the previous release was rolled back successfully.' '' swapping 'Staging switch failed; rolled back to the previous release.' true || true
+          else
+            bot_write_state failed "${BOT_STARTED_AT:-$(bot_now)}" "$(bot_now)" '' '' 'Staging switch failed and the rollback could not restore the previous release.' '' swapping 'Staging switch failed; rollback was attempted but did not complete.' true || true
+          fi
+        fi
+        exit "$code"
+      }
+      trap staging_swap_exit EXIT
+      rm -rf "$previous"
+      if [[ -e "$DEST" || -L "$DEST" ]]; then
+        mv -T "$DEST" "$previous"
+        old_release_moved=1
+      fi
+      mv -T "$STAGING_DIR" "$DEST"
+      trap - EXIT
+    )
+  }
+  if ! staging_swap; then
+    # The swap function has already persisted the rollback result. Do not let
+    # the worker EXIT trap overwrite it or continue into reconcile/tunnel.
+    BOT_WORKER_DONE=1
+    exit 1
   fi
-  mv -T "$STAGING_DIR" "$DEST"
   cd "$DEST"
   bot_mark_stage restarting 'Staging is warm; switching the new release into place.'
 fi

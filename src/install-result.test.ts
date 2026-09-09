@@ -192,3 +192,35 @@ test("bot-mode prepares and switches a staged release with one directory cutover
     rmSync(data, { recursive: true, force: true });
   }
 });
+
+test("bot-mode rolls back when the real staging mv fails", (t) => {
+  if (!requireBash(t) || skipOnWindows(t)) return;
+  const source = readFileSync(install, "utf8");
+  const match = source.match(/^  staging_swap\(\) \{[\s\S]*?^  \}\n/m);
+  assert.ok(match, "install.sh must define the bot-mode staging swap");
+
+  const data = mkdtempSync(path.join(os.tmpdir(), "openbot-staging-rollback-"));
+  const result = path.join(data, "result.json");
+  const script = [
+    "set -euo pipefail",
+    "data=$1; DEST=\"$data/openbot\"; STAGING_DIR=\"$data/openbot-staging\"; DATA=\"$data\"; BOT_RESULT_FILE=" + JSON.stringify(result) + "; BOT_STARTED_AT=2026-09-09T00:00:00Z",
+    "bot_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }",
+    "bot_write_state() { printf '{\"status\":\"%s\",\"rolled_back\":true,\"error\":\"%s\"}\n' \"$1\" \"$6\" > \"$BOT_RESULT_FILE\"; }",
+    "mkdir -p \"$DEST\" \"$STAGING_DIR\"; printf old > \"$DEST/version\"; printf new > \"$STAGING_DIR/version\"",
+    "mv() { if [[ \"$2\" == \"$DEST\" && \"$1\" == \"$STAGING_DIR\" ]]; then printf occupant > \"$DEST\"; fi; command mv \"$@\"; }",
+    match[0].replace(/^  /gm, ""),
+    "if staging_swap; then exit 1; fi",
+    "test \"$(cat \"$DEST/version\")\" = old",
+    "test \"$(node -e 'console.log(JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\")).status)' \"$BOT_RESULT_FILE\")\" = failed",
+    "test \"$(node -e 'console.log(JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\")).rolled_back)' \"$BOT_RESULT_FILE\")\" = true",
+  ].join("\n") + "\n";
+  try {
+    runBash(script, ["bash", data]);
+    const failed = JSON.parse(readFileSync(result, "utf8")) as { status: string; rolled_back: boolean };
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.rolled_back, true);
+    assert.equal(readFileSync(path.join(data, "openbot", "version"), "utf8"), "old");
+  } finally {
+    rmSync(data, { recursive: true, force: true });
+  }
+});

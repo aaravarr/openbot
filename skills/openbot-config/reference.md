@@ -192,7 +192,7 @@ Rules:
 
 ## Hop per-request reload
 
-Protocol conversion is also per request. The payload converter is dependency-free CJS and mirrors `src/hop/protocol-converters.ts`; do not edit one without updating the other. Responses and Anthropic SSE parsing tolerates upstream streams that place consecutive `data:` records without an empty separator.
+Protocol conversion is also per request. The payload converter is dependency-free CJS and mirrors `src/hop/protocol-converters.ts`; do not edit one without updating the other. Responses and Anthropic SSE parsing tolerates upstream streams that place consecutive `data:` records without an empty separator. A non-2xx upstream error is converted to an OpenAI-style error body while the original HTTP status, `x-request-id` / `Retry-After` headers, and any upstream `request_id` are preserved; the converted error also carries `upstream_status`.
 
 ## Per-bot pause state
 

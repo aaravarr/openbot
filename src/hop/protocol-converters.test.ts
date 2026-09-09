@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import test from "node:test";
-import { anthropicSseToChat, anthropicToChat, chatToAnthropic, chatToResponses, responsesSseToChat, responsesToChat } from "./protocol-converters.ts";
+import { anthropicSseToChat, anthropicToChat, chatToAnthropic, chatToResponses, mapUpstreamError, responsesSseToChat, responsesToChat } from "./protocol-converters.ts";
 const require = createRequire(import.meta.url);
 const cjsConverters: any = require("../../payload/protocol-converters.cjs");
 
@@ -102,4 +102,22 @@ test("Anthropic SSE maps text, thinking, tool JSON, stop reason, and usage", () 
 test("SSE parser accepts consecutive data lines without blank separators", () => {
   const raw = `data: ${JSON.stringify({ type: "response.created", response: { id: "r", model: "m" } })}\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "ok" })}\ndata: [DONE]\n`;
   assert.match(responsesSseToChat(raw), /\"content\":\"ok\"/);
+});
+
+test("mapUpstreamError preserves status and request id identically in TS and CJS", () => {
+  const responses = { error: { message: "rate limited", code: "rate_limit_exceeded" }, request_id: "req_429" };
+  const ts = mapUpstreamError(responses, 429) as any;
+  const cjs = cjsConverters.mapUpstreamError(responses, 429);
+  assert.deepEqual(ts, cjs);
+  assert.equal(ts.error.message, "rate limited");
+  assert.equal(ts.error.code, "rate_limit_exceeded");
+  assert.equal(ts.error.upstream_status, 429);
+  assert.equal(ts.error.request_id, "req_429");
+  const anthropic = { type: "error", error: { type: "api_error", message: "boom" } };
+  const tsAnthropic = mapUpstreamError(anthropic, 500) as any;
+  const cjsAnthropic = cjsConverters.mapUpstreamError(anthropic, 500);
+  assert.deepEqual(tsAnthropic, cjsAnthropic);
+  assert.equal(tsAnthropic.error.code, "api_error");
+  assert.equal(tsAnthropic.error.upstream_status, 500);
+  assert.equal("request_id" in tsAnthropic.error, false);
 });

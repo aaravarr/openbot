@@ -986,7 +986,7 @@ function convertBufferedResponse(out, apiType) {
   if (!out || apiType === "chat-completions") return out;
   var text = Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw || "");
   if (out.status < 200 || out.status >= 300) {
-    try { out.raw = Buffer.from(JSON.stringify(protocolConverters.mapUpstreamError(JSON.parse(text))), "utf8"); } catch (err) { /* preserve non-JSON error */ }
+    try { out.raw = Buffer.from(JSON.stringify(protocolConverters.mapUpstreamError(JSON.parse(text), out.status)), "utf8"); } catch (err) { /* preserve non-JSON error */ }
     out.headers = Object.assign({}, out.headers, { "content-type": "application/json" });
     return out;
   }

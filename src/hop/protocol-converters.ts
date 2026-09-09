@@ -115,8 +115,12 @@ export function anthropicToChat(payload: unknown): Obj {
   const finish = payload.stop_reason === "tool_use" ? "tool_calls" : payload.stop_reason === "max_tokens" ? "length" : payload.stop_reason === "refusal" ? "content_filter" : "stop";
   return { id: payload.id ?? "", object: "chat.completion", created: Math.floor(Date.now() / 1000), model: payload.model, choices: [{ index: 0, message: { role: "assistant", content: text || null, ...(reasoning ? { reasoning_content: reasoning } : {}), ...(calls.length ? { tool_calls: calls } : {}) }, finish_reason: finish }], ...(anthropicUsage(payload.usage) ? { usage: anthropicUsage(payload.usage) } : {}) };
 }
-export function mapUpstreamError(payload: unknown, status: number): Obj {
-  const root = isObj(payload) ? payload : {}; const error = isObj(root.error) ? root.error : root; const message = typeof error.message === "string" ? error.message : "upstream request failed"; const code = typeof error.code === "string" ? error.code : typeof error.type === "string" ? error.type : "upstream_error"; return { error: { message, type: code, code } };
+export function mapUpstreamError(payload: unknown, status?: number): Obj {
+  const root = isObj(payload) ? payload : {}; const error = isObj(root.error) ? root.error : root;
+  const message = typeof error.message === "string" ? error.message : "upstream request failed";
+  const code = typeof error.code === "string" ? error.code : typeof error.type === "string" ? error.type : "upstream_error";
+  const requestId = [error.request_id, error.requestId, root.request_id, root.requestId].find((v): v is string => typeof v === "string" && v.length > 0);
+  return { error: { message, type: code, code, ...(typeof status === "number" && Number.isFinite(status) && status > 0 ? { upstream_status: status } : {}), ...(requestId ? { request_id: requestId } : {}) } };
 }
 function parseSse(raw: string): Obj[] {
   const out: Obj[] = [];

@@ -849,7 +849,6 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
       usage: extra.usage,
       firstTokenMs: extra.firstTokenMs,
       botId: chatContext.botId,
-      botName: chatContext.botName,
       chatType: chatContext.chatType,
       chatName: chatContext.chatName,
       requestBody: {

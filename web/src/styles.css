@@ -402,6 +402,9 @@ code, kbd, .mono { font-family: var(--font-mono); }
   min-width: 0; padding: 14px var(--sp-5);
   border-bottom: 1px solid var(--hairline-soft);
 }
+.bot-row.is-deleted { opacity: 0.48; }
+.bot-row__time { color: var(--muted); font-size: var(--text-xs); }
+.bot-row > .switch { min-width: 86px; }
 .bot-row:last-child { border-bottom: none; }
 .bot-row__icon {
   width: 32px; height: 32px; flex: none;

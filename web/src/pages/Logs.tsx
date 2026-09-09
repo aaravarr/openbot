@@ -20,6 +20,7 @@ import {
   getLog,
   getLogFacets,
   getLogStats,
+  getBots,
   listLogs,
   listEvents,
   saveLogSettings,
@@ -36,6 +37,7 @@ import type {
   LogStats,
   LogUsage,
   LogUsageRow,
+  BotInfo,
 } from "../api/types";
 import { LogChannelPair } from "../components/LogChannel";
 import { channelSubtitle, formatLatency, formatTime, formatTimestamp } from "../lib/format";
@@ -122,6 +124,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
   const [usageRange, setUsageRange] = useState<"1h" | "6h" | "24h" | "7d" | "30d">("24h");
   const [stats, setStats] = useState<LogStats | null>(null);
   const [facets, setFacets] = useState<LogFacets | null>(null);
+  const [bots, setBots] = useState<BotInfo[]>([]);
   const [events, setEvents] = useState<LogEvent[]>([]);
   const [eventsTotal, setEventsTotal] = useState(0);
   const [eventsLoading, setEventsLoading] = useState(false);
@@ -149,6 +152,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
   }, [facets, state.models, records]);
 
   const pairs = useMemo(() => pairLogRows(records), [records]);
+  const botNames = useMemo(() => new Map(bots.map((bot) => [bot.botId, bot.botName])), [bots]);
   // The source column only appears once the backend stamps source fields; older
   // rows render without it instead of a column of dashes.
   const hasSourceColumn = useMemo(() => records.some(hasSource), [records]);
@@ -175,7 +179,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
         ok: errorsOnly ? false : undefined,
         channel: channelFilter || undefined,
         model: modelFilter ?? undefined,
-        botName: botFilter ?? undefined,
+        botId: botFilter ?? undefined,
         chatType: chatTypeFilter || undefined,
         page,
         pageSize,
@@ -224,6 +228,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
       .catch(() => {
         /* filters fall back to local options */
       });
+    getBots().then(setBots).catch(() => { /* old log rows still render from their snapshot */ });
   }, [refreshStats]);
 
   const loadEvents = useCallback(async () => {
@@ -810,7 +815,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
                       <td className="mono" data-label="Model">{pairModel(pair) ?? "—"}</td>
                       {hasSourceColumn ? (
                         <td className="ellipsis" data-label="Source">
-                          {pairSourceLabel(pair) ?? "—"}
+                          {pairSourceLabel(pair, botNames) ?? "—"}
                         </td>
                       ) : null}
                       <td data-label="Status"><StatusPill status={pairStatus(pair)} /></td>
@@ -913,6 +918,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
       <LogDrawer
         state={drawer}
         loading={drawerLoading}
+        botNames={botNames}
         onClose={() => {
           setDrawer(null);
           navigate({ kind: "logs", page: page > 1 ? page : undefined });
@@ -932,8 +938,8 @@ function hasSource(r: LogRecord): boolean {
 }
  
 /** Short source label for list rows; prefers client name, then conversation, then UA. */
-function sourceLabel(r: LogRecord): ReactNode {
-  const bot = r.botName?.trim();
+function sourceLabel(r: LogRecord, botNames?: ReadonlyMap<string, string>): ReactNode {
+  const bot = (r.botId ? botNames?.get(r.botId) : undefined)?.trim() || r.botName?.trim() || r.botId?.trim();
   if (r.chatType === "group") {
     const chat = r.chatName?.trim();
     if (chat && bot) return `${chat} - ${bot}`;
@@ -959,9 +965,9 @@ function sourceLabel(r: LogRecord): ReactNode {
   return undefined;
 }
  
-function pairSourceLabel(pair: LogRowPair<LogRecord>): ReactNode {
+function pairSourceLabel(pair: LogRowPair<LogRecord>, botNames: ReadonlyMap<string, string>): ReactNode {
   for (const member of pairMembers(pair)) {
-    const label = sourceLabel(member);
+    const label = sourceLabel(member, botNames);
     if (label) return label;
   }
   return undefined;
@@ -1276,10 +1282,12 @@ function UsageSection({
 function LogDrawer({
   state,
   loading,
+  botNames,
   onClose,
 }: {
   state: DrawerState | null;
   loading: boolean;
+  botNames: ReadonlyMap<string, string>;
   onClose: () => void;
 }) {
   const details = state?.details ?? [];
@@ -1334,7 +1342,7 @@ function LogDrawer({
                   </p>
                 ) : null}
                 {details.map((d) => (
-                  <LogLayer key={d.id} detail={d} stacked={paired} />
+                  <LogLayer key={d.id} detail={d} stacked={paired} botNames={botNames} />
                 ))}
               </>
             ) : null}
@@ -1345,7 +1353,7 @@ function LogDrawer({
   );
 }
 
-function LogLayer({ detail: d, stacked }: { detail: LogDetail; stacked: boolean }) {
+function LogLayer({ detail: d, stacked, botNames }: { detail: LogDetail; stacked: boolean; botNames: ReadonlyMap<string, string> }) {
   const requestValue = d.request ?? d.requestBody;
   const responseValue = d.response ?? d.responseBody;
   const requestRaw = rawBodyText(requestValue, d.requestFull);
@@ -1390,10 +1398,10 @@ function LogLayer({ detail: d, stacked }: { detail: LogDetail; stacked: boolean 
               <span className="v">{d.userAgent}</span>
             </>
           ) : null}
-          {d.botName ? (
+          {(d.botName || d.botId) ? (
             <>
               <span className="k">Bot</span>
-              <span className="v">{d.botName}</span>
+              <span className="v">{(d.botId ? botNames.get(d.botId) : undefined) ?? d.botName ?? d.botId}</span>
             </>
           ) : null}
           {d.botId ? (

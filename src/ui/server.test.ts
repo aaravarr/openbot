@@ -152,16 +152,20 @@ test("bot endpoints discover profiles and persist validated pause state", async 
     writeFileSync(agents + "/blank/profile.json", JSON.stringify({ title: "No name" }));
     fss.mkdirSync(agents + "/broken", { recursive: true });
     writeFileSync(agents + "/broken/profile.json", "{broken");
+    writeFileSync("/tmp/openbot-sand-data/openbot-bot-models.json", JSON.stringify({ assignments: { orphan: "provider:model" } }));
 
     const { server, port } = await listen();
     try {
       const bots = await request(port, "/api/bots", "GET");
       assert.equal(bots.status, 200);
-      assert.deepEqual(bots.json, [
-        { botId: "alpha", botName: "Alpha Bot" },
-        { botId: "blank", botName: "blank" },
-        { botId: "broken", botName: "broken" },
-        { botId: "missing", botName: "missing" },
+      assert.equal(Array.isArray(bots.json), true);
+      const botRows = bots.json as Array<{ botId: string; botName: string; deleted: boolean }>;
+      assert.deepEqual(botRows.map((bot) => ({ botId: bot.botId, botName: bot.botName, deleted: bot.deleted })), [
+        { botId: "blank", botName: "blank", deleted: false },
+        { botId: "alpha", botName: "Alpha Bot", deleted: false },
+        { botId: "broken", botName: "broken", deleted: true },
+        { botId: "missing", botName: "missing", deleted: true },
+        { botId: "orphan", botName: "orphan", deleted: true },
       ]);
 
       const missing = await request(port, "/api/pause-bots", "GET");
@@ -188,6 +192,7 @@ test("bot endpoints discover profiles and persist validated pause state", async 
     }
   } finally {
     rmSync(agentData, { recursive: true, force: true });
+    rmSync("/tmp/openbot-sand-data/openbot-bot-models.json", { force: true });
     if (previous === undefined) delete process.env.OPENBOT_AGENT_DATA;
     else process.env.OPENBOT_AGENT_DATA = previous;
   }

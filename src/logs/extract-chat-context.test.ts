@@ -24,6 +24,28 @@ test("classifies a normal tagged user query as a direct message", () => {
   });
 });
 
+test("extracts bot identity from a user profile message", () => {
+  assert.deepEqual(extractChatContext([
+    { role: "system", content: "You are Grok Bot." },
+    { role: "user", content: 'Your agent name is "小红书-文案".\n/home/box/agent-data/agents/1cf5a3e0-2623-468c-ba97-6b14f8f3c12a/profile.json\n<user_query>\nhello' },
+  ]), {
+    botId: "1cf5a3e0-2623-468c-ba97-6b14f8f3c12a",
+    botName: "小红书-文案",
+    chatType: "dm",
+  });
+});
+
+test("extracts bot identity from a system profile message", () => {
+  assert.deepEqual(extractChatContext([identity]), {
+    botId: "1cf5a3e0-2623-468c-ba97-6b14f8f3c12a",
+    botName: "测试",
+  });
+});
+
+test("leaves bot identity absent when no profile is present", () => {
+  assert.deepEqual(extractChatContext([{ role: "system", content: "You are Grok Bot." }]), {});
+});
+
 test("marks routine wakeups without throwing on missing fields", () => {
   assert.deepEqual(extractChatContext([{ role: "user", content: "<user_query>\n[routine]\n<system_reminder>run</system_reminder>" }]), { chatType: "routine" });
   assert.deepEqual(extractChatContext([{ role: "assistant", content: "not a user message" }]), {});
@@ -37,4 +59,19 @@ test("uses the last matching user message and tolerates structured content", () 
   ]);
   assert.equal(result.chatType, "dm");
   assert.equal(result.chatName, undefined);
+});
+
+test("extracts unquoted identity variants and supports profile fallback", () => {
+  const messages = [
+    {
+      role: "system",
+      content: "Your agent name is 人事管理\nprofile: /home/box/agent-data/agents/1cf5a3e0-2623-468c-ba97-6b14f8f3c12a/profile.json",
+    },
+    { role: "user", content: "<user_query>\nhello" },
+  ];
+  assert.equal(extractChatContext(messages).botName, "人事管理");
+  assert.equal(extractChatContext([
+    { role: "system", content: "profile: /home/box/agent-data/agents/1cf5a3e0-2623-468c-ba97-6b14f8f3c12a/profile.json" },
+    { role: "user", content: "<user_query>\nhello" },
+  ], { resolveBotName: () => "回填名称" }).botName, "回填名称");
 });

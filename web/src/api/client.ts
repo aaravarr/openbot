@@ -216,6 +216,9 @@ export type LogQuery = {
   ok?: boolean;
   channel?: LogChannelFilter;
   model?: string;
+  botId?: string;
+  botName?: string;
+  chatType?: "group" | "dm" | "routine";
   from?: string;
   to?: string;
   page?: number;
@@ -229,6 +232,9 @@ export async function listLogs(query: LogQuery = {}): Promise<LogList> {
   if (query.ok === false) params.set("ok", "false");
   if (query.channel) params.set("channel", query.channel);
   if (query.model) params.set("model", query.model);
+  if (query.botId) params.set("botId", query.botId);
+  if (query.botName) params.set("botName", query.botName);
+  if (query.chatType) params.set("chatType", query.chatType);
   if (query.from) params.set("from", query.from);
   if (query.to) params.set("to", query.to);
   if (query.page !== undefined) params.set("page", String(query.page));

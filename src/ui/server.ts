@@ -61,6 +61,8 @@ type LogFacets = {
   provider: { values: LogFacetOption[]; approximate: boolean };
   channel: { values: LogFacetOption[]; approximate: boolean };
   status: { values: LogFacetOption[]; approximate: boolean };
+  bots: Array<{ botId?: string; botName?: string }>;
+  chatTypes: Array<"group" | "dm" | "routine">;
 };
 
 type LogEventList = {
@@ -230,6 +232,9 @@ function publicState(current: SupervisorDeps, catalog?: Catalog) {
 function parseLogsQuery(url: URL): Record<string, unknown> {
   const q = url.searchParams.get("q") ?? "";
   const model = url.searchParams.get("model") ?? "";
+  const botId = url.searchParams.get("botId") ?? "";
+  const botName = url.searchParams.get("botName") ?? "";
+  const chatType = url.searchParams.get("chatType") ?? "";
   const from = url.searchParams.get("from") ?? "";
   const to = url.searchParams.get("to") ?? "";
   const okRaw = url.searchParams.get("ok");
@@ -241,6 +246,15 @@ function parseLogsQuery(url: URL): Record<string, unknown> {
   }
   if (model.trim()) {
     query.model = model;
+  }
+  if (botId.trim()) {
+    query.botId = botId;
+  }
+  if (botName.trim()) {
+    query.botName = botName;
+  }
+  if (chatType.trim()) {
+    query.chatType = chatType;
   }
   if (from.trim()) {
     query.from = from;

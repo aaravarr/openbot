@@ -249,6 +249,8 @@ export type LogFacets = {
   provider: { values: LogFacetOption[]; approximate: boolean };
   channel: { values: LogFacetOption[]; approximate: boolean };
   status: { values: LogFacetOption[]; approximate: boolean };
+  bots: Array<{ botId?: string; botName?: string }>;
+  chatTypes: Array<"group" | "dm" | "routine">;
 };
 
 export type LogEvent = {

@@ -28,6 +28,7 @@ var MAX_EVENT_BYTES = 4 * 1000 * 1000;
 var MAX_EVENT_KEPT = 500;
 var STATS_DISK_SCAN_CAP = 5000;
 var APPROX_BYTES_PER_ROW = 400;
+var profileNameCache = Object.create(null);
 
 var DEFAULTS = {
   loggingEnabled: false,
@@ -636,16 +637,30 @@ function extractChatContext(messages) {
   }
   for (var i = 0; i < rows.length; i++) {
     var message = rows[i];
-    if (!isRecord(message) || message.role !== "system") continue;
+    if (!isRecord(message) || i >= 5) continue;
     var system = text(message.content);
     if (!out.botName) {
-      var name = system.match(/Your agent name is [\"']([^\"'\r\n]{1,200})[\"']/);
-      if (name) out.botName = name[1];
+      var name = system.match(/Your agent name is\s*(?:[\"']([^\"'\r\n]{1,200})[\"']|([^\r\n.]{1,200}))/i)
+        || system.match(/(?:agent|bot)\s+(?:name|title)\s*[:=]\s*(?:[\"']([^\"'\r\n]{1,200})[\"']|([^\r\n.]{1,200}))/i);
+      if (name) out.botName = String(name[1] || name[2] || name[3] || name[4] || "").trim();
     }
     if (!out.botId) {
       var id = system.match(/\/home\/box\/agent-data\/agents\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/profile\.json/i);
       if (id) out.botId = id[1];
     }
+  }
+  if (!out.botName && out.botId) {
+    if (!Object.prototype.hasOwnProperty.call(profileNameCache, out.botId)) {
+      var profileName;
+      try {
+        var profile = JSON.parse(fs.readFileSync(path.join("/home/box/agent-data/agents", out.botId, "profile.json"), "utf8"));
+        if (profile && typeof profile === "object") profileName = profile.name || profile.title;
+      } catch (err) {
+        profileName = undefined;
+      }
+      profileNameCache[out.botId] = typeof profileName === "string" ? profileName.trim() : "";
+    }
+    if (profileNameCache[out.botId]) out.botName = profileNameCache[out.botId];
   }
   for (var j = 0; j < rows.length; j++) {
     var user = rows[j];
@@ -1168,6 +1183,13 @@ function matchesQuery(row, query) {
   if (typeof query.model === "string" && query.model) {
     if (row.model !== query.model) return false;
   }
+  if (typeof query.botId === "string" && query.botId) {
+    if (row.botId !== query.botId && row.botName !== query.botId) return false;
+  }
+  if (typeof query.botName === "string" && query.botName && row.botName !== query.botName) return false;
+  if (typeof query.chatType === "string" && query.chatType) {
+    if (row.chatType !== query.chatType) return false;
+  }
   if (typeof query.from === "string" && query.from) {
     if (typeof row.startedAt !== "string" || row.startedAt < query.from) return false;
   }
@@ -1189,6 +1211,10 @@ function matchesQuery(row, query) {
       row.userAgent,
       row.conversationId,
       row.requestId,
+      row.botId,
+      row.botName,
+      row.chatType,
+      row.chatName,
     ]
       .filter(function (part) { return typeof part === "string"; })
       .join(" ")
@@ -1644,6 +1670,30 @@ function facetsNow() {
     provider: top("providerId"),
     channel: top("channel"),
     status: statusFacet(),
+    bots: (function () {
+      var seen = Object.create(null);
+      var values = [];
+      for (var i = 0; i < sample.length; i++) {
+        var row = sample[i];
+        var botId = typeof row.botId === "string" && row.botId ? row.botId : undefined;
+        var botName = typeof row.botName === "string" && row.botName ? row.botName : undefined;
+        if (!botId && !botName) continue;
+        var key = botId || "name:" + botName;
+        if (seen[key]) continue;
+        seen[key] = true;
+        values.push({ ...(botId ? { botId: botId } : {}), ...(botName ? { botName: botName } : {}) });
+      }
+      values.sort(function (a, b) { return (a.botName || a.botId || "").localeCompare(b.botName || b.botId || ""); });
+      return values.slice(0, FACETS_MAX_OPTIONS);
+    })(),
+    chatTypes: (function () {
+      var seen = Object.create(null);
+      for (var i = 0; i < sample.length; i++) {
+        var value = sample[i].chatType;
+        if (value === "group" || value === "dm" || value === "routine") seen[value] = true;
+      }
+      return ["group", "dm", "routine"].filter(function (value) { return seen[value]; });
+    })(),
   };
   return setFacetsCache(value);
 }

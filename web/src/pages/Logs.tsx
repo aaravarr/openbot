@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Check,
   ChevronDown,
@@ -109,6 +109,8 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [channelFilter, setChannelFilter] = useState<LogChannelFilter | "">("");
   const [modelFilter, setModelFilter] = useState<string | null>(null);
+  const [botFilter, setBotFilter] = useState<string | null>(null);
+  const [chatTypeFilter, setChatTypeFilter] = useState<"group" | "dm" | "routine" | "">("");
   const [confirmClear, setConfirmClear] = useState(false);
   const [drawer, setDrawer] = useState<DrawerState | null>(null);
   const [drawerLoading, setDrawerLoading] = useState(false);
@@ -172,6 +174,8 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
         ok: errorsOnly ? false : undefined,
         channel: channelFilter || undefined,
         model: modelFilter ?? undefined,
+        botName: botFilter ?? undefined,
+        chatType: chatTypeFilter || undefined,
         page,
         pageSize,
       });
@@ -191,7 +195,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
     } catch {
       setLoading(false);
     }
-  }, [q, errorsOnly, channelFilter, modelFilter, page, pageSize, goToPage]);
+  }, [q, errorsOnly, channelFilter, modelFilter, botFilter, chatTypeFilter, page, pageSize, goToPage]);
 
   useEffect(() => {
     void loadRecords();
@@ -414,6 +418,33 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
         ],
       },
     ],
+    [],
+  );
+
+  const botGroups: ListboxGroup[] = useMemo(
+    () => [{
+      label: "Bot",
+      options: [
+        { value: "", label: "全部 bot" },
+        ...(facets?.bots ?? []).map((bot) => ({
+          value: bot.botName ?? bot.botId ?? "",
+          label: bot.botName ?? bot.botId ?? "未命名 bot",
+        })),
+      ],
+    }],
+    [facets],
+  );
+
+  const chatTypeGroups: ListboxGroup[] = useMemo(
+    () => [{
+      label: "来源类型",
+      options: [
+        { value: "", label: "全部来源" },
+        { value: "group", label: "群聊" },
+        { value: "dm", label: "私聊" },
+        { value: "routine", label: "routine" },
+      ],
+    }],
     [],
   );
 
@@ -697,6 +728,26 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
             }}
             triggerStyle={{ height: 30 }}
           />
+          <Listbox
+            label="按 bot 筛选"
+            groups={botGroups}
+            value={botFilter ?? ""}
+            onChange={(v) => {
+              setBotFilter(v || null);
+              resetToFirstPage();
+            }}
+            triggerStyle={{ height: 30 }}
+          />
+          <Listbox
+            label="按来源筛选"
+            groups={chatTypeGroups}
+            value={chatTypeFilter}
+            onChange={(v) => {
+              setChatTypeFilter(v === "group" || v === "dm" || v === "routine" ? v : "");
+              resetToFirstPage();
+            }}
+            triggerStyle={{ height: 30 }}
+          />
           <span className="mono" style={{ fontSize: 12, color: "var(--muted)" }}>
             {turnCount} turn{turnCount === 1 ? "" : "s"}
             {total !== turnCount ? ` · ${String(total)} records` : ""}
@@ -869,22 +920,23 @@ function pairMembers(pair: LogRowPair<LogRecord>): LogRecord[] {
 }
  
 function hasSource(r: LogRecord): boolean {
-  return Boolean(r.botName || r.chatType || r.chatName || r.clientName || r.clientVersion || r.conversationId || r.userAgent);
+  return Boolean(r.botId || r.botName || r.chatType || r.chatName || r.clientName || r.clientVersion || r.conversationId || r.userAgent);
 }
  
 /** Short source label for list rows; prefers client name, then conversation, then UA. */
-function sourceLabel(r: LogRecord): string | undefined {
+function sourceLabel(r: LogRecord): ReactNode {
   const bot = r.botName?.trim();
-  const chat = r.chatType === "group"
-    ? "Group: " + (r.chatName?.trim() || "—")
-    : r.chatType === "dm"
-      ? "Direct message"
-      : r.chatType === "routine"
-        ? "Routine"
-        : undefined;
-  if (bot && chat) return bot + " · " + chat;
+  if (r.chatType === "group") {
+    const chat = r.chatName?.trim();
+    if (chat && bot) return `${chat} - ${bot}`;
+    if (chat) return chat;
+    if (bot) return bot;
+  }
+  if (r.chatType === "dm") return bot || "私聊";
+  if (r.chatType === "routine") {
+    return bot ? <>{bot} <span style={{ color: "var(--muted)", fontSize: 11 }}>(routine)</span></> : "routine";
+  }
   if (bot) return bot;
-  if (chat) return chat;
   const name = r.clientName?.trim();
   if (name) {
     const version = r.clientVersion?.trim();
@@ -899,7 +951,7 @@ function sourceLabel(r: LogRecord): string | undefined {
   return undefined;
 }
  
-function pairSourceLabel(pair: LogRowPair<LogRecord>): string | undefined {
+function pairSourceLabel(pair: LogRowPair<LogRecord>): ReactNode {
   for (const member of pairMembers(pair)) {
     const label = sourceLabel(member);
     if (label) return label;

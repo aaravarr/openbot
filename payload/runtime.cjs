@@ -10,6 +10,7 @@ var { URL } = require("url");
 var { toOpenAIMessages } = require("./openai-messages.cjs");
 var openaiStream = require("./openai-stream.cjs");
 var requestLog = require("./request-log.cjs");
+var profileNameCache = Object.create(null);
 
 function sandDir() {
   if (process.env.OPENBOT_SAND_DATA) return process.env.OPENBOT_SAND_DATA;
@@ -166,16 +167,30 @@ function extractChatContextCjs(messages) {
   }
   for (var i = 0; i < rows.length; i++) {
     var message = rows[i];
-    if (!message || message.role !== "system") continue;
+    if (!message || i >= 5) continue;
     var system = text(message.content);
     if (!out.botName) {
-      var name = system.match(/Your agent name is [\"']([^\"'\r\n]{1,200})[\"']/);
-      if (name) out.botName = name[1];
+      var name = system.match(/Your agent name is\s*(?:[\"']([^\"'\r\n]{1,200})[\"']|([^\r\n.]{1,200}))/i)
+        || system.match(/(?:agent|bot)\s+(?:name|title)\s*[:=]\s*(?:[\"']([^\"'\r\n]{1,200})[\"']|([^\r\n.]{1,200}))/i);
+      if (name) out.botName = String(name[1] || name[2] || name[3] || name[4] || "").trim();
     }
     if (!out.botId) {
       var id = system.match(/\/home\/box\/agent-data\/agents\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/profile\.json/i);
       if (id) out.botId = id[1];
     }
+  }
+  if (!out.botName && out.botId) {
+    if (!Object.prototype.hasOwnProperty.call(profileNameCache, out.botId)) {
+      var profileName;
+      try {
+        var profile = JSON.parse(fs.readFileSync(path.join("/home/box/agent-data/agents", out.botId, "profile.json"), "utf8"));
+        if (profile && typeof profile === "object") profileName = profile.name || profile.title;
+      } catch (err) {
+        profileName = undefined;
+      }
+      profileNameCache[out.botId] = typeof profileName === "string" ? profileName.trim() : "";
+    }
+    if (profileNameCache[out.botId]) out.botName = profileNameCache[out.botId];
   }
   for (var j = 0; j < rows.length; j++) {
     var user = rows[j];

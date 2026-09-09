@@ -7,6 +7,10 @@ export type ChatContext = {
 
 type Message = { role?: unknown; content?: unknown };
 
+export type ChatContextOptions = {
+  resolveBotName?: (botId: string) => string | undefined;
+};
+
 function contentText(value: unknown): string {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.map(contentText).join("\n");
@@ -21,17 +25,20 @@ function contentText(value: unknown): string {
 function extractBotIdentity(messages: readonly Message[]): Pick<ChatContext, "botId" | "botName"> {
   let botId: string | undefined;
   let botName: string | undefined;
-  for (const message of messages) {
-    if (message.role !== "system") continue;
+  for (const message of messages.slice(0, 5)) {
     const text = contentText(message.content);
-    if (!botName) botName = text.match(/Your agent name is [\"']([^\"'\r\n]{1,200})[\"']/)?.[1];
+    if (!botName) {
+      const nameMatch = text.match(/Your agent name is\s*(?:[\"']([^\"'\r\n]{1,200})[\"']|([^\r\n.]{1,200}))/i)
+        ?? text.match(/(?:agent|bot)\s+(?:name|title)\s*[:=]\s*(?:[\"']([^\"'\r\n]{1,200})[\"']|([^\r\n.]{1,200}))/i);
+      botName = nameMatch?.[1]?.trim() ?? nameMatch?.[2]?.trim() ?? nameMatch?.[3]?.trim() ?? nameMatch?.[4]?.trim();
+    }
     if (!botId) botId = text.match(/\/home\/box\/agent-data\/agents\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/profile\.json/i)?.[1];
     if (botName && botId) break;
   }
   return { ...(botId ? { botId } : {}), ...(botName ? { botName } : {}) };
 }
 
-export function extractChatContext(messages: readonly Message[] | unknown): ChatContext {
+export function extractChatContext(messages: readonly Message[] | unknown, options: ChatContextOptions = {}): ChatContext {
   const rows = Array.isArray(messages) ? messages : [];
   const identity = extractBotIdentity(rows as Message[]);
   let latest: ChatContext | undefined;
@@ -56,5 +63,9 @@ export function extractChatContext(messages: readonly Message[] | unknown): Chat
     latest = { chatType: "dm" };
   }
 
+  if (!identity.botName && identity.botId && options.resolveBotName) {
+    const resolved = options.resolveBotName(identity.botId)?.trim();
+    if (resolved) identity.botName = resolved;
+  }
   return { ...identity, ...(latest ?? {}) };
 }

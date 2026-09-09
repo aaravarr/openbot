@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -78,6 +78,90 @@ test("install.sh vendors compression deps, retries npmmirror, and warns loudly w
   assert.match(body, /WARN: OpenBot could not npm-install/);
   assert.match(body, /Remediation/);
   assert.match(body, /OPENBOT_SKIP_NPM_INSTALL/);
+});
+
+test("bot-mode falls back from a 403 codeload source to the GitHub archive", (t) => {
+  if (skipOnWindows(t)) return;
+  const data = mkdtempSync(path.join(os.tmpdir(), "openbot-download-fallback-"));
+  const release = mkdtempSync(path.join(os.tmpdir(), "openbot-download-release-"));
+  const releaseRoot = path.join(release, "openbot-main");
+  const host = path.join(data, "host-main.cjs");
+  const archive = path.join(data, "release.tar.gz");
+  const result = path.join(data, "result.json");
+  writeFileSync(host, STOCK);
+  mkdirSync(releaseRoot);
+  writeFileSync(path.join(releaseRoot, "package.json"), "{}\n");
+  execFileSync("tar", ["-czf", archive, "-C", release, "openbot-main"]);
+  const server = http.createServer((req, res) => {
+    if (req.url === "/codeload") {
+      res.writeHead(403);
+      res.end("blocked");
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/gzip" });
+    res.end(readFileSync(archive));
+  });
+  t.after(() => {
+    server.close();
+    rmSync(data, { recursive: true, force: true });
+    rmSync(release, { recursive: true, force: true });
+  });
+  server.listen(0);
+  const port = (server.address() as { port: number }).port;
+  const run = spawnSync("bash", [installSh, "--bot-mode-worker"], {
+    encoding: "utf8",
+    timeout: 30000,
+    env: {
+      ...process.env,
+      OPENBOT_HOST_MAIN: host,
+      OPENBOT_SAND_DATA: data,
+      OPENBOT_BOT_RESULT: result,
+      OPENBOT_BOT_LOG: path.join(data, "install.log"),
+      OPENBOT_BOT_PID: path.join(data, "install.pid"),
+      OPENBOT_TARBALL: `http://127.0.0.1:${port}/codeload`,
+      OPENBOT_ARCHIVE_TARBALL: `http://127.0.0.1:${port}/archive`,
+      OPENBOT_COMMIT: "cafed00d",
+      OPENBOT_SKIP_NPM_INSTALL: "1",
+      OPENBOT_TEST_DOWNLOAD_ONLY: "1",
+    },
+  });
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  const state = JSON.parse(readFileSync(result, "utf8")) as { downloadSource: string };
+  assert.equal(state.downloadSource, "github-archive");
+  assert.match(run.stderr, /source=codeload attempt=1 failed \(HTTP 403/);
+});
+
+test("bot-mode reports every failed source and reuses an existing install", (t) => {
+  if (skipOnWindows(t)) return;
+  const data = mkdtempSync(path.join(os.tmpdir(), "openbot-download-errors-"));
+  const host = path.join(data, "host-main.cjs");
+  const result = path.join(data, "result.json");
+  writeFileSync(host, STOCK);
+  t.after(() => rmSync(data, { recursive: true, force: true }));
+  const common = {
+    ...process.env,
+    OPENBOT_HOST_MAIN: host,
+    OPENBOT_SAND_DATA: data,
+    OPENBOT_BOT_RESULT: result,
+    OPENBOT_BOT_LOG: path.join(data, "install.log"),
+    OPENBOT_BOT_PID: path.join(data, "install.pid"),
+    OPENBOT_TARBALL: "https://127.0.0.1:1/codeload",
+    OPENBOT_ARCHIVE_TARBALL: "https://127.0.0.1:1/archive",
+    OPENBOT_COMMIT: "cafed00d",
+    OPENBOT_SKIP_NPM_INSTALL: "1",
+  };
+  const failed = spawnSync("bash", [installSh, "--bot-mode-worker"], { encoding: "utf8", timeout: 30000, env: common });
+  assert.notEqual(failed.status, 0);
+  assert.match(JSON.parse(readFileSync(result, "utf8")).error, /codeload=000/);
+  assert.match(JSON.parse(readFileSync(result, "utf8")).error, /github-archive=000/);
+
+  mkdirSync(path.join(data, "openbot"), { recursive: true });
+  writeFileSync(path.join(data, "openbot", "package.json"), "{}\n");
+  const reused = spawnSync("bash", [installSh, "--bot-mode-worker"], { encoding: "utf8", timeout: 30000, env: { ...common, OPENBOT_TEST_DOWNLOAD_ONLY: "1" } });
+  assert.equal(reused.status, 0, reused.stderr || reused.stdout);
+  const state = JSON.parse(readFileSync(result, "utf8")) as { downloadSource: string; progress: { summary: string } };
+  assert.equal(state.downloadSource, "existing-install");
+  assert.equal(state.progress.summary, "download failed; reused existing install");
 });
 
 test("install.sh copies the tree, leaves the host stock, and starts the UI", async (t) => {

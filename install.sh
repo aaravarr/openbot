@@ -264,8 +264,13 @@ else
         cp -a "$DEST"/. "$DEPLOY_DIR"/
       fi
     else
-      BOT_FAILURE_ERROR="OpenBot download failed: ${DOWNLOAD_ERRORS[*]}"
-      echo "$BOT_FAILURE_ERROR" >&2
+      DOWNLOAD_FAILURE_ERROR="OpenBot download failed: ${DOWNLOAD_ERRORS[*]}"
+      echo "$DOWNLOAD_FAILURE_ERROR" >&2
+      if [[ "${DOWNLOAD_ERRORS[*]}" =~ =[1-9][0-9][0-9] ]]; then
+        BOT_FAILURE_ERROR="$DOWNLOAD_FAILURE_ERROR"
+      else
+        unset BOT_FAILURE_ERROR
+      fi
       exit 1
     fi
   fi

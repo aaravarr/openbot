@@ -12,7 +12,7 @@ OpenBot is a box supervisor. Callers parse input into `DesiredState` (`OfficialB
 - `align(desired, wrap)` returns `needs-reinstall` when desired is custom and the host file is stock unmarked. That is not official.
 - Infer desired from `openbot-mode`, not from plan-file existence. Official keeps the plan.
 - Bindings are `{ conversation, modelId }`. Derive `hopBaseUrl` with `hopBaseUrl(LOOPBACK_HOP)` → `http://127.0.0.1:9280/v1`. Secret field names are unrepresentable on `Binding`.
-- Provider `apiType` is `chat-completions`, `responses`, or `anthropic`; omitted means `chat-completions`.
+- Provider `apiType` is `chat-completions`, `responses`, or `anthropic`; omitted means `chat-completions`. Responses output limits are clamped before conversion and sent as `max_output_tokens`; Anthropic usage preserves cache-read plus cache-creation counts in `prompt_tokens_details.cached_tokens`. Tool-call IDs use the same UTF-8-byte clamp in TS and payload CJS. Responses `content_filter` wins over `incomplete` length mapping.
 - Live maps file is repo `payload/provider-maps.cjs` only, reloaded per hop call (`delete require.cache` then `require`).
 - `python …/hop-server.py` leftovers are SIGTERM'd. A leftover `hop-server.cjs` pid is stopped. Any other foreign listener on `:9280` is refused, not adopted.
 
@@ -191,6 +191,8 @@ Rules:
 - Path override: payload reads `OPENBOT_PAUSE` first, then `<OPENBOT_SAND_DATA>/openbot-pause.json`, then the directory inferred from `OPENBOT_PLAN`, then the default sand-data path.
 
 ## Hop per-request reload
+
+Protocol conversion is also per request. The payload converter is dependency-free CJS and mirrors `src/hop/protocol-converters.ts`; do not edit one without updating the other. Responses and Anthropic SSE parsing tolerates upstream streams that place consecutive `data:` records without an empty separator.
 
 ## Per-bot pause state
 

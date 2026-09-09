@@ -168,6 +168,10 @@ export type LogRecord = {
   clientVersion?: string;
   conversationId?: string;
   userAgent?: string;
+  botId?: string;
+  botName?: string;
+  chatType?: "group" | "dm" | "routine";
+  chatName?: string;
 };
 
 export type LogDetail = LogRecord & {

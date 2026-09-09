@@ -869,11 +869,22 @@ function pairMembers(pair: LogRowPair<LogRecord>): LogRecord[] {
 }
  
 function hasSource(r: LogRecord): boolean {
-  return Boolean(r.clientName || r.clientVersion || r.conversationId || r.userAgent);
+  return Boolean(r.botName || r.chatType || r.chatName || r.clientName || r.clientVersion || r.conversationId || r.userAgent);
 }
  
 /** Short source label for list rows; prefers client name, then conversation, then UA. */
 function sourceLabel(r: LogRecord): string | undefined {
+  const bot = r.botName?.trim();
+  const chat = r.chatType === "group"
+    ? "Group: " + (r.chatName?.trim() || "—")
+    : r.chatType === "dm"
+      ? "Direct message"
+      : r.chatType === "routine"
+        ? "Routine"
+        : undefined;
+  if (bot && chat) return bot + " · " + chat;
+  if (bot) return bot;
+  if (chat) return chat;
   const name = r.clientName?.trim();
   if (name) {
     const version = r.clientVersion?.trim();
@@ -1273,6 +1284,26 @@ function LogLayer({ detail: d, stacked }: { detail: LogDetail; stacked: boolean 
             <>
               <span className="k">User agent</span>
               <span className="v">{d.userAgent}</span>
+            </>
+          ) : null}
+          {d.botName ? (
+            <>
+              <span className="k">Bot</span>
+              <span className="v">{d.botName}</span>
+            </>
+          ) : null}
+          {d.botId ? (
+            <>
+              <span className="k">Bot ID</span>
+              <span className="v mono">{d.botId}</span>
+            </>
+          ) : null}
+          {d.chatType ? (
+            <>
+              <span className="k">Chat source</span>
+              <span className="v">
+                {d.chatType === "group" ? "Group: " + (d.chatName ?? "—") : d.chatType === "dm" ? "Direct message" : "Routine"}
+              </span>
             </>
           ) : null}
         </div>

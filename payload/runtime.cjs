@@ -155,6 +155,48 @@ function asJsonSchema(value, preserveSchema) {
   return schema;
 }
 
+function extractChatContextCjs(messages) {
+  var rows = Array.isArray(messages) ? messages : [];
+  var out = {};
+  function text(value) {
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) return value.map(text).join("\n");
+    if (value && typeof value === "object") return text(value.text !== undefined ? value.text : value.content);
+    return "";
+  }
+  for (var i = 0; i < rows.length; i++) {
+    var message = rows[i];
+    if (!message || message.role !== "system") continue;
+    var system = text(message.content);
+    if (!out.botName) {
+      var name = system.match(/Your agent name is [\"']([^\"'\r\n]{1,200})[\"']/);
+      if (name) out.botName = name[1];
+    }
+    if (!out.botId) {
+      var id = system.match(/\/home\/box\/agent-data\/agents\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/profile\.json/i);
+      if (id) out.botId = id[1];
+    }
+  }
+  for (var j = 0; j < rows.length; j++) {
+    var user = rows[j];
+    if (!user || user.role !== "user") continue;
+    var content = text(user.content);
+    var queryIndex = content.indexOf("<user_query>");
+    if (queryIndex < 0) continue;
+    var query = content.slice(queryIndex + 12).trim();
+    var group = query.match(/\[Group chat:\s*"([^"\r\n]{1,200})"/);
+    if (group) {
+      out.chatType = "group";
+      out.chatName = group[1];
+    } else {
+      var normal = query.replace(/<system_reminder>[\s\S]*?<\/system_reminder>/gi, "").trim();
+      out.chatType = !normal || /^\[routine\](?:\s|$)/i.test(normal) ? "routine" : "dm";
+      if (out.chatType !== "group") delete out.chatName;
+    }
+  }
+  return out;
+}
+
 function isGptModelId(modelId) {
   return typeof modelId === "string" && modelId.toLowerCase().includes("gpt");
 }
@@ -752,6 +794,7 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
     if (recordedHost) return;
     recordedHost = true;
     extra = extra || {};
+    var chatContext = extractChatContextCjs(toOpenAIMessages(hostMsgs));
     recordHostStream({
       channel: "custom-host",
       inboundEndpoint: "host-stream",
@@ -765,6 +808,10 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
       error: extra.error,
       usage: extra.usage,
       firstTokenMs: extra.firstTokenMs,
+      botId: chatContext.botId,
+      botName: chatContext.botName,
+      chatType: chatContext.chatType,
+      chatName: chatContext.chatName,
       requestBody: {
         messages: jsonSafe(hostMsgs, 0),
         tools: jsonSafe(tools, 0),

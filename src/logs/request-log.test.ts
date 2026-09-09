@@ -342,6 +342,27 @@ test("prune is retention-only: maxRecords no longer caps rows or bodies", () => 
   });
 });
 
+test("request rows record bot identity and chat source from OpenAI messages", () => {
+  withSand(() => {
+    log.saveSettings({ loggingEnabled: true });
+    log.recordHop({
+      id: "req-chat-context-01",
+      status: 200,
+      requestBody: {
+        messages: [
+          { role: "system", content: 'Your agent name is "测试". Profile /home/box/agent-data/agents/1cf5a3e0-2623-468c-ba97-6b14f8f3c12a/profile.json' },
+          { role: "user", content: '<user_query>\n[Group chat: "测试群聊" - with 人事管理]\nhello' },
+        ],
+      },
+    });
+    const row = log.listRequests().items[0] as Record<string, unknown>;
+    assert.equal(row.botId, "1cf5a3e0-2623-468c-ba97-6b14f8f3c12a");
+    assert.equal(row.botName, "测试");
+    assert.equal(row.chatType, "group");
+    assert.equal(row.chatName, "测试群聊");
+  });
+});
+
 test("listRequests filters q, ok, and model newest-first", () => {
   withSand(() => {
     log.saveSettings({ loggingEnabled: true });

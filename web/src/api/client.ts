@@ -7,6 +7,7 @@
 import type {
   BoxState,
   BotInfo,
+  BotModels,
   Command,
   FetchModelsError,
   FetchModelsErrorKind,
@@ -150,6 +151,18 @@ function jsonInit(body: unknown): RequestInit {
 
 export async function loadState(): Promise<BoxState> {
   return (await request("/api/state")) as BoxState;
+}
+
+export async function getBotModels(): Promise<BotModels> {
+  return (await request("/api/bot-models")) as BotModels;
+}
+
+export async function setBotModel(botId: string, modelId: string | null): Promise<BotModels> {
+  return (await request("/api/bot-models", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ botId, modelId }),
+  })) as BotModels;
 }
 
 export async function save(command: Command): Promise<SaveResult> {

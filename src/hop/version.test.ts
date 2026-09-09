@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { skipOnWindows } from "../test-platform.ts";
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const versionCjs = path.join(repoRoot, "payload", "version.cjs");
@@ -46,7 +47,8 @@ test("openBotVersion reads payload/version.json when env is unset", () => {
   assert.equal(result.stdout.trim(), "abc1234deadbeef");
 });
 
-test("openBotVersion falls back to git HEAD beside payload/", () => {
+test("openBotVersion falls back to git HEAD beside payload/", (t) => {
+  if (skipOnWindows(t)) return;
   const repo = mkdtempSync(path.join(os.tmpdir(), "openbot-version-git-"));
   const payload = path.join(repo, "payload");
   mkdirSync(payload);

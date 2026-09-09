@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { skipOnWindows } from "../test-platform.ts";
 
 const hopServer = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../payload/hop-server.cjs");
 
@@ -80,7 +81,8 @@ function glmPlan(origin: string) {
   };
 }
 
-test("hop forwards stream true and pipes SSE before upstream ends", async () => {
+test("hop forwards stream true and pipes SSE before upstream ends", async (t) => {
+  if (skipOnWindows(t)) return;
   let upstreamBody: Record<string, unknown> | undefined;
   const upstream = await listen((req, res) => {
     const chunks: Buffer[] = [];

@@ -59,13 +59,34 @@ test("unwrapJsonSchemaTools closes every nested object schema for gpt models", (
   const tools = unwrapJsonSchemaTools([{ name: "SendToUser", parameters: schema }], "fusionrouter/GpT-5.6-luna");
   const parameters = tools[0]?.function.parameters as any;
   assert.equal(parameters.additionalProperties, false);
+  assert.equal(Object.keys(parameters.properties).at(-1), "additionalProperties");
+  assert.equal(parameters.properties.additionalProperties, false);
   assert.equal(parameters.properties.widget.additionalProperties, false);
+  assert.equal(Object.keys(parameters.properties.widget.properties).at(-1), "additionalProperties");
+  assert.equal(parameters.properties.widget.properties.additionalProperties, false);
   assert.equal(parameters.properties.widget.properties.options.items[0]?.additionalProperties, false);
+  assert.equal(Object.keys(parameters.properties.widget.properties.options.items[0].properties).at(-1), "additionalProperties");
+  assert.equal(parameters.properties.widget.properties.options.items[0].properties.additionalProperties, false);
   assert.equal(parameters.properties.choice.anyOf[0]?.additionalProperties, false);
+  assert.equal(Object.keys(parameters.properties.choice.anyOf[0].properties).at(-1), "additionalProperties");
+  assert.equal(parameters.properties.choice.anyOf[0].properties.additionalProperties, false);
   assert.equal(parameters.$defs.choice.additionalProperties, false);
+  assert.equal(Object.keys(parameters.$defs.choice.properties).at(-1), "additionalProperties");
+  assert.equal(parameters.$defs.choice.properties.additionalProperties, false);
   assert.equal(parameters.patternProperties["^x-"].additionalProperties, false);
+  assert.equal(Object.keys(parameters.patternProperties["^x-"].properties).at(-1), "additionalProperties");
+  assert.equal(parameters.patternProperties["^x-"].properties.additionalProperties, false);
   assert.equal((schema as any).additionalProperties, undefined);
   assert.equal((schema.properties.widget as any).additionalProperties, undefined);
+});
+
+test("unwrapJsonSchemaTools does not add a property key to empty object properties", () => {
+  const schema = { type: "object", properties: { empty: { type: "object", properties: {} } } };
+  const parameters = unwrapJsonSchemaTools([{ name: "tool", parameters: schema }], "gpt-5.6-luna")[0]?.function.parameters as any;
+  assert.equal(parameters.additionalProperties, false);
+  assert.equal(parameters.properties.additionalProperties, false);
+  assert.equal(parameters.properties.empty.additionalProperties, false);
+  assert.deepEqual(parameters.properties.empty.properties, {});
 });
 
 test("unwrapJsonSchemaTools leaves non-gpt models and the original schema unchanged", () => {

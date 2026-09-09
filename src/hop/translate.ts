@@ -44,6 +44,9 @@ function closeObjectSchemas(value: unknown): unknown {
   }
   if (value.type === "object") {
     value.additionalProperties = false;
+    if (isRecord(value.properties) && Object.keys(value.properties).length > 0) {
+      value.properties.additionalProperties = false;
+    }
   }
   for (const child of Object.values(value)) {
     closeObjectSchemas(child);

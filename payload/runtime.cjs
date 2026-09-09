@@ -165,7 +165,12 @@ function closeObjectSchemas(value) {
     return value;
   }
   if (!isRecord(value)) return value;
-  if (value.type === "object") value.additionalProperties = false;
+  if (value.type === "object") {
+    value.additionalProperties = false;
+    if (isRecord(value.properties) && Object.keys(value.properties).length > 0) {
+      value.properties.additionalProperties = false;
+    }
+  }
   var values = Object.values(value);
   for (var j = 0; j < values.length; j++) closeObjectSchemas(values[j]);
   return value;

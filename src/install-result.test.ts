@@ -149,6 +149,80 @@ test("bot-mode guards duplicate workers and cleans stale pid files", async (t) =
   }
 });
 
+test("detached worker records failed and cleans pid when the host file is missing", async (t) => {
+  if (!requireBash(t) || skipOnWindows(t)) return;
+
+  const data = mkdtempSync(path.join(os.tmpdir(), "openbot-bot-mode-hostless-"));
+  try {
+    const result = path.join(data, "result.json");
+    const log = path.join(data, "install.log");
+    const pidFile = path.join(data, "install.pid");
+    const started = execFileSync("bash", [install, "--bot-mode"], {
+      encoding: "utf8",
+      timeout: 5000,
+      env: {
+        ...botModeEnv(data, result, log, pidFile),
+        OPENBOT_HOST_MAIN: "/tmp/openbot-missing-host-main.cjs",
+      },
+    });
+    assert.match(started, /OPENBOT_STATUS=started/);
+
+    for (let i = 0; i < 100; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const state = JSON.parse(readFileSync(result, "utf8"));
+      if (state.status === "failed") {
+        assert.equal(state.error.includes("exited with code"), true);
+        const logText = readFileSync(log, "utf8");
+        assert.match(logText, /host main file is missing/);
+        break;
+      }
+      assert.notEqual(i, 99, "worker never recorded a failed result");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.throws(() => {
+      readFileSync(pidFile, "utf8");
+    });
+  } finally {
+    rmSync(data, { recursive: true, force: true });
+  }
+});
+
+test("foreground worker failure records failed instead of staying running", (t) => {
+  if (!requireBash(t) || skipOnWindows(t)) return;
+
+  const data = mkdtempSync(path.join(os.tmpdir(), "openbot-bot-mode-foreground-"));
+  try {
+    const hostFile = path.join(data, "host-main.cjs");
+    writeFileSync(hostFile, "module.exports = {};\n");
+    const result = path.join(data, "result.json");
+    const log = path.join(data, "install.log");
+    const pidFile = path.join(data, "install.pid");
+    let exitCode = 0;
+    try {
+      execFileSync("bash", [install, "--bot-mode-worker"], {
+        encoding: "utf8",
+        timeout: 30000,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...botModeEnv(data, result, log, pidFile),
+          OPENBOT_HOST_MAIN: hostFile,
+          OPENBOT_TARBALL: "https://127.0.0.1:1/nope.tar.gz",
+          OPENBOT_SKIP_NPM_INSTALL: "1",
+        },
+      });
+    } catch (err) {
+      exitCode = (err as { status?: number }).status ?? 1;
+    }
+    assert.notEqual(exitCode, 0, "worker must fail when the tarball is unreachable");
+    const state = JSON.parse(readFileSync(result, "utf8"));
+    assert.equal(state.status, "failed");
+    assert.match(state.error, /exited with code/);
+    assert.throws(() => readFileSync(pidFile, "utf8"));
+  } finally {
+    rmSync(data, { recursive: true, force: true });
+  }
+});
+
 test("bot-mode returns immediately before requiring Node and preserves default args", (t) => {
   if (!requireBash(t)) return;
 

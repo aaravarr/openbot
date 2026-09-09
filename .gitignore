@@ -41,6 +41,7 @@ app.asar
 .audit/
 .orch/
 *.log
+.agents/worktrees/
 
 # OS and editors
 .DS_Store

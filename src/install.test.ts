@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -39,6 +39,20 @@ function get(url: string): Promise<{ status: number; body: string }> {
       });
     });
     req.on("error", reject);
+  });
+}
+
+function runInstall(args: string[], env: NodeJS.ProcessEnv): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("bash", [installSh, ...args], { env, timeout: 30000 });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", (status) => resolve({ status, stdout, stderr }));
   });
 }
 
@@ -113,10 +127,7 @@ test("bot-mode falls back from a 403 codeload source to the GitHub archive", asy
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const port = address.port;
-  const run = spawnSync("bash", [installSh, "--bot-mode-worker"], {
-    encoding: "utf8",
-    timeout: 30000,
-    env: {
+  const run = await runInstall(["--bot-mode-worker"], {
       ...process.env,
       OPENBOT_HOST_MAIN: host,
       OPENBOT_SAND_DATA: data,
@@ -128,7 +139,6 @@ test("bot-mode falls back from a 403 codeload source to the GitHub archive", asy
       OPENBOT_COMMIT: "cafed00d",
       OPENBOT_SKIP_NPM_INSTALL: "1",
       OPENBOT_TEST_DOWNLOAD_ONLY: "1",
-    },
   });
   assert.equal(run.status, 0, run.stderr || run.stdout);
   const state = JSON.parse(readFileSync(result, "utf8")) as { downloadSource: string };
@@ -167,14 +177,14 @@ test("bot-mode reports every failed source and reuses an existing install", asyn
     OPENBOT_COMMIT: "cafed00d",
     OPENBOT_SKIP_NPM_INSTALL: "1",
   };
-  const failed = spawnSync("bash", [installSh, "--bot-mode-worker"], { encoding: "utf8", timeout: 30000, env: common });
+  const failed = await runInstall(["--bot-mode-worker"], common);
   assert.notEqual(failed.status, 0);
   assert.match(JSON.parse(readFileSync(result, "utf8")).error, /codeload=403/);
   assert.match(JSON.parse(readFileSync(result, "utf8")).error, /github-archive=403/);
 
   mkdirSync(path.join(data, "openbot"), { recursive: true });
   writeFileSync(path.join(data, "openbot", "package.json"), "{}\n");
-  const reused = spawnSync("bash", [installSh, "--bot-mode-worker"], { encoding: "utf8", timeout: 30000, env: { ...common, OPENBOT_TEST_DOWNLOAD_ONLY: "1" } });
+  const reused = await runInstall(["--bot-mode-worker"], { ...common, OPENBOT_TEST_DOWNLOAD_ONLY: "1" });
   assert.equal(reused.status, 0, reused.stderr || reused.stdout);
   const state = JSON.parse(readFileSync(result, "utf8")) as { downloadSource: string; progress: { summary: string } };
   assert.equal(state.downloadSource, "existing-install");

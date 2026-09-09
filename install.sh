@@ -71,6 +71,14 @@ install_main() {
 local BOT_WORKER_MODE=0
 [[ "${1:-}" == "--bot-mode-worker" ]] && BOT_WORKER_MODE=1
 if [[ ! -f "$HOST" ]]; then
+  if [[ "$BOT_WORKER_MODE" == "1" ]]; then
+    # Some Grok Bot Computers keep the host at a different path. Reconcile
+    # needs a real host file to back up and wrap, so an unusable --host-main
+    # is fatal there (the EXIT trap records the failure). A plain install
+    # keeps the long-standing refusal message.
+    echo "OpenBot: host main file is missing ($HOST); bot-mode cannot reconcile." >&2
+    exit 1
+  fi
   echo "OpenBot installs on the Grok Bot Computer. Missing $HOST." >&2
   echo "Do not run this script on a Mac. A laptop hop never sees a Bot turn." >&2
   exit 1
@@ -347,6 +355,14 @@ stop_old_guard_for_update() {
     rm -f "$pidfile" || true
     return 0
   fi
+  if [[ ! -f "$HOST" ]]; then
+    # The daemon pid is live but the recorded host path is unusable on this
+    # box, so the cli-based stop would refuse. Killing the recorded pid and
+    # clearing the pidfile is the same outcome without depending on $HOST.
+    kill "$pid" 2>/dev/null || true
+    rm -f "$pidfile" || true
+    return 0
+  fi
   node --experimental-strip-types src/cli.ts guard --stop \
     --host-main "$HOST" --sand-data "$DATA" >/dev/null 2>&1 || true
 }
@@ -487,11 +503,25 @@ if [[ "${1:-}" == "--bot-mode" ]]; then
   BOT_START_EPOCH_MS="$(bot_epoch_ms)"
   export BOT_RESULT_FILE BOT_LOG_FILE BOT_PID_FILE BOT_STARTED_AT BOT_START_EPOCH_MS
   bot_write_running_result "$BOT_STARTED_AT"
+  # The worker runs this same file in a child shell. It needs the config
+  # variables (HOST, DATA, ...) that install_main reads, the bot_* helper
+  # functions, and BOT_WORKER_DONE=1 semantics inside bot_worker_exit.
+  export HOST DATA DEST DEFAULT_TARBALL REPO_TARBALL NODE_DIST NODE_VERSION
   export -f bot_now bot_epoch_ms bot_write_state bot_write_running_result bot_write_result bot_write_progress bot_mark_stage bot_pid_running bot_print_status bot_worker_exit install_main
   (setsid nohup bash -euo pipefail -c 'trap bot_worker_exit EXIT; BOT_WORKER_DONE=0; install_main --bot-mode-worker' </dev/null >>"$BOT_LOG_FILE" 2>&1) &
   printf '%s\n' "$!" >"${BOT_PID_FILE}.tmp"
   mv -f "${BOT_PID_FILE}.tmp" "$BOT_PID_FILE"
   printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=started' "OPENBOT_RESULT_FILE=$BOT_RESULT_FILE" "OPENBOT_LOG_FILE=$BOT_LOG_FILE" 'OPENBOT_BOT_INSTRUCTION=Reply to the user now: OpenBot installation has started. In the next turn and every 30-60 seconds, run install.sh --bot-status and relay progress. When status=success, send the tunnel URL and QR image to the user with the host SendToUser tool. Do not expose secrets.' '===== END OPENBOT BOT RESULT ====='
   exit 0
+fi
+if [[ "${1:-}" == "--bot-mode-worker" ]]; then
+  # Foreground worker runs (direct --bot-mode-worker invocation) previously
+  # had no EXIT trap, so any failure left the result file at running. Attach
+  # the same trap the detached child uses so every failure path records
+  # status=failed before the process exits.
+  BOT_STARTED_AT="$(bot_now)"
+  BOT_START_EPOCH_MS="$(bot_epoch_ms)"
+  export BOT_RESULT_FILE BOT_LOG_FILE BOT_PID_FILE BOT_STARTED_AT BOT_START_EPOCH_MS
+  trap bot_worker_exit EXIT
 fi
 install_main "$@"

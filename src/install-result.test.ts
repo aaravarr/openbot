@@ -210,7 +210,7 @@ test("bot-mode rolls back when the real staging mv fails", (t) => {
     "bot_write_state() { local rolled_back=\"${10:-}\"; if [[ \"$rolled_back\" == true ]]; then printf '{\"status\":\"%s\",\"rolled_back\":true,\"error\":\"%s\"}' \"$1\" \"$6\"; else printf '{\"status\":\"%s\",\"error\":\"%s\"}' \"$1\" \"$6\"; fi > \"$BOT_RESULT_FILE\"; }",
     "mkdir -p \"$DEST\" \"$STAGING_DIR\"; printf old > \"$DEST/version\"; printf new > \"$STAGING_DIR/version\"",
     "bot_write_state failed 2026-09-09T00:00:00Z 2026-09-09T00:00:01Z '' '' 'Staging switch failed.' '' swapping 'Staging switch failed.' true",
-    "mv() { if [[ \"$2\" == \"$DEST\" && \"$1\" == \"$STAGING_DIR\" ]]; then rm -rf \"$STAGING_DIR\"; return 1; fi; command mv \"$@\"; }",
+    "rm -rf \"$STAGING_DIR\"",
     match[0].replace(/^  /gm, ""),
     "staging_swap",
   ].join("\n") + "\n";

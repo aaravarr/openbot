@@ -169,6 +169,14 @@ export async function save(command: Command): Promise<SaveResult> {
   return (await request("/api/save", jsonInit(command))) as SaveResult;
 }
 
+export async function startOpenAIOAuth(): Promise<{ sessionId: string; authorizationUrl: string; expiresIn: number }> {
+  return (await request("/api/oauth/openai/start", jsonInit({}))) as { sessionId: string; authorizationUrl: string; expiresIn: number };
+}
+
+export async function completeOpenAIOAuth(sessionId: string, callbackUrl: string): Promise<{ ok: true }> {
+  return (await request("/api/oauth/openai/complete", jsonInit({ sessionId, callbackUrl }))) as { ok: true };
+}
+
 /* ---- Gateway pause (global kill-switch; the payload interceptor reads it) ---- */
 export async function getPause(): Promise<GatewayPause> {
   return (await request("/api/pause")) as GatewayPause;

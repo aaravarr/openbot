@@ -214,13 +214,18 @@ function timeoutMessage(err: unknown): string {
 async function fetchProviderModels(input: {
   url: string;
   secret: string;
+  providerId: string;
   fetchFn: FetchLike;
   totalTimeoutMs: number;
 }): Promise<FetchProviderResult> {
   let res: { readonly status: number; readonly ok: boolean; text(): Promise<string> };
   try {
     res = await input.fetchFn(input.url, {
-      headers: { Authorization: `Bearer ${input.secret}`, Accept: "application/json" },
+      headers: {
+        ...(input.secret ? { Authorization: "Bearer " + input.secret } : {}),
+        Accept: "application/json",
+        ...(input.providerId === "opencode" ? { "x-opencode-session": crypto.randomUUID() } : {}),
+      },
       signal: AbortSignal.timeout(input.totalTimeoutMs),
     });
   } catch (err) {
@@ -288,14 +293,16 @@ export async function fetchModelsForProvider(input: {
     return { status: 404, body: { error: { kind: "provider-not-found", message: "provider not found" } } };
   }
   const secret = secretFor(input.secretStore, provider.id);
-  if (secret === undefined) {
+  const keylessOpenCode = provider.id === "opencode" && provider.origin === "https://opencode.ai/zen/go/v1";
+  if (secret === undefined && !keylessOpenCode) {
     return { status: 409, body: { error: { kind: "no-secret", message: "no API key stored for this provider" } } };
   }
   let result: FetchProviderResult;
   try {
     result = await fetchProviderModels({
       url: modelsUrl(provider.origin),
-      secret,
+      secret: secret ?? "",
+      providerId: provider.id,
       fetchFn: input.fetchFn ?? defaultFetch,
       totalTimeoutMs: PROVIDER_MODELS_TOTAL_TIMEOUT_MS,
     });

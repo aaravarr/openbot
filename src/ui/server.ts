@@ -18,6 +18,7 @@ import { reconcile } from "../supervisor/reconcile.ts";
 import { loadSecrets, saveSecrets, upsertSecret } from "../supervisor/secrets.ts";
 import { readExposeFile } from "../supervisor/tunnel.ts";
 import { handleBotModelsApi } from "./bot-models.ts";
+import { completeOpenAIOAuth, startOpenAIOAuth } from "../supervisor/openai-oauth.ts";
 
 type LogSettings = {
   loggingEnabled: boolean;
@@ -733,6 +734,23 @@ async function handleGrokSkillsApi(req: http.IncomingMessage, res: http.ServerRe
 
 async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
   const current = deps();
+  if (req.method === "POST" && url.pathname === "/api/oauth/openai/start") {
+    sendJson(res, 200, startOpenAIOAuth());
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/api/oauth/openai/complete") {
+    try {
+      const parsed = JSON.parse(await readBody(req)) as { sessionId?: unknown; callbackUrl?: unknown };
+      if (typeof parsed.sessionId !== "string" || typeof parsed.callbackUrl !== "string") throw new Error("sessionId and callbackUrl are required");
+      const credential = await completeOpenAIOAuth(parsed.sessionId, parsed.callbackUrl);
+      const store = loadSecrets(current.fs, current.paths.secrets);
+      saveSecrets(current.fs, current.paths.secrets, upsertSecret(store, "openai" as never, JSON.stringify(credential) as never));
+      sendJson(res, 200, { ok: true });
+    } catch (err) {
+      sendJson(res, 400, { error: err instanceof Error ? err.message : "OAuth failed" });
+    }
+    return;
+  }
   if (await handleBotModelsApi(req, res, url, current, readBody, sendJson, catalogFromPlanJson)) return;
   if (req.method === "GET" && (url.pathname === "/api/snapshot" || url.pathname === "/api/state")) {
     const snapshot = await observe(current);

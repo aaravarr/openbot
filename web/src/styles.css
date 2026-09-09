@@ -900,6 +900,10 @@ tr.is-open .row-indicator { border-left-color: var(--primary); }
    Models specifics (master–detail)
    ========================================================================== */
 .master-detail { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: var(--sp-4); align-items: start; min-width: 0; max-width: 100%; }
+.master-detail { display: block; }
+.master-detail > .provider-rail { display: none; }
+.page-title-row > .sub { flex: 1; }
+.models-provider-picker { min-width: min(360px, 100%); }
 .master-detail > * { min-width: 0; max-width: 100%; }
 .provider-rail { display: flex; flex-direction: column; border: 1px solid var(--hairline); border-radius: var(--r-lg); background: var(--surface); overflow: hidden; min-width: 0; max-width: 100%; }
 .provider-rail__head { padding: 12px var(--sp-4); border-bottom: 1px solid var(--hairline); }

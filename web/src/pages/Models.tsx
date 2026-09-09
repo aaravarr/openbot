@@ -41,6 +41,7 @@ import { ModelDialog } from "../components/ModelDialog";
 import { ConfirmDialog } from "../components/overlays";
 import { EditProviderDialog, ReplaceKeyDialog } from "../components/ProviderDialogs";
 import { Badge, Button, EmptyState, IconButton, ParamChip, Spinner } from "../components/ui";
+import { Listbox } from "../components/Listbox";
 
 function usedMessage(result: SaveResult): string {
   const model = result.models.find((m) => m.id === result.activeModelId);
@@ -158,7 +159,7 @@ export function Models({ providerId }: { providerId?: string }) {
   };
 
   const useModel = async (model: Model) => {
-    if (!hasKey(state, model.providerId)) {
+    if (!hasKey(state, model.providerId) && model.providerId !== "opencode") {
       setReplaceKey(true);
       return;
     }
@@ -348,56 +349,36 @@ export function Models({ providerId }: { providerId?: string }) {
       <div className="page-title-row">
         <h1>Models</h1>
         <span className="sub">Providers, models, limits, and keys.</span>
+        <Button variant="secondary" icon={Plus} onClick={() => navigate({ kind: "setup" })}>
+          Add provider
+        </Button>
       </div>
 
-      <div className="master-detail">
-        <aside className="provider-rail" aria-label="Providers">
-          <div className="provider-rail__head">
-            <span className="card__label">Providers · {providers.length}</span>
-          </div>
-          {providers.map((p) => (
-            <button
-              type="button"
-              key={p.id}
-              className={`provider-row${p.id === selectedId ? " is-selected" : ""}`}
-              onClick={() => {
-                setSelectedId(p.id);
-                navigate({ kind: "models", providerId: p.id });
-              }}
-              aria-current={p.id === selectedId ? "true" : undefined}
-            >
-              <div className="provider-row__main">
-                <div className="provider-row__name">
-                  {p.name}
-                  {p.id === activeProviderId ? <Zap aria-hidden="true" /> : null}
-                </div>
-                <div className="provider-row__origin" title={p.origin}>{p.origin}</div>
-              </div>
-              {hasKey(state, p.id) ? <Badge tone="success">Key</Badge> : <Badge tone="warning">No key</Badge>}
-              <ChevronRight style={{ width: 14, height: 14, color: "var(--muted)", flexShrink: 0 }} aria-hidden="true" />
-            </button>
-          ))}
-          <div className="provider-rail__foot">
-            <Button variant="secondary" style={{ width: "100%" }} onClick={() => navigate({ kind: "setup" })}>
-              <Plus aria-hidden="true" />
-              Add provider
-            </Button>
-          </div>
-        </aside>
-
+      <div className="models-main">
         {selected ? (
           <section className="card" aria-label={selected.name}>
             <div className="card__head">
-              <div className="card__head-main">
-                <div className="row gap-2 wrap">
-                  <span style={{ fontSize: 16, fontWeight: 600 }}>{selected.name}</span>
-                  {selected.id === activeProviderId ? (
-                    <Badge tone="accent" icon={Zap}>
-                      Active
-                    </Badge>
-                  ) : null}
-                </div>
-                <div className="origin-line">{selected.origin}</div>
+              <div className="card__head-main models-provider-picker">
+                <Listbox
+                  label="Provider"
+                  value={selectedId}
+                  onChange={(value) => {
+                    setSelectedId(value);
+                    navigate({ kind: "models", providerId: value });
+                  }}
+                  groups={[{
+                    label: "Providers",
+                    options: providers.map((provider) => ({
+                      value: provider.id,
+                      label: provider.name,
+                      sublabel: provider.origin,
+                      badges: hasKey(state, provider.id) ? <Badge tone="success">Key</Badge> : <Badge tone="warning">No key</Badge>,
+                    })),
+                  }]}
+                  placeholder="Select a provider"
+                  emptyText="No providers"
+                />
+                <div className="origin-line" title={selected.origin}>{selected.origin}</div>
               </div>
               <div className="row gap-2 wrap">
                 {selectedHasKey ? (
@@ -435,7 +416,7 @@ export function Models({ providerId }: { providerId?: string }) {
               </div>
             </div>
 
-            {!selectedHasKey ? (
+            {!selectedHasKey && selected.id !== "opencode" ? (
               <div className="card__body" style={{ paddingBottom: 12 }}>
                 <div className="notice notice--warn">
                   <TriangleAlert aria-hidden="true" />
@@ -518,7 +499,7 @@ export function Models({ providerId }: { providerId?: string }) {
               </table>
             </div>
 
-            <div className="provider-rail__foot">
+            <div className="models-card-foot">
               <Button variant="ghost" icon={Plus} onClick={() => setModelDialog({ open: true, model: null })}>
                 Add model
               </Button>

@@ -22,6 +22,11 @@ Never print, commit, or paste API keys. Show `secrets.json` shape with `"<stored
 ## When to use
 
 Per-bot model overrides are stored in openbot-bot-models.json as { "assignments": { "<botId>": "<modelId>" } } (override with OPENBOT_BOT_MODELS). The file is read on every runtime and hop request; missing or corrupt JSON means no assignments. Resolution order is bot assignment, then conversation binding/global model. Use GET /api/bot-models to read assignments and available catalog model IDs, and PUT /api/bot-models with { "botId": "<id>", "modelId": "<catalog model id>" }; null or an empty string clears one assignment. An overall { "assignments": { ... } } body replaces all assignments. Invalid model IDs are rejected with HTTP 400 on save. If an assigned model is later removed from the catalog, the stale assignment does not fail the chat: the runtime and hop fall back to the global model and log a WARN event (bot-models.stale). The Bots page edits both this override and the per-bot pause switch; bot identities come from GET /api/bots.
+
+## Built-in providers
+
+New provider setup is curated to four choices: OpenCode (Free, no key), OpenAI (API key or OpenAI OAuth), OpenRouter (API key), and Custom (any OpenAI-compatible endpoint). Existing catalog rows for older provider ids remain valid and continue to route generically; curation only changes the new-provider UI.
+
 Apply this skill when the user wants to configure OpenBot: set up a provider, switch models or thinking, add or rotate a key, go official or custom, turn the tunnel on/off, pause or resume the gateway, change log settings, or edit `/home/box/sand-data` files (`openbot-plan.json`, `secrets.json`, `openbot-logs.json`, `openbot-pause.json`, `openbot-mode`, `openbot-expose`). Also when diagnosing an unexpected flip to official or custom: read `openbot-audit.jsonl`.
 
 ## JSON vs API save vs CLI

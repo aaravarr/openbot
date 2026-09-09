@@ -367,16 +367,11 @@ From `web/src/lib/presets.ts`. Use for filling plan/API `origin` (and a suggeste
 
 | Name | origin |
 |---|---|
-| OpenAI | `https://api.openai.com/v1` |
-| DeepSeek | `https://api.deepseek.com` |
-| Zhipu GLM | `https://open.bigmodel.cn/api/paas/v4` |
-| Kimi | `https://api.moonshot.cn/v1` |
-| Qwen | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| OpenRouter | `https://openrouter.ai/api/v1` |
-| Groq | `https://api.groq.com/openai/v1` |
-| xAI | `https://api.x.ai/v1` |
+| OpenCode (Free) | https://opencode.ai/zen/go/v1; no secret; sends x-opencode-session |
+| OpenAI | https://api.openai.com/v1; API key or OAuth |
+| OpenRouter | https://openrouter.ai/api/v1; API key plus HTTP-Referer and X-Title |
 
-Custom: any OpenAI-compatible base URL.
+Custom: any OpenAI-compatible base URL. Existing catalogs with older provider ids remain routable as generic providers.
 
 ## Hop reasoning maps
 

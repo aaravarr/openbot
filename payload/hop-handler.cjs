@@ -430,13 +430,69 @@ function lookupRoute(plan, requested) {
   return null;
 }
 
-function loadKey(providerId) {
+function loadStoredSecret(providerId) {
   var store = readJson(secretsPath());
   var providers = store && store.providers;
   if (!isRecord(providers) || typeof providers[providerId] !== "string") {
     return "";
   }
   return providers[providerId];
+}
+
+function requestOAuthRefresh(refreshToken) {
+  return new Promise(function (resolve, reject) {
+    var payload = Buffer.from("grant_type=refresh_token&client_id=app_EMoamEEZ73f0CkXaXp7hrann&refresh_token=" + encodeURIComponent(refreshToken), "utf8");
+    var req = https.request({
+      hostname: "auth.openai.com", path: "/oauth/token", method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": String(payload.length), Accept: "application/json" },
+    }, function (res) {
+      collectResponse(res).then(function (out) {
+        var parsed;
+        try { parsed = JSON.parse(out.raw.toString("utf8")); } catch (err) { parsed = null; }
+        if ((out.status || 500) < 200 || (out.status || 500) >= 300 || !parsed || typeof parsed.access_token !== "string") {
+          reject(new Error("openbot-hop: OpenAI OAuth refresh failed"));
+          return;
+        }
+        resolve(parsed);
+      }, reject);
+    });
+    req.on("error", reject);
+    req.setTimeout(TIMEOUT_MS, function () { req.destroy(new Error("openbot-hop: OAuth refresh timeout")); });
+    req.end(payload);
+  });
+}
+
+function saveStoredSecret(providerId, value) {
+  try {
+    var file = secretsPath();
+    var store = readJson(file) || { providers: {} };
+    if (!isRecord(store.providers)) store.providers = {};
+    store.providers[providerId] = value;
+    var tmp = file + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(store, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(tmp, file);
+  } catch (err) { /* refresh persistence is best-effort; the request still uses the new token */ }
+}
+
+async function loadKey(providerId, provider) {
+  var raw = loadStoredSecret(providerId);
+  if (!raw) return "";
+  if (providerId === "opencode" && !raw.trim()) return "";
+  if (providerId !== "openai") return raw;
+  var parsed;
+  try { parsed = JSON.parse(raw); } catch (err) { return raw; }
+  if (!isRecord(parsed) || parsed.kind !== "openai-oauth" || typeof parsed.accessToken !== "string") return raw;
+  var expiresAt = Number(parsed.expiresAt || 0);
+  if (expiresAt > Math.floor(Date.now() / 1000) + 60) return parsed.accessToken;
+  if (typeof parsed.refreshToken !== "string" || !parsed.refreshToken) return parsed.accessToken;
+  try {
+    var refreshed = await requestOAuthRefresh(parsed.refreshToken);
+    var next = Object.assign({}, parsed, { accessToken: refreshed.access_token, refreshToken: refreshed.refresh_token || parsed.refreshToken, expiresAt: Math.floor(Date.now() / 1000) + Math.max(1, Number(refreshed.expires_in) || 3600) });
+    saveStoredSecret(providerId, JSON.stringify(next));
+    return next.accessToken;
+  } catch (err) {
+    return parsed.accessToken;
+  }
 }
 
 function levelsHaveDefault(model) {
@@ -595,6 +651,14 @@ function openUpstream(urlStr, body, key, inbound, apiType) {
       headers["anthropic-version"] = "2023-06-01";
       delete headers.Authorization;
     }
+  var origin = String((inbound && inbound.providerOrigin) || "");
+  var providerId = String((inbound && inbound.providerId) || "");
+  if (providerId === "opencode") {
+    headers["x-opencode-session"] = (inbound && inbound.opencodeSession) || require("crypto").randomUUID();
+  }
+  if (providerId === "openrouter") {
+    headers["HTTP-Referer"] = "https://openbot.local";
+    headers["X-Title"] = "OpenBot";
   }
   applyOpenBotVersionHeader(headers);
   var ua = inboundUserAgent(inbound);
@@ -1214,8 +1278,9 @@ async function handleCompletions(req, res) {
     noteWireBytes(outboundBody);
     fields.requestBody = outboundBody;
     fields.stream = body.stream === true;
-    var key = loadKey(route.provider.id);
-    if (!key) {
+    var requestInbound = { headers: req.headers || {}, providerId: route.provider.id, providerOrigin: route.provider.origin };
+    var key = await loadKey(route.provider.id, route.provider);
+    if (!key && route.provider.id !== "opencode") {
       var noSecret = { error: { message: "no secret for this provider" } };
       record({ status: 503, error: noSecret.error.message, responseBody: noSecret });
       sendJson(res, 503, noSecret);

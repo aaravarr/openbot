@@ -7,6 +7,7 @@ import { parseModelId, parseModelSlug } from "../supervisor/plan.ts";
 import { boxPathsFrom } from "../supervisor/paths.ts";
 import { parseProviderId } from "../supervisor/secrets.ts";
 import { boxFromSavedMode, parseInstallCommand, parseUpstreamOrigin, repoRootFromMeta } from "./argv.ts";
+import { skipOnWindows } from "../test-platform.ts";
 
 function testPaths() {
   return boxPathsFrom({ repoRoot: "/tmp/openbot", sandData: "/tmp/openbot-data" });
@@ -136,7 +137,8 @@ test("guard is an undocumented word command", () => {
   assert.equal(withFlags.json, true);
 });
 
-test("cli file URL resolves to the directory that contains src/", () => {
+test("cli file URL resolves to the directory that contains src/", (t) => {
+  if (skipOnWindows(t)) return;
   const metaUrl = pathToFileURL("/tmp/openbot-pkg/src/cli.ts").href;
   assert.equal(repoRootFromMeta(metaUrl), "/tmp/openbot-pkg");
   const parsed = parseInstallCommand({

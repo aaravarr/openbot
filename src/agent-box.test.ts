@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { skipOnWindows } from "./test-platform.ts";
 
 const script = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "agent-box", "install.sh");
 
@@ -73,7 +74,8 @@ test("agent-box --help mentions the one-line install", () => {
   assert.match(result.stderr, /agent-box\/install\.sh/);
 });
 
-test("agent-box serves docs, exec, and files on loopback", async () => {
+test("agent-box serves docs, exec, and files on loopback", async (t) => {
+  if (skipOnWindows(t)) return;
   const data = mkdtempSync(path.join(os.tmpdir(), "agent-box-live-"));
   const port = String(19000 + Math.floor(Math.random() * 500));
   const env = {

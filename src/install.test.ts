@@ -7,6 +7,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { OPENBOT_MARKER } from "./domain/types.ts";
+import { skipOnWindows } from "./test-platform.ts";
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const installSh = path.join(repoRoot, "install.sh");
@@ -79,7 +80,8 @@ test("install.sh vendors compression deps, retries npmmirror, and warns loudly w
   assert.match(body, /OPENBOT_SKIP_NPM_INSTALL/);
 });
 
-test("install.sh copies the tree, leaves the host stock, and starts the UI", async () => {
+test("install.sh copies the tree, leaves the host stock, and starts the UI", async (t) => {
+  if (skipOnWindows(t)) return;
   const box = mkdtempSync(path.join(os.tmpdir(), "openbot-install-box-"));
   const src = mkdtempSync(path.join(os.tmpdir(), "openbot-install-src-"));
   const hostMain = path.join(box, "sand-host", "host-main.cjs");

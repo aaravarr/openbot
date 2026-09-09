@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { skipOnWindows } from "./test-platform.ts";
 import {
   BLOCKED_REMEDY,
   SOURCE_UNAVAILABLE_MESSAGE,
@@ -176,7 +177,8 @@ test("nameFromSkillMd reads frontmatter name", () => {
   assert.equal(nameFromSkillMd(Buffer.from("no heading"), "fallback"), "fallback");
 });
 
-test("grokWorkflowsDir uses OPENBOT_WORKFLOWS then OPENBOT_AGENT_DATA", () => {
+test("grokWorkflowsDir uses OPENBOT_WORKFLOWS then OPENBOT_AGENT_DATA", (t) => {
+  if (skipOnWindows(t)) return;
   const workflows = path.join(tmpDir("ob-wf-"), "workflows");
   assert.equal(grokWorkflowsDir({ OPENBOT_WORKFLOWS: workflows }), workflows);
   const agent = tmpDir("ob-ad-");
@@ -422,7 +424,8 @@ test("install refuses unknown slug and source-unavailable", async () => {
   }
 });
 
-test("blocked dest has no install when workflows parent is not writable", async () => {
+test("blocked dest has no install when workflows parent is not writable", async (t) => {
+  if (skipOnWindows(t)) return;
   const repo = tmpDir("ob-src-");
   writeLocalSkill(repo, "openbot-config", { "SKILL.md": SAMPLE_SKILL });
   const parent = tmpDir("ob-ro-");

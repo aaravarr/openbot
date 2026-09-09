@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isHostMainArgv, isOpengrokHopArgv } from "./procs.ts";
+import { isHostMainArgv, isHopServerArgv, isOpengrokHopArgv } from "./procs.ts";
 
 const host = "/home/box/sand-host/host-main.cjs";
 
@@ -32,4 +32,11 @@ test("opengrok hop matcher is python plus hop-server.py", () => {
   assert.equal(isOpengrokHopArgv("python3 /home/box/sand-data/hop-server.py", 1, 88), true);
   assert.equal(isOpengrokHopArgv("node /home/box/sand-data/openbot/payload/hop-server.cjs", 1, 88), false);
   assert.equal(isOpengrokHopArgv("/bin/zsh -c python3 /home/box/sand-data/hop-server.py", 1, 88), false);
+});
+
+test("OpenBot hop matcher requires node plus the exact hop-server path", () => {
+  const hop = "/home/box/sand-data/openbot/payload/hop-server.cjs";
+  assert.equal(isHopServerArgv("node " + hop, hop, 1, 88), true);
+  assert.equal(isHopServerArgv("node /tmp/other/hop-server.cjs", hop, 1, 88), false);
+  assert.equal(isHopServerArgv("/bin/sh -c node " + hop, hop, 1, 88), false);
 });

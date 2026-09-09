@@ -32,6 +32,8 @@ export type ProcDeps = {
   }): OwnedPid;
   stop(pid: OwnedPid): void;
   hostPids(hostMain: AbsPath): OwnedPid[];
+  /** Finds a known OpenBot hop-server process even when its pidfile is missing. */
+  hopServerPids?(hopServer: AbsPath): OwnedPid[];
   opengrokHopPids(): OwnedPid[];
   term(pid: OwnedPid): void;
   syntaxCheck(file: AbsPath): { ok: true } | { ok: false; stderr: string };
@@ -158,6 +160,19 @@ export function isOpengrokHopArgv(args: string, selfPid: number, pid: number): b
   return hasPy && hasHop;
 }
 
+export function isHopServerArgv(args: string, hopServer: string, selfPid: number, pid: number): boolean {
+  if (pid === selfPid) {
+    return false;
+  }
+  if (/\b(zsh|bash|sh|dash)\b/.test(args) && args.includes(" -c ")) {
+    return false;
+  }
+  const tokens = args.trim().split(/\s+/u);
+  const hasNode = tokens.some((token) => /(^|\/)node$/.test(token));
+  const hasHop = tokens.some((token) => token === hopServer);
+  return hasNode && hasHop;
+}
+
 function eachPsLine(visit: (pid: number, args: string) => void): void {
   const result = spawnSync("ps", ["-ax", "-o", "pid=,args="], { encoding: "utf8" });
   if (result.status !== 0 && result.status !== 1) {
@@ -243,6 +258,15 @@ export function nodeProcs(): ProcDeps {
       const pids: OwnedPid[] = [];
       eachPsLine((pid, args) => {
         if (isHostMainArgv(args, hostMain, process.pid, pid)) {
+          pids.push(parseOwnedPid(pid));
+        }
+      });
+      return pids;
+    },
+    hopServerPids(hopServer) {
+      const pids: OwnedPid[] = [];
+      eachPsLine((pid, args) => {
+        if (isHopServerArgv(args, hopServer, process.pid, pid)) {
           pids.push(parseOwnedPid(pid));
         }
       });

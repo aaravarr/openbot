@@ -57,6 +57,7 @@ function fakeProcs(state: {
   serviceOurs?: boolean;
   serviceForeign?: boolean;
   leftoverHop?: boolean;
+  orphanHop?: boolean;
   staleUi?: boolean;
   opengrokHop?: boolean;
   syntaxFail?: boolean;
@@ -66,6 +67,7 @@ function fakeProcs(state: {
   let serviceForeign = state.serviceForeign === true;
   let leftoverHop = state.leftoverHop === true;
   let hopPid: number | undefined = leftoverHop ? 42 : undefined;
+  let orphanHop = state.orphanHop === true;
   let uiPid: number | undefined = serviceOurs || state.staleUi === true ? 43 : undefined;
   let guardPid: number | undefined = state.guardRunning === true ? 77 : undefined;
   const started: string[] = [];
@@ -79,7 +81,7 @@ function fakeProcs(state: {
     checked,
     async port(_host, port) {
       if (port === SERVICE_PORT) {
-        return serviceOurs || serviceForeign;
+        return serviceOurs || serviceForeign || orphanHop;
       }
       return false;
     },
@@ -111,6 +113,9 @@ function fakeProcs(state: {
         leftoverHop = false;
         hopPid = undefined;
       }
+      if (pid === 42 && state.orphanHop === true) {
+        orphanHop = false;
+      }
       if (pid === uiPid) {
         serviceOurs = false;
         uiPid = undefined;
@@ -121,6 +126,9 @@ function fakeProcs(state: {
     },
     hostPids() {
       return [parseOwnedPid(99)];
+    },
+    hopServerPids() {
+      return state.orphanHop === true && orphanHop ? [parseOwnedPid(42)] : [];
     },
     opengrokHopPids() {
       if (state.opengrokHop === true) {
@@ -300,6 +308,14 @@ test("leftover hop-server.cjs is stopped when the service is unified", async () 
   assert.equal(ctx.procs.stopped.includes(42), true);
   assert.equal(ctx.fs.exists(ctx.paths.hopPid), false);
   assert.equal(ctx.procs.started.some((row) => row.includes("hop-server")), false);
+});
+
+test("an orphaned unified hop-server without a pidfile is stopped before UI restart", async () => {
+  const ctx = setup(STOCK, { serviceOurs: true, orphanHop: true });
+  const result = await reconcile(zhipu(ctx.paths), ctx.deps, { reloadService: true });
+  assert.equal(result.kind, "ok");
+  assert.equal(ctx.procs.stopped.includes(42), true);
+  assert.equal(ctx.procs.started.some((row) => row.includes("server.ts")), true);
 });
 
 test("stale UI on the old two-port layout is stopped and replaced", async () => {

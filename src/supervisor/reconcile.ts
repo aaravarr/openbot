@@ -413,6 +413,13 @@ export async function reconcile(
   for (const pid of deps.procs.opengrokHopPids()) {
     deps.procs.stop(pid);
   }
+  // Older layouts could leave the unified-port hop alive without its pidfile.
+  // Identify only the known OpenBot hop entrypoint, then clear it before the
+  // UI service is classified or restarted; otherwise the hop wins 9280 and
+  // every UI route returns its 404 fallback.
+  for (const pid of deps.procs.hopServerPids?.(deps.paths.hopServer) ?? []) {
+    deps.procs.stop(pid);
+  }
   stopLeftoverHopOnly(deps);
   await stopStaleService(deps);
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import test from "node:test";
 
@@ -9,6 +9,8 @@ import test from "node:test";
 process.env.OPENBOT_REPO = "/tmp/openbot-repo";
 process.env.OPENBOT_SAND_DATA = "/tmp/openbot-sand-data";
 process.env.OPENBOT_HOST_MAIN = "/tmp/openbot-sand-host/host-main.cjs";
+mkdirSync("/tmp/openbot-repo/ui", { recursive: true });
+writeFileSync("/tmp/openbot-repo/ui/index.html", "<!doctype html><html><body>test ui</body></html>\n");
 
 const { handleRequest, wrapMode } = await import("./server.ts");
 
@@ -59,6 +61,18 @@ function request(
   });
 }
 
+function requestText(port: number, pathname: string): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: "127.0.0.1", port, path: pathname, method: "GET" }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 test("wrapMode is strict: only an exact official mode file means official", () => {
   assert.equal(wrapMode("official\n"), "official");
   assert.equal(wrapMode(" official \n"), "official");
@@ -80,6 +94,21 @@ test("GET /api/pause defaults to unpaused when no state file exists", async () =
     const res = await request(port, "/api/pause", "GET");
     assert.equal(res.status, 200);
     assert.deepEqual(res.json, { paused: false, at: null, note: null });
+  } finally {
+    server.close();
+    server.closeAllConnections();
+  }
+});
+
+test("UI root serves index.html and state remains an API route", async () => {
+  const { server, port } = await listen();
+  try {
+    const root = await requestText(port, "/");
+    assert.equal(root.status, 200);
+    assert.match(root.body, /<!doctype html>/i);
+
+    const state = await request(port, "/api/state", "GET");
+    assert.equal(state.status, 200);
   } finally {
     server.close();
     server.closeAllConnections();

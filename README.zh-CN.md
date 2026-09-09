@@ -4,7 +4,7 @@
 
 **在 Grok Bot 里用你自己的模型。**
 
-Grok Bot 0.30 已经有一台 Computer。OpenBot 让这台 Computer 调用 OpenCode 免费模型、OpenAI、OpenRouter，或通过 Custom 接入任何 OpenAI 兼容接口 —— 不用离开 Grok Bot。想用回官方 Grok 时，一键即可。
+Grok Bot 0.30 已经有一台 Computer。OpenBot 让这台 Computer 调用 OpenAI、OpenRouter、OpenCode Zen（注册一次、贴入 key 即可用 $0 模型），或通过 Custom 接入任何 OpenAI 兼容接口 —— 不用离开 Grok Bot。想用回官方 Grok 时，一键即可。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash

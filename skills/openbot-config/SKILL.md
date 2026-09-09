@@ -23,7 +23,7 @@ Per-bot model overrides are stored in openbot-bot-models.json as { "assignments"
 
 ### Built-in providers
 
-New provider setup is curated to four choices: OpenCode (Free, no key), OpenAI (API key or OpenAI OAuth), OpenRouter (API key), and Custom (any OpenAI-compatible endpoint). Existing catalog rows for older provider ids remain valid and continue to route generically; curation only changes the new-provider UI.
+New provider setup is curated to four choices, in order: OpenAI (API key or OpenAI OAuth), OpenRouter (API key), OpenCode Zen (API key), and Custom (any OpenAI-compatible endpoint). OpenCode Zen lives at https://opencode.ai/zen/v1: sign up once at opencode.ai, create an API key, paste it into OpenBot, and the built-in $0 model list (big-pickle, glm-5-free, glm-4.7-free, deepseek-v4-flash-free, kimi-k2.5-free, hy3-free, hy3-preview-free, grok-code) is available out of the box; Fetch models still pulls the full upstream list. The hop sends a deterministic x-opencode-session per provider+conversation (box-derived, never taken from inbound client headers). Existing catalog rows for older provider ids remain valid and continue to route generically; curation only changes the new-provider UI.
 
 Apply this skill when the user wants to configure OpenBot: set up a provider, switch models or thinking, add or rotate a key, go official or custom, turn the tunnel on/off, pause or resume the gateway, change log settings, or edit `/home/box/sand-data` files (`openbot-plan.json`, `secrets.json`, `openbot-logs.json`, `openbot-pause.json`, `openbot-mode`, `openbot-expose`). Also when diagnosing an unexpected flip to official or custom: read `openbot-audit.jsonl`.
 

@@ -32,3 +32,40 @@ test("OpenAI OAuth exchanges a callback code with a mock fetch", async () => {
 test("OpenAI OAuth rejects a callback from the wrong host", () => {
   assert.throws(() => parseCallbackUrl("https://example.com/callback?code=x&state=y"), /Callback URL/);
 });
+
+test("OpenAI OAuth surfaces an error callback instead of a bare parse failure", () => {
+  assert.throws(
+    () => parseCallbackUrl("http://localhost:1455/auth/callback?error=access_denied&error_description=user+cancelled"),
+    /user cancelled/,
+  );
+});
+
+test("OpenAI OAuth rejects a replayed or unknown session", async () => {
+  resetOpenAIOAuthForTests();
+  const started = startOpenAIOAuth();
+  const auth = new URL(started.authorizationUrl);
+  const callback = "http://localhost:1455/auth/callback?code=once&state=" + encodeURIComponent(auth.searchParams.get("state")!);
+  const okFetch = async () => new Response(JSON.stringify({ access_token: "at", refresh_token: "rt" }), { status: 200 });
+  await completeOpenAIOAuth(started.sessionId, callback, okFetch);
+  await assert.rejects(() => completeOpenAIOAuth(started.sessionId, callback, okFetch), /session expired/);
+});
+
+test("OpenAI OAuth rejects a state mismatch from a different session", async () => {
+  resetOpenAIOAuthForTests();
+  const started = startOpenAIOAuth();
+  const other = startOpenAIOAuth();
+  const otherState = new URL(other.authorizationUrl).searchParams.get("state")!;
+  const callback = "http://localhost:1455/auth/callback?code=x&state=" + encodeURIComponent(otherState);
+  await assert.rejects(() => completeOpenAIOAuth(started.sessionId, callback, async () => new Response("{}", { status: 200 })), /state validation failed/);
+});
+
+test("OpenAI OAuth rejects a non-JSON token response", async () => {
+  resetOpenAIOAuthForTests();
+  const started = startOpenAIOAuth();
+  const auth = new URL(started.authorizationUrl);
+  const callback = "http://localhost:1455/auth/callback?code=x&state=" + encodeURIComponent(auth.searchParams.get("state")!);
+  await assert.rejects(
+    () => completeOpenAIOAuth(started.sessionId, callback, async () => new Response("<html>login</html>", { status: 502 })),
+    /non-JSON/,
+  );
+});

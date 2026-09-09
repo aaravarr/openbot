@@ -312,11 +312,10 @@ export function applyUiCommand(input: {
   if (command.kind === "upsert-provider") {
     const providerId = parseProviderId(slugify(command.name));
     const origin = parseUpstreamOrigin(command.origin);
-    const keylessOpenCode = providerId === parseProviderId("opencode") && origin === parseUpstreamOrigin("https://opencode.ai/zen/go/v1");
     const secret = command.secret.trim();
     const oauthOpenAi = providerId === parseProviderId("openai") && secret === "oauth";
     const existingOpenAiCredential = providerId === parseProviderId("openai") && catalog.providers.some((row) => row.id === providerId);
-    if (!secret && !keylessOpenCode && !existingOpenAiCredential && !oauthOpenAi) {
+    if (!secret && !existingOpenAiCredential && !oauthOpenAi) {
       throw new Error("OpenBot: this provider needs an API key or OAuth credential");
     }
     const provider: Provider = {

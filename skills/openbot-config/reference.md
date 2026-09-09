@@ -343,9 +343,9 @@ From `web/src/lib/presets.ts`. Use for filling plan/API `origin` (and a suggeste
 
 | Name | origin |
 |---|---|
-| OpenCode (Free) | https://opencode.ai/zen/go/v1; no secret; sends x-opencode-session |
 | OpenAI | https://api.openai.com/v1; API key or OAuth |
 | OpenRouter | https://openrouter.ai/api/v1; API key plus HTTP-Referer and X-Title |
+| OpenCode Zen | https://opencode.ai/zen/v1; API key; deterministic x-opencode-session per provider+conversation; built-in $0 model list |
 
 Custom: any OpenAI-compatible base URL. Existing catalogs with older provider ids remain routable as generic providers.
 

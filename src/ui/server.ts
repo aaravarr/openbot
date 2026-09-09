@@ -3,7 +3,7 @@ import http from "node:http";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { LOOPBACK, SERVICE_PORT, type Catalog, type Snapshot, type TunnelObserved } from "../domain/types.ts";
+import { LOOPBACK, SERVICE_PORT, type Catalog, type ProviderId, type Snapshot, type TunnelObserved } from "../domain/types.ts";
 import { grokSkillsStatus, installGrokSkills, isSkillSlug } from "../grok-skills.ts";
 import { officialBox } from "../parse/argv.ts";
 import { fetchModelsForProvider } from "../catalog/provider-models.ts";
@@ -15,11 +15,10 @@ import { catalogFromPlanJson } from "../supervisor/plan.ts";
 import { observe, type SupervisorDeps } from "../supervisor/observe.ts";
 import { nodeFs, nodeProcs } from "../supervisor/procs.ts";
 import { reconcile } from "../supervisor/reconcile.ts";
-import { loadSecrets, saveSecrets, upsertSecret } from "../supervisor/secrets.ts";
+import { loadSecrets, parseSecretBytes, saveSecrets, upsertSecret } from "../supervisor/secrets.ts";
 import { readExposeFile } from "../supervisor/tunnel.ts";
 import { completeOpenAIOAuth, startOpenAIOAuth } from "../supervisor/openai-oauth.ts";
 import { handleBotModelsApi } from "./bot-models.ts";
-import { completeOpenAIOAuth, startOpenAIOAuth } from "../supervisor/openai-oauth.ts";
 
 type LogSettings = {
   loggingEnabled: boolean;
@@ -753,7 +752,18 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       if (typeof parsed.sessionId !== "string" || typeof parsed.callbackUrl !== "string") throw new Error("sessionId and callbackUrl are required");
       const credential = await completeOpenAIOAuth(parsed.sessionId, parsed.callbackUrl);
       const store = loadSecrets(current.fs, current.paths.secrets);
-      saveSecrets(current.fs, current.paths.secrets, upsertSecret(store, "openai" as never, JSON.stringify(credential) as never));
+      try {
+        saveSecrets(
+          current.fs,
+          current.paths.secrets,
+          upsertSecret(store, "openai" as ProviderId, parseSecretBytes(JSON.stringify(credential))),
+        );
+      } catch {
+        // The exchange already consumed the one-use authorization code. Report
+        // the persistence failure instead of pretending sign-in succeeded.
+        sendJson(res, 500, { error: "OpenAI sign-in succeeded but the credential was not persisted. Check secrets.json permissions and try again." });
+        return;
+      }
       sendJson(res, 200, { ok: true });
     } catch (err) {
       sendJson(res, 400, { error: err instanceof Error ? err.message : "OAuth failed" });

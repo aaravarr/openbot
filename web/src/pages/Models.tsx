@@ -33,6 +33,7 @@ import type {
   SaveResult,
 } from "../api/types";
 import { formatInteger, formatTime, formatTokens, reasoningListLabel } from "../lib/format";
+import { OPENCODE_ZEN_FREE_MODELS, OPENCODE_ZEN_PROVIDER_ID } from "../lib/presets";
 import { enrichCatalogModels, modelImportFields } from "../lib/import-models";
 import { navigate } from "../lib/router";
 import { useApp, useBoxState } from "../store";
@@ -78,6 +79,7 @@ export function Models({ providerId }: { providerId?: string }) {
   const [fetchError, setFetchError] = useState<FetchModelsError | null>(null);
   const [catalogMatched, setCatalogMatched] = useState<Set<string>>(new Set());
   const [catalogLookup, setCatalogLookup] = useState<Map<string, CatalogLookupModel>>(new Map());
+  const [seedBusy, setSeedBusy] = useState(false);
 
   // Source B catalog card
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
@@ -116,6 +118,19 @@ export function Models({ providerId }: { providerId?: string }) {
     setCatalogMatched(matched);
     setCatalogLookup(lookup);
   }, []);
+
+  const importSeedModels = async (chosen: FetchedModel[]) => {
+    if (!selected) return;
+    setSeedBusy(true);
+    try {
+      for (const m of chosen) {
+        const ok = await run("import", { kind: "upsert-model", providerId: selected.id, ...modelImportFields(m, undefined) }, { title: "Free models added" });
+        if (!ok) break;
+      }
+    } finally {
+      setSeedBusy(false);
+    }
+  };
 
   const doFetch = async (provider: Provider) => {
     setFetching(true);
@@ -159,7 +174,7 @@ export function Models({ providerId }: { providerId?: string }) {
   };
 
   const useModel = async (model: Model) => {
-    if (!hasKey(state, model.providerId) && model.providerId !== "opencode") {
+    if (!hasKey(state, model.providerId)) {
       setReplaceKey(true);
       return;
     }
@@ -416,7 +431,7 @@ export function Models({ providerId }: { providerId?: string }) {
               </div>
             </div>
 
-            {!selectedHasKey && selected.id !== "opencode" ? (
+            {!selectedHasKey ? (
               <div className="card__body" style={{ paddingBottom: 12 }}>
                 <div className="notice notice--warn">
                   <TriangleAlert aria-hidden="true" />
@@ -503,6 +518,26 @@ export function Models({ providerId }: { providerId?: string }) {
               <Button variant="ghost" icon={Plus} onClick={() => setModelDialog({ open: true, model: null })}>
                 Add model
               </Button>
+              {selected.id === OPENCODE_ZEN_PROVIDER_ID ? (
+                <Button
+                  variant="ghost"
+                  loading={seedBusy}
+                  loadingLabel="Adding…"
+                  disabled={existingSlugs.size >= OPENCODE_ZEN_FREE_MODELS.length}
+                  onClick={() => void importSeedModels(OPENCODE_ZEN_FREE_MODELS
+                    .filter((m) => !existingSlugs.has(m.id))
+                    .map((m) => ({
+                      id: m.id,
+                      name: m.name,
+                      contextLength: null,
+                      maxOutputTokens: null,
+                      modalities: ["text"],
+                      reasoningLevels: ["default"],
+                    })))}
+                >
+                  Add all free models
+                </Button>
+              ) : null}
             </div>
           </section>
         ) : null}

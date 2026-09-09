@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { type Catalog, MAX_OUTPUT_TOKENS_CEILING } from "../domain/types.ts";
 import { keepReasoningOrder } from "../domain/model.ts";
 import { secretFor, type SecretStore } from "../supervisor/secrets.ts";
@@ -224,7 +225,7 @@ async function fetchProviderModels(input: {
       headers: {
         ...(input.secret ? { Authorization: "Bearer " + input.secret } : {}),
         Accept: "application/json",
-        ...(input.providerId === "opencode" ? { "x-opencode-session": crypto.randomUUID() } : {}),
+        ...(input.providerId === "opencode" ? { "x-opencode-session": randomUUID() } : {}),
       },
       signal: AbortSignal.timeout(input.totalTimeoutMs),
     });
@@ -293,8 +294,7 @@ export async function fetchModelsForProvider(input: {
     return { status: 404, body: { error: { kind: "provider-not-found", message: "provider not found" } } };
   }
   const secret = secretFor(input.secretStore, provider.id);
-  const keylessOpenCode = provider.id === "opencode" && provider.origin === "https://opencode.ai/zen/go/v1";
-  if (secret === undefined && !keylessOpenCode) {
+  if (secret === undefined) {
     return { status: 409, body: { error: { kind: "no-secret", message: "no API key stored for this provider" } } };
   }
   let result: FetchProviderResult;

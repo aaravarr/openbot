@@ -7,7 +7,7 @@ import { PRESETS, type Preset } from "../lib/presets";
 import { refusalKindLabel, refusalRemedy } from "../lib/refusal";
 import { navigate } from "../lib/router";
 import { useApp } from "../store";
-import { Button, Notice } from "../components/ui";
+import { Badge, Button, Notice } from "../components/ui";
 import { Field, Input, PasswordInput } from "../components/fields";
 
 function usedMessage(result: SaveResult): string {
@@ -21,9 +21,9 @@ function usedMessage(result: SaveResult): string {
 export function Setup() {
   const { save } = useApp();
   const [step, setStep] = useState(1);
-  const [presetId, setPresetId] = useState<string>("opencode");
-  const [name, setName] = useState("OpenCode (Free)");
-  const [origin, setOrigin] = useState("https://opencode.ai/zen/go/v1");
+  const [presetId, setPresetId] = useState<string>("openai");
+  const [name, setName] = useState("OpenAI");
+  const [origin, setOrigin] = useState("https://api.openai.com/v1");
   const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -57,7 +57,7 @@ export function Setup() {
       setFieldError("Base URL is required.");
       return;
     }
-    if (preset.requiresSecret && !secret.trim() && !oauthConnected) {
+    if (!secret.trim() && !oauthConnected) {
       setFieldError("API key is required — the hop would fail with no key.");
       return;
     }
@@ -165,7 +165,10 @@ export function Setup() {
                 onClick={() => pickPreset(p)}
                 aria-pressed={p.id === presetId}
               >
-                <span className="preset__name">{p.name}</span>
+                <span className="preset__name">
+                  {p.name}
+                  {p.id === "opencode" ? <Badge tone="success">Free</Badge> : null}
+                </span>
                 <span className="preset__origin">{p.origin || "your-endpoint.example"}</span>
               </button>
             ))}
@@ -189,7 +192,7 @@ export function Setup() {
               <Input id="f-origin" large mono value={origin} onChange={(e) => setOrigin(e.target.value)} />
             </Field>
             <Field
-              label={preset.requiresSecret ? "API key" : "API key (optional)"}
+              label="API key"
               htmlFor="f-key"
               helper="Stored locally (0600), never displayed again, never in a URL."
             >
@@ -198,7 +201,7 @@ export function Setup() {
                 large
                 value={secret}
                 onChange={setSecret}
-                placeholder={preset.requiresSecret ? "Paste your key" : "Leave blank for keyless access"}
+                placeholder="Paste your key"
               />
             </Field>
             {preset.oauth ? (

@@ -237,6 +237,51 @@ test("a throwing handler returns a structured 500 and the server keeps serving",
   }
 });
 
+test("/api/state serves an old removed-preset provider as a generic catalog row", async () => {
+  const fss = await import("node:fs");
+  fss.mkdirSync("/tmp/openbot-sand-data", { recursive: true });
+  // DeepSeek was removed from the new-provider presets. A box that saved it
+  // before curation must still see the row (with its key state) and keep the
+  // wildcard binding, because the Models page and the hop both read this data
+  // path unchanged.
+  fss.writeFileSync(
+    "/tmp/openbot-sand-data/openbot-plan.json",
+    JSON.stringify({
+      kind: "custom",
+      agents: { "*": { modelId: "deepseek-v4-flash", providerId: "deepseek" } },
+      catalog: {
+        providers: [{ id: "deepseek", name: "DeepSeek", origin: "https://api.deepseek.com", maxTokensDefault: 65536, mapFile: "provider-maps.cjs" }],
+        models: [{ id: "deepseek:deepseek-v4-flash", providerId: "deepseek", slug: "deepseek-v4-flash", parameters: [] }],
+        bindings: [{ conversation: { kind: "wildcard" }, modelId: "deepseek:deepseek-v4-flash" }],
+      },
+    }) + "\n",
+  );
+  fss.writeFileSync("/tmp/openbot-sand-data/secrets.json", JSON.stringify({ providers: { deepseek: "sk-old" } }) + "\n");
+  const { server, port } = await listen();
+  try {
+    const res = await request(port, "/api/state", "GET");
+    assert.equal(res.status, 200);
+    const body = res.json as {
+      providers: { id: string; name: string; origin: string }[];
+      models: { id: string; providerId: string; slug: string }[];
+      keyedProviders: string[];
+      activeModelId: string | null;
+    };
+    assert.equal(body.providers.length, 1);
+    assert.equal(body.providers[0]?.id, "deepseek");
+    assert.equal(body.providers[0]?.name, "DeepSeek");
+    assert.equal(body.providers[0]?.origin, "https://api.deepseek.com");
+    assert.equal(body.models[0]?.slug, "deepseek-v4-flash");
+    assert.deepEqual(body.keyedProviders, ["deepseek"]);
+    assert.equal(body.activeModelId, "deepseek:deepseek-v4-flash");
+  } finally {
+    fss.rmSync("/tmp/openbot-sand-data/openbot-plan.json", { force: true });
+    fss.rmSync("/tmp/openbot-sand-data/secrets.json", { force: true });
+    server.close();
+    server.closeAllConnections();
+  }
+});
+
 test("process guards keep the process alive on an unhandled rejection", () => {
   // Run in a child process: in the test runner's own process an unhandled
   // rejection is reported as a test failure, so proving "not fatal" needs the

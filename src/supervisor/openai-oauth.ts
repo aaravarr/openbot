@@ -36,7 +36,15 @@ export async function completeOpenAIOAuth(sessionId: string, callbackUrl: string
   const callback = parseCallbackUrl(callbackUrl);
   if (callback.state !== session.state) throw new Error("OAuth state validation failed");
   const response = await fetchFn(OPENAI_OAUTH_TOKEN_URL, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, body: new URLSearchParams({ grant_type: "authorization_code", client_id: OPENAI_OAUTH_CLIENT_ID, code: callback.code, redirect_uri: OPENAI_OAUTH_REDIRECT_URI, code_verifier: session.verifier }) });
-  const payload = await response.json() as Record<string, unknown>;
+  let payload: Record<string, unknown>;
+  try {
+    payload = await response.json() as Record<string, unknown>;
+  } catch {
+    throw new Error("OpenAI token exchange returned a non-JSON body (HTTP " + response.status + ")");
+  }
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("OpenAI token exchange returned an unexpected body (HTTP " + response.status + ")");
+  }
   if (!response.ok || typeof payload.access_token !== "string" || typeof payload.refresh_token !== "string") throw new Error("OpenAI token exchange failed (HTTP " + response.status + ")");
   sessions.delete(sessionId);
   return { kind: "openai-oauth", accessToken: payload.access_token, refreshToken: payload.refresh_token, expiresAt: Math.floor(Date.now() / 1000) + Math.max(1, Number(payload.expires_in) || 3600) };

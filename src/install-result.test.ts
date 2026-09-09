@@ -216,7 +216,7 @@ test("bot-mode rolls back when the real staging mv fails", (t) => {
   ].join("\n") + "\n";
   try {
     try {
-      runBash(script, ["bash", data]);
+      runBash(script, [data]);
     } catch {
       // The injected staging failure is the expected shell exit.
     }
@@ -250,7 +250,7 @@ test("bot-mode does not roll back when the destination is occupied externally", 
   ].join("\n") + "\n";
   try {
     try {
-      runBash(script, ["bash", data]);
+      runBash(script, [data]);
     } catch {
       // The injected staging failure is the expected shell exit.
     }

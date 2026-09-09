@@ -68,7 +68,9 @@ test("bot-status reports missing, running, success, and failed result files", (t
     assert.match(runStatus(data), /OPENBOT_STATUS=not-installed/);
 
     writeFileSync(result, JSON.stringify({ status: "running", startedAt: new Date().toISOString() }));
-    assert.match(runStatus(data), /OPENBOT_STATUS=running/);
+    const running = runStatus(data);
+    assert.match(running, /OPENBOT_STATUS=running/);
+    assert.match(running, /OPENBOT_BOT_INSTRUCTION=.*SendToUser.*before the next poll/);
 
     writeFileSync(result, JSON.stringify({
       status: "running",
@@ -85,18 +87,23 @@ test("bot-status reports missing, running, success, and failed result files", (t
     assert.match(progress, /OPENBOT_TIMING_TOTAL_MS=1630/);
 
     writeFileSync(result, JSON.stringify({ status: "running", startedAt: "2026-09-09T09:00:00Z" }));
-    assert.match(runStatus(data), /OPENBOT_WARNING=.*15 minutes/);
+    const warning = runStatus(data);
+    assert.match(warning, /OPENBOT_WARNING=.*15 minutes/);
+    assert.match(warning, /OPENBOT_BOT_INSTRUCTION=.*appears stuck.*stop polling/);
 
-    writeFileSync(result, JSON.stringify({ status: "success", startedAt: "2026-09-09T10:00:00Z", finishedAt: "2026-09-09T10:01:00Z", url: "https://openbot.trycloudflare.com", qrPath: "/tmp/openbot.png" }));
+    writeFileSync(result, JSON.stringify({ status: "success", startedAt: "2026-09-09T10:00:00Z", finishedAt: "2026-09-09T10:01:00Z", url: "https://openbot.trycloudflare.com", qrPath: "/tmp/openbot.png", downloadSource: "github-archive" }));
     const success = runStatus(data);
     assert.match(success, /OPENBOT_STATUS=success/);
     assert.match(success, /OPENBOT_URL=https:\/\/openbot\.trycloudflare\.com/);
+    assert.match(success, /OPENBOT_DOWNLOAD_SOURCE=github-archive/);
+    assert.match(success, /OPENBOT_BOT_INSTRUCTION=.*OPENBOT_URL.*OPENBOT_QR_PATH.*SendToUser/);
 
     writeFileSync(result, JSON.stringify({ status: "failed", startedAt: "2026-09-09T10:00:00Z", finishedAt: "2026-09-09T10:01:00Z", error: "boom", logTail: "last line" }));
     const failed = runStatus(data);
     assert.match(failed, /OPENBOT_STATUS=failed/);
     assert.match(failed, /OPENBOT_ERROR=boom/);
     assert.match(failed, /OPENBOT_LOG_TAIL=last line/);
+    assert.match(failed, /OPENBOT_BOT_INSTRUCTION=.*summarize OPENBOT_ERROR and OPENBOT_LOG_TAIL/);
   } finally {
     rmSync(data, { recursive: true, force: true });
   }
@@ -142,6 +149,7 @@ test("bot-mode guards duplicate workers and cleans stale pid files", async (t) =
       env: botModeEnv(data, result, path.join(data, "install.log"), pidFile),
     });
     assert.match(started, /OPENBOT_STATUS=started/);
+    assert.match(started, /OPENBOT_BOT_INSTRUCTION=FIRST call the host SendToUser tool.*THEN poll --bot-status/);
     assert.equal(JSON.parse(readFileSync(result, "utf8")).status, "running");
     assert.match(readFileSync(pidFile, "utf8"), /^[0-9]+\n$/);
   } finally {

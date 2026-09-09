@@ -71,13 +71,7 @@ If `openbot` is on `PATH`, `openbot status` is the same.
 
 ### Bot-mode install and status
 
-This is a strict three-stage user-facing workflow. Do not improvise, wait in the foreground, or perform several private tool turns before updating the user.
-
-1. Start the detached worker with the exact `install.sh --bot-mode` command (using the complete path or `curl -fsSL --location <installer-url> | bash -s -- --bot-mode`). The command must return the `started` acknowledgement. Immediately call the host `SendToUser` tool: **“安装已开始，我会每分钟检查一次进度。”** Never wait for the worker to finish in this turn.
-2. While the result is `status=running`, run `install.sh --bot-status` once every 30–60 seconds. After each check, send the user the current `progress.stage` and `progress.summary` (plus timing fields when present). Do not make consecutive status/tool calls without a user-visible update.
-3. When `status=success`, send the reported `url` and QR path to the user with `SendToUser`. When `status=failed`, send the error summary and log path; do not claim success. If `--bot-status` remains `running` for 10 minutes, send **“安装卡住了，日志在 <log path>”** and stop polling until the user asks to continue.
-
-The worker is detached and owns the install, tunnel, and QR work; a foreground install is forbidden. The result JSON is `/home/box/sand-data/openbot-install-result.json` and the worker log is `/home/box/sand-data/openbot-install.log` (both follow `OPENBOT_SAND_DATA`). Full result shapes and progress fields are in [reference.md](reference.md).
+`install.sh --bot-mode` and `install.sh --bot-status` print bot-facing instructions in `OPENBOT_BOT_INSTRUCTION`; follow that stdout guidance.
 
 ### Official / custom
 

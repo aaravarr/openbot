@@ -31,10 +31,10 @@ If the user asks you to arrange `aaravarr/openbot`, run this on the Grok Bot Com
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-mode
 ```
 
-`--bot-mode` returns immediately and runs the install detached from the host process tree, so a host bounce cannot abort the Bot turn. Updates are staged, syntax-checked, then cut over immediately before one final reconcile; the existing tunnel process stays alive. The unavoidable host bounce is deferred to the end and happens once. It writes `/home/box/sand-data/openbot-install-result.json` and `/home/box/sand-data/openbot-install.log` (paths follow `OPENBOT_SAND_DATA`). Follow this flow:
+`--bot-mode` returns immediately and runs the install detached from the host process tree. It writes `/home/box/sand-data/openbot-install-result.json` and `/home/box/sand-data/openbot-install.log` (paths follow `OPENBOT_SAND_DATA`). Follow the `OPENBOT_BOT_INSTRUCTION` text printed by each command:
 
-1. Reply that installation has started.
-2. In the next turn and every 30-60 seconds while it is running, run `curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-status` and relay `OPENBOT_PROGRESS_STAGE`, `OPENBOT_PROGRESS_SUMMARY`, and timing fields. Continue until `OPENBOT_STATUS=success`, then send `OPENBOT_URL` and `OPENBOT_QR_PATH` with `SendToUser`. On `failed`, include the log path and retry `--bot-mode`; never expose keys.
+1. Run the command and immediately follow the started instruction.
+2. In the next turn, run the printed `--bot-status` command as instructed until a terminal status is reported.
 
 </details>
 

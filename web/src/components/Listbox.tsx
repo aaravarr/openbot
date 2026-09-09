@@ -29,7 +29,7 @@ type ListboxProps = {
   disabled?: boolean;
   placeholder?: string;
   triggerStyle?: React.CSSProperties;
-  /** Text shown when the search filter matches nothing. Defaults to "无匹配模型". */
+  /** Text shown when the search filter matches nothing. Defaults to "No matching models". */
   emptyText?: string;
 };
 
@@ -43,7 +43,7 @@ export function Listbox({
   disabled,
   placeholder,
   triggerStyle,
-  emptyText = "无匹配模型",
+  emptyText = "No matching models",
 }: ListboxProps) {
   const uid = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);

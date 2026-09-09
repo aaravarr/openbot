@@ -426,10 +426,10 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
     () => [{
       label: "Bot",
       options: [
-        { value: "", label: "全部 bot" },
+        { value: "", label: "All bots" },
         ...(facets?.bots ?? []).map((bot) => ({
           value: bot.botName ?? bot.botId ?? "",
-          label: bot.botName ?? bot.botId ?? "未命名 bot",
+          label: bot.botName ?? bot.botId ?? "Unnamed bot",
         })),
       ],
     }],
@@ -438,11 +438,11 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
 
   const chatTypeGroups: ListboxGroup[] = useMemo(
     () => [{
-      label: "来源类型",
+      label: "Source type",
       options: [
-        { value: "", label: "全部来源" },
-        { value: "group", label: "群聊" },
-        { value: "dm", label: "私聊" },
+        { value: "", label: "All sources" },
+        { value: "group", label: "Group chat" },
+        { value: "dm", label: "Direct message" },
         { value: "routine", label: "routine" },
       ],
     }],
@@ -737,7 +737,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
             triggerStyle={{ height: 30 }}
           />
           <Listbox
-            label="按 bot 筛选"
+            label="Filter by bot"
             groups={botGroups}
             value={botFilter ?? ""}
             onChange={(v) => {
@@ -747,7 +747,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
             triggerStyle={{ height: 30 }}
           />
           <Listbox
-            label="按来源筛选"
+            label="Filter by source"
             groups={chatTypeGroups}
             value={chatTypeFilter}
             onChange={(v) => {
@@ -940,7 +940,7 @@ function sourceLabel(r: LogRecord): ReactNode {
     if (chat) return chat;
     if (bot) return bot;
   }
-  if (r.chatType === "dm") return bot || "私聊";
+  if (r.chatType === "dm") return bot || "Direct message";
   if (r.chatType === "routine") {
     return bot ? <>{bot} <span style={{ color: "var(--muted)", fontSize: 11 }}>(routine)</span></> : "routine";
   }
@@ -1000,7 +1000,7 @@ type UsageGroup = {
 function groupUsage(rows: LogUsageRow[], pick: (row: LogUsageRow) => string): UsageGroup[] {
   const acc = new Map<string, UsageGroup & { latSum: number; latN: number; firstSum: number; firstN: number }>();
   for (const row of rows) {
-    const key = pick(row).trim() || "未知";
+    const key = pick(row).trim() || "Unknown";
     let g = acc.get(key);
     if (!g) {
       g = { key, promptTokens: 0, completionTokens: 0, totalTokens: 0, requestCount: 0, ok: 0, fail: 0, latSum: 0, latN: 0, firstSum: 0, firstN: 0 };
@@ -1049,7 +1049,7 @@ function toUsageGroup(row: LogUsageRow): UsageGroup {
  
 /** Approximate counts render with the “约” marker. */
 function usageCount(value: number, approximate: boolean): string {
-  return `${approximate ? "约 " : ""}${value.toLocaleString("en-US")}`;
+  return `${approximate ? "Approx. " : ""}${value.toLocaleString("en-US")}`;
 }
  
 /** Dependency-free bar: a thin proportional fill under the total cell. */
@@ -1088,14 +1088,14 @@ function UsageTable({
           <thead>
             <tr>
               <th>{keyLabel}</th>
-              <th className="num">请求数</th>
-              {showOkFail ? <th className="num">成功</th> : null}
-              {showOkFail ? <th className="num">失败</th> : null}
-              <th className="num">输入</th>
-              <th className="num">输出</th>
-              <th className="num">总计</th>
-              <th className="num">平均延迟</th>
-              {showFirstToken ? <th className="num">首 token</th> : null}
+              <th className="num">Requests</th>
+              {showOkFail ? <th className="num">Success</th> : null}
+              {showOkFail ? <th className="num">Failures</th> : null}
+              <th className="num">Input</th>
+              <th className="num">Output</th>
+              <th className="num">Total</th>
+              <th className="num">Avg latency</th>
+              {showFirstToken ? <th className="num">First token</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -1142,25 +1142,25 @@ function RichUsageSection({ usage, loading, error, range, onRangeChange, onRetry
   const summary = usage?.summary ?? usageSummaryFallback(dayRows);
   const ranges: Array<[UsageRange, string]> = [["1h", "1h"], ["6h", "6h"], ["24h", "24h"], ["7d", "7d"], ["30d", "30d"]];
   const empty = !usage || summary.requests === 0;
-  return <section className="card usage-board" aria-label="用量看板">
-    <div className="card__head logs-toolbar usage-board__head"><div><span className="card__label">Usage</span><span className="usage-board__hint">按请求记录统计</span></div><div className="usage-range" role="tablist" aria-label="时间范围">{ranges.map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={range === key} className={range === key ? "is-active" : ""} onClick={() => onRangeChange(key)}>{label}</button>)}</div><IconButton label="刷新用量" icon={RefreshCw} onClick={onRetry} /></div>
-    {loading && empty ? <div className="card__body"><div className="skel skel--block" /></div> : error && empty ? <div className="card__body stack"><div className="notice notice--warn"><span className="text">用量统计暂不可用：{error}</span></div><Button variant="secondary" onClick={onRetry}>重试</Button></div> : empty ? <div className="card__body"><EmptyState icon={ScrollText} title="暂无用量数据" body="产生请求后，这里会展示 token、延迟和模型分布。" /></div> : <div className="card__body usage-board__body">
+  return <section className="card usage-board" aria-label="Usage dashboard">
+    <div className="card__head logs-toolbar usage-board__head"><div><span className="card__label">Usage</span><span className="usage-board__hint">Based on recorded requests</span></div><div className="usage-range" role="tablist" aria-label="Time range">{ranges.map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={range === key} className={range === key ? "is-active" : ""} onClick={() => onRangeChange(key)}>{label}</button>)}</div><IconButton label="Refresh usage" icon={RefreshCw} onClick={onRetry} /></div>
+    {loading && empty ? <div className="card__body"><div className="skel skel--block" /></div> : error && empty ? <div className="card__body stack"><div className="notice notice--warn"><span className="text">Usage statistics unavailable: {error}</span></div><Button variant="secondary" onClick={onRetry}>Retry</Button></div> : empty ? <div className="card__body"><EmptyState icon={ScrollText} title="No usage data yet" body="Usage, latency, and model distribution will appear after requests are recorded." /></div> : <div className="card__body usage-board__body">
       <UsageSummaryCards summary={summary} approximate={usage?.approximate === true} />
       <UsageTrend buckets={usage?.buckets ?? []} />
-      <div className="usage-board__split"><UsageDonut title="Token 构成" items={[{ label: "输入（未缓存）", value: Math.max(0, summary.promptTokens - summary.cachedTokens), color: "#6f9f9a" }, { label: "缓存", value: summary.cachedTokens, color: "#9fbbe0" }, { label: "输出", value: summary.completionTokens, color: "#d49a63" }, { label: "推理", value: summary.reasoningTokens, color: "#c0a8dd" }]} /><UsageBars title="模型分布" rows={modelRows.map(toUsageGroup)} /></div>
-      <UsageTable caption="按天" keyLabel="日期" groups={dayRows.map(toUsageGroup)} approximate={usage?.approximate === true} showOkFail /><UsageTable caption="按模型" keyLabel="模型" groups={modelRows.map(toUsageGroup)} approximate={usage?.approximate === true} showOkFail /><span className="usage-board__note">平均 TPS 按 completion tokens ÷（端到端延迟 − 首 token 延迟）计算；估算费用暂未接入价格表。</span>
+      <div className="usage-board__split"><UsageDonut title="Token breakdown" items={[{ label: "Input (uncached)", value: Math.max(0, summary.promptTokens - summary.cachedTokens), color: "#6f9f9a" }, { label: "Cached", value: summary.cachedTokens, color: "#9fbbe0" }, { label: "Output", value: summary.completionTokens, color: "#d49a63" }, { label: "Reasoning", value: summary.reasoningTokens, color: "#c0a8dd" }]} /><UsageBars title="Model distribution" rows={modelRows.map(toUsageGroup)} /></div>
+      <UsageTable caption="By day" keyLabel="Date" groups={dayRows.map(toUsageGroup)} approximate={usage?.approximate === true} showOkFail /><UsageTable caption="By model" keyLabel="Model" groups={modelRows.map(toUsageGroup)} approximate={usage?.approximate === true} showOkFail /><span className="usage-board__note">Avg TPS is calculated as completion tokens ÷ (end-to-end latency − first-token latency); estimated cost is not yet connected to a price table.</span>
     </div>}
   </section>;
 }
 
 function UsageSummaryCards({ summary, approximate }: { summary: UsageSummary; approximate: boolean }) {
-  const cards = [["请求数", `${usageCount(summary.requests, approximate)}（成功 ${summary.ok} / 失败 ${summary.fail}）`], ["成功率", `${(summary.successRate * 100).toFixed(1)}%`], ["平均延迟", formatLatency(summary.avgLatencyMs)], ["平均 TTFT", formatLatency(summary.avgFirstTokenMs)], ["平均 TPS", summary.avgTps ? `${summary.avgTps.toFixed(1)} tok/s` : "—"], ["总 Token", usageCount(summary.totalTokens, approximate)], ["输入 Token", usageCount(summary.promptTokens, approximate)], ["输出 Token", usageCount(summary.completionTokens, approximate)], ["缓存 Token", usageCount(summary.cachedTokens, approximate)], ["缓存命中率", `${(summary.cacheHitRate * 100).toFixed(1)}%`], ["推理 Token", usageCount(summary.reasoningTokens, approximate)]] as const;
+  const cards = [["Requests", `${usageCount(summary.requests, approximate)} (success ${summary.ok} / failures ${summary.fail})`], ["Success rate", `${(summary.successRate * 100).toFixed(1)}%`], ["Avg latency", formatLatency(summary.avgLatencyMs)], ["Avg TTFT", formatLatency(summary.avgFirstTokenMs)], ["Avg TPS", summary.avgTps ? `${summary.avgTps.toFixed(1)} tok/s` : "—"], ["Total tokens", usageCount(summary.totalTokens, approximate)], ["Input tokens", usageCount(summary.promptTokens, approximate)], ["Output tokens", usageCount(summary.completionTokens, approximate)], ["Cached tokens", usageCount(summary.cachedTokens, approximate)], ["Cache hit rate", `${(summary.cacheHitRate * 100).toFixed(1)}%`], ["Reasoning tokens", usageCount(summary.reasoningTokens, approximate)]] as const;
   return <div className="usage-metrics">{cards.map(([label, value]) => <div className="usage-metric" key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>;
 }
 
 function UsageTrend({ buckets }: { buckets: LogUsageRow[] }) {
   const width = 720, height = 220, pad = 28; const max = Math.max(1, ...buckets.map((b) => b.promptTokens + b.completionTokens)); const maxReq = Math.max(1, ...buckets.map((b) => b.requests));
-  return <div className="usage-chart"><div className="usage-chart__title"><span>Token 趋势</span><span className="usage-legend">输入 · 缓存 · 输出 · 推理 · <em>● 请求数</em></span></div>{buckets.length ? <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Token 趋势图" className="usage-svg">{buckets.map((b, index) => { const x = pad + index * ((width - pad * 2) / buckets.length); const bw = Math.max(4, (width - pad * 2) / buckets.length - 3); let y = height - pad; const parts = [[Math.max(0, b.promptTokens - b.cachedTokens), "#6f9f9a"], [b.cachedTokens, "#9fbbe0"], [b.completionTokens, "#d49a63"], [b.reasoningTokens, "#c0a8dd"]] as const; const rects = parts.map(([value, color]) => { const h = value / max * (height - pad * 2); y -= h; return <rect key={color} x={x} y={y} width={bw} height={h} fill={color} />; }); const cy = height - pad - b.requests / maxReq * (height - pad * 2); return <g key={b.key}>{rects}<circle cx={x + bw / 2} cy={cy} r="2.5" fill="#f54e00" />{index % Math.max(1, Math.ceil(buckets.length / 6)) === 0 ? <text x={x + bw / 2} y={height - 8} textAnchor="middle">{b.key.slice(11, 16)}</text> : null}</g>; })}</svg> : <div className="usage-chart__empty">当前范围没有趋势数据</div>}</div>;
+  return <div className="usage-chart"><div className="usage-chart__title"><span>Token trend</span><span className="usage-legend">Input · Cached · Output · Reasoning · <em>● Requests</em></span></div>{buckets.length ? <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Token trend chart" className="usage-svg">{buckets.map((b, index) => { const x = pad + index * ((width - pad * 2) / buckets.length); const bw = Math.max(4, (width - pad * 2) / buckets.length - 3); let y = height - pad; const parts = [[Math.max(0, b.promptTokens - b.cachedTokens), "#6f9f9a"], [b.cachedTokens, "#9fbbe0"], [b.completionTokens, "#d49a63"], [b.reasoningTokens, "#c0a8dd"]] as const; const rects = parts.map(([value, color]) => { const h = value / max * (height - pad * 2); y -= h; return <rect key={color} x={x} y={y} width={bw} height={h} fill={color} />; }); const cy = height - pad - b.requests / maxReq * (height - pad * 2); return <g key={b.key}>{rects}<circle cx={x + bw / 2} cy={cy} r="2.5" fill="#f54e00" />{index % Math.max(1, Math.ceil(buckets.length / 6)) === 0 ? <text x={x + bw / 2} y={height - 8} textAnchor="middle">{b.key.slice(11, 16)}</text> : null}</g>; })}</svg> : <div className="usage-chart__empty">No trend data for the current range</div>}</div>;
 }
 
 function UsageDonut({ title, items }: { title: string; items: Array<{ label: string; value: number; color: string }> }) { let cursor = 0; const total = items.reduce((sum, item) => sum + item.value, 0); const background = total ? `conic-gradient(${items.map((item) => { const start = cursor / total * 360; cursor += item.value; return `${item.color} ${start}deg ${cursor / total * 360}deg`; }).join(", ")})` : "var(--surface-2)"; return <div className="usage-panel"><div className="usage-chart__title">{title}</div><div className="usage-donut-row"><div className="usage-donut" style={{ background }}><strong>{total.toLocaleString("en-US")}</strong><small>tokens</small></div><div className="usage-key">{items.map((item) => <div key={item.label}><i style={{ background: item.color }} />{item.label}<b>{total ? `${(item.value / total * 100).toFixed(1)}%` : "0%"}</b></div>)}</div></div></div>; }
@@ -1214,7 +1214,7 @@ function UsageSection({
   // The backend pre-aggregates both groupings; only regroup legacy fallbacks.
   const legacyRows = usage?.rows ?? [];
   const legacyByDay = useMemo(
-    () => (dayRows.length === 0 && legacyRows.length > 0 ? groupUsage(legacyRows, (row) => row.key || "未知") : []),
+    () => (dayRows.length === 0 && legacyRows.length > 0 ? groupUsage(legacyRows, (row) => row.key || "Unknown") : []),
     [dayRows.length, legacyRows],
   );
   const byDay = useMemo(() => dayRows.map(toUsageGroup), [dayRows]);
@@ -1225,9 +1225,9 @@ function UsageSection({
   return (
     <section className="card" aria-label="Token usage">
       <div className="card__head logs-toolbar">
-        <span className="card__label">Usage{approximate ? " 约" : ""}</span>
+        <span className="card__label">Usage{approximate ? " (approx.)" : ""}</span>
         <span className="mono" style={{ fontSize: 12, color: "var(--muted)" }}>
-          按天 / 按模型聚合{approximate ? "（约）" : ""}
+          By day / by model{approximate ? " (approx.)" : ""}
         </span>
         <span className="logs-toolbar__spacer" />
         <IconButton label="Refresh usage" icon={RefreshCw} onClick={onRetry} />
@@ -1241,31 +1241,31 @@ function UsageSection({
       ) : error && isEmpty ? (
         <div className="card__body stack" style={{ gap: 12 }}>
           <div className="notice notice--warn">
-            <span className="text">用量统计暂不可用（{error}），日志列表不受影响。</span>
+            <span className="text">Usage statistics unavailable ({error}); the log list is unaffected.</span>
           </div>
           <div>
             <Button variant="secondary" onClick={onRetry}>
-              重试
+              Retry
             </Button>
           </div>
         </div>
       ) : isEmpty ? (
         <div className="card__body">
-          <EmptyState icon={ScrollText} title="暂无用量数据" body="产生请求后，这里会按天和按模型汇总 token 用量。" />
+          <EmptyState icon={ScrollText} title="No usage data yet" body="Usage will be summarized by day and model after requests are recorded." />
         </div>
       ) : (
         <div className="card__body stack" style={{ gap: 20 }}>
           <div className="token-trio" style={{ flexWrap: "wrap" }}>
-            <div className="token-stat"><div className="k">请求数</div><div className="v">{usageCount(totals.requestCount, approximate)}</div></div>
-            <div className="token-stat"><div className="k">输入</div><div className="v">{usageCount(totals.promptTokens, approximate)}</div></div>
-            <div className="token-stat"><div className="k">输出</div><div className="v">{usageCount(totals.completionTokens, approximate)}</div></div>
-            <div className="token-stat"><div className="k">总计</div><div className="v">{usageCount(totals.totalTokens, approximate)}</div></div>
-            <div className="token-stat"><div className="k">平均延迟</div><div className="v">{formatLatency(totals.avgLatencyMs)}</div></div>
+            <div className="token-stat"><div className="k">Requests</div><div className="v">{usageCount(totals.requestCount, approximate)}</div></div>
+            <div className="token-stat"><div className="k">Input</div><div className="v">{usageCount(totals.promptTokens, approximate)}</div></div>
+            <div className="token-stat"><div className="k">Output</div><div className="v">{usageCount(totals.completionTokens, approximate)}</div></div>
+            <div className="token-stat"><div className="k">Total</div><div className="v">{usageCount(totals.totalTokens, approximate)}</div></div>
+            <div className="token-stat"><div className="k">Avg latency</div><div className="v">{formatLatency(totals.avgLatencyMs)}</div></div>
           </div>
-          <UsageTable caption="按天" keyLabel="日期" groups={dayGroups} approximate={approximate} showOkFail />
-          <UsageTable caption="按模型" keyLabel="模型" groups={byModel} approximate={approximate} showOkFail />
+          <UsageTable caption="By day" keyLabel="Date" groups={dayGroups} approximate={approximate} showOkFail />
+          <UsageTable caption="By model" keyLabel="Model" groups={byModel} approximate={approximate} showOkFail />
           {approximate ? (
-            <span style={{ fontSize: 12, color: "var(--muted)" }}>“约”表示该计数为近似值（后端采样或封顶计数）。</span>
+            <span style={{ fontSize: 12, color: "var(--muted)" }}>“Approx.” indicates an estimated count (backend sampling or capped counting).</span>
           ) : null}
         </div>
       )}
@@ -1451,7 +1451,7 @@ function LogLayer({ detail: d, stacked }: { detail: LogDetail; stacked: boolean 
               />
             ) : null}
           </div>
-          <div className="code-pane">{requestMissing ? "报文不可用" : stringifyBody(requestValue)}</div>
+          <div className="code-pane">{requestMissing ? "Payload unavailable" : stringifyBody(requestValue)}</div>
           {d.requestTruncated ? <span style={{ fontSize: 12, color: "var(--muted)" }}>Body truncated by retention settings.</span> : null}
         </div>
       ) : null}
@@ -1468,7 +1468,7 @@ function LogLayer({ detail: d, stacked }: { detail: LogDetail; stacked: boolean 
               />
             ) : null}
           </div>
-          <div className="code-pane">{responseMissing ? "报文不可用" : stringifyBody(responseValue)}</div>
+          <div className="code-pane">{responseMissing ? "Payload unavailable" : stringifyBody(responseValue)}</div>
           {d.responseTruncated ? <span style={{ fontSize: 12, color: "var(--muted)" }}>Body truncated by retention settings.</span> : null}
         </div>
       ) : null}

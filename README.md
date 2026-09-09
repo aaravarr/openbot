@@ -31,7 +31,10 @@ If the user asks you to arrange `aaravarr/openbot`, run this on the Grok Bot Com
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-mode
 ```
 
-`--bot-mode` is non-interactive and idempotent. It installs or updates OpenBot, enables the project's Cloudflare quick-tunnel through the normal reconcile path, waits for a `trycloudflare.com` URL, and writes a QR PNG to `/tmp/openbot-install-qr.png`. At the end, read the `OPENBOT BOT RESULT` block. Send both `OPENBOT_URL` and the PNG to the user with the host's installed `SendToUser` tool, following that tool's exact image/file parameter schema. If the result block reports an error, tell the user the local URL and the retry command instead; never expose keys.
+`--bot-mode` returns immediately and runs the install detached from the host process tree, so a host bounce cannot abort the Bot turn. It writes `/home/box/sand-data/openbot-install-result.json` and `/home/box/sand-data/openbot-install.log` (paths follow `OPENBOT_SAND_DATA`). Follow this flow:
+
+1. Reply that installation has started.
+2. After 60-120 seconds, or in the next turn, run `curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-status` until `OPENBOT_STATUS=success`, then send `OPENBOT_URL` and `OPENBOT_QR_PATH` with `SendToUser`. On `failed`, include the log path and retry `--bot-mode`; never expose keys.
 
 </details>
 

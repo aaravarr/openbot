@@ -179,8 +179,10 @@ test("bot-mode prepares and switches a staged release with one directory cutover
   const source = readFileSync(install, "utf8");
   assert.match(source, /STAGING_DIR=\"\$DATA\/openbot-staging\"/);
   assert.match(source, /node --experimental-strip-types --check src\/cli\.ts/);
-  assert.match(source, /mv -T \"\$DEST\" \"\$DATA\/openbot-previous\"/);
-  assert.match(source, /mv -T \"\$STAGING_DIR\" \"\$DEST\"/);
+  const swap = source.match(/^  staging_swap\(\) \{[\s\S]*?^  \}\n/m);
+  assert.ok(swap, "install.sh must define the bot-mode staging swap");
+  assert.match(swap[0], /mv -T \"\$[^\"]+\" \"\$DEST\"/);
+  assert.match(swap[0], /mv -T \"\$DEST\" \"\$[^\"]+\"/);
 
   const data = mkdtempSync(path.join(os.tmpdir(), "openbot-staging-switch-"));
   try {
@@ -207,7 +209,7 @@ test("bot-mode rolls back when the real staging mv fails", (t) => {
     "bot_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }",
     "bot_write_state() { printf '{\"status\":\"%s\",\"rolled_back\":true,\"error\":\"%s\"}\n' \"$1\" \"$6\" > \"$BOT_RESULT_FILE\"; }",
     "mkdir -p \"$DEST\" \"$STAGING_DIR\"; printf old > \"$DEST/version\"; printf new > \"$STAGING_DIR/version\"",
-    "mv() { if [[ \"$2\" == \"$DEST\" && \"$1\" == \"$STAGING_DIR\" ]]; then printf occupant > \"$DEST\"; fi; command mv \"$@\"; }",
+    "mv() { if [[ \"$2\" == \"$DEST\" && \"$1\" == \"$STAGING_DIR\" ]]; then rm -rf \"$STAGING_DIR\"; fi; command mv \"$@\"; }",
     match[0].replace(/^  /gm, ""),
     "if staging_swap; then exit 1; fi",
     "test \"$(cat \"$DEST/version\")\" = old",
@@ -220,6 +222,36 @@ test("bot-mode rolls back when the real staging mv fails", (t) => {
     assert.equal(failed.status, "failed");
     assert.equal(failed.rolled_back, true);
     assert.equal(readFileSync(path.join(data, "openbot", "version"), "utf8"), "old");
+  } finally {
+    rmSync(data, { recursive: true, force: true });
+  }
+});
+
+test("bot-mode does not roll back when the destination is occupied externally", (t) => {
+  if (!requireBash(t) || skipOnWindows(t)) return;
+  const source = readFileSync(install, "utf8");
+  const match = source.match(/^  staging_swap\(\) \{[\s\S]*?^  \}\n/m);
+  assert.ok(match, "install.sh must define the bot-mode staging swap");
+
+  const data = mkdtempSync(path.join(os.tmpdir(), "openbot-staging-occupied-"));
+  const result = path.join(data, "result.json");
+  const script = [
+    "set -euo pipefail",
+    "data=$1; DEST=\"$data/openbot\"; STAGING_DIR=\"$data/openbot-staging\"; DATA=\"$data\"; BOT_RESULT_FILE=" + JSON.stringify(result) + "; BOT_STARTED_AT=2026-09-09T00:00:00Z",
+    "bot_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }",
+    "bot_write_state() { printf '{\"status\":\"%s\",\"rolled_back\":true,\"error\":\"%s\"}\n' \"$1\" \"$6\" > \"$BOT_RESULT_FILE\"; }",
+    "mkdir -p \"$DEST\" \"$STAGING_DIR\"; printf old > \"$DEST/version\"; printf new > \"$STAGING_DIR/version\"",
+    "mv() { if [[ \"$2\" == \"$DEST\" && \"$1\" == \"$STAGING_DIR\" ]]; then printf occupant > \"$DEST\"; fi; command mv \"$@\"; }",
+    match[0].replace(/^  /gm, ""),
+    "if staging_swap; then exit 1; fi",
+    "bot_write_state failed 2026-09-09T00:00:00Z 2026-09-09T00:00:01Z '' '' 'Staging switch failed.' '' swapping 'Staging switch failed.'",
+  ].join("\n") + "\n";
+  try {
+    runBash(script, ["bash", data]);
+    const failed = JSON.parse(readFileSync(result, "utf8")) as { status: string; rolled_back?: boolean };
+    assert.equal(failed.status, "failed");
+    assert.notEqual(failed.rolled_back, true);
+    assert.equal(readFileSync(data + "/openbot", "utf8"), "occupant");
   } finally {
     rmSync(data, { recursive: true, force: true });
   }

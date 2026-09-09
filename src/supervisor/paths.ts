@@ -34,6 +34,7 @@ export type BoxPaths = {
   readonly guardPid: AbsPath;
   readonly guardLog: AbsPath;
   readonly pause: AbsPath;
+  readonly pauseBots: AbsPath;
 };
 
 export function parseAbsPath(raw: string): AbsPath {
@@ -86,6 +87,7 @@ export function boxPathsFrom(input: {
     guardPid: joinAbs(sandData, "openbot-guard.pid"),
     guardLog: joinAbs(sandData, "openbot-guard.log"),
     pause: joinAbs(sandData, "openbot-pause.json"),
+    pauseBots: joinAbs(sandData, "openbot-pause-bots.json"),
   };
 }
 

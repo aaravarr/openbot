@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import test from "node:test";
 
@@ -133,6 +134,62 @@ test("PUT /api/pause rejects malformed payloads", async () => {
   } finally {
     server.close();
     server.closeAllConnections();
+  }
+});
+
+test("bot endpoints discover profiles and persist validated pause state", async () => {
+  const agentData = mkdtempSync("/tmp/openbot-agent-data-");
+  const agents = agentData + "/agents";
+  const previous = process.env.OPENBOT_AGENT_DATA;
+  process.env.OPENBOT_AGENT_DATA = agentData;
+  try {
+    rmSync("/tmp/openbot-sand-data/openbot-pause-bots.json", { force: true });
+    const fss = await import("node:fs");
+    fss.mkdirSync(agents + "/alpha", { recursive: true });
+    writeFileSync(agents + "/alpha/profile.json", JSON.stringify({ name: "Alpha Bot" }));
+    fss.mkdirSync(agents + "/missing", { recursive: true });
+    fss.mkdirSync(agents + "/blank", { recursive: true });
+    writeFileSync(agents + "/blank/profile.json", JSON.stringify({ title: "No name" }));
+    fss.mkdirSync(agents + "/broken", { recursive: true });
+    writeFileSync(agents + "/broken/profile.json", "{broken");
+
+    const { server, port } = await listen();
+    try {
+      const bots = await request(port, "/api/bots", "GET");
+      assert.equal(bots.status, 200);
+      assert.deepEqual(bots.json, [
+        { botId: "alpha", botName: "Alpha Bot" },
+        { botId: "blank", botName: "blank" },
+        { botId: "broken", botName: "broken" },
+        { botId: "missing", botName: "missing" },
+      ]);
+
+      const missing = await request(port, "/api/pause-bots", "GET");
+      assert.deepEqual(missing.json, { pausedBotIds: [] });
+      const badJson = await request(port, "/api/pause-bots", "PUT", Buffer.from("{bad"));
+      assert.equal(badJson.status, 400);
+      const badShape = await request(port, "/api/pause-bots", "PUT", Buffer.from(JSON.stringify({ pausedBotIds: ["ok", 1] })));
+      assert.equal(badShape.status, 400);
+      const badToggle = await request(port, "/api/pause-bots", "PUT", Buffer.from(JSON.stringify({ botId: "alpha" })));
+      assert.equal(badToggle.status, 400);
+
+      const paused = await request(port, "/api/pause-bots", "PUT", Buffer.from(JSON.stringify({ botId: "alpha", paused: true })));
+      assert.deepEqual(paused.json, { pausedBotIds: ["alpha"] });
+      const onDisk = readFileSync("/tmp/openbot-sand-data/openbot-pause-bots.json", "utf8");
+      assert.equal(onDisk.endsWith("\n"), true);
+      assert.equal(onDisk.includes("\\n"), false);
+      const replaced = await request(port, "/api/pause-bots", "PUT", Buffer.from(JSON.stringify({ pausedBotIds: ["missing", "alpha", "alpha"] })));
+      assert.deepEqual(replaced.json, { pausedBotIds: ["alpha", "missing"] });
+      const resumed = await request(port, "/api/pause-bots", "PUT", Buffer.from(JSON.stringify({ botId: "alpha", paused: false })));
+      assert.deepEqual(resumed.json, { pausedBotIds: ["missing"] });
+    } finally {
+      server.close();
+      server.closeAllConnections();
+    }
+  } finally {
+    rmSync(agentData, { recursive: true, force: true });
+    if (previous === undefined) delete process.env.OPENBOT_AGENT_DATA;
+    else process.env.OPENBOT_AGENT_DATA = previous;
   }
 });
 

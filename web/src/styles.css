@@ -394,6 +394,26 @@ code, kbd, .mono { font-family: var(--font-mono); }
 }
 .card__body { padding: var(--sp-5); min-width: 0; }
 .card__body--flush { padding: 0; min-width: 0; }
+.card__hint { margin-top: 4px; color: var(--muted); font-size: var(--text-sm); }
+
+.bot-list { display: flex; flex-direction: column; }
+.bot-row {
+  display: flex; align-items: center; gap: var(--sp-3);
+  min-width: 0; padding: 14px var(--sp-5);
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.bot-row:last-child { border-bottom: none; }
+.bot-row__icon {
+  width: 32px; height: 32px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--hairline); border-radius: var(--r-md);
+  color: var(--muted); background: var(--surface-2);
+}
+.bot-row__icon.is-paused { color: var(--danger); background: var(--danger-tint); }
+.bot-row__icon svg { width: 15px; height: 15px; }
+.bot-row__main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.bot-row__main strong { color: var(--ink); font-size: var(--text-base); overflow-wrap: anywhere; }
+.bot-row__main .mono { color: var(--muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
 
 .origin-line {
   font-family: var(--font-mono);
@@ -1193,7 +1213,7 @@ table.data td.cell-actions { white-space: nowrap; width: 1%; }
   padding-right: env(safe-area-inset-right);
   padding-bottom: env(safe-area-inset-bottom);
 }
-.bottom-tabs__inner { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); height: 56px; }
+.bottom-tabs__inner { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); height: 56px; }
 .bottom-tab {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 3px; font-size: 10px; color: var(--muted);

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Boxes, LayoutDashboard, ScrollText, Unplug } from "lucide-react";
+import { Bot, Boxes, LayoutDashboard, ScrollText, Unplug } from "lucide-react";
 import { Shell } from "./components/Shell";
 import { ToastStack } from "./components/Toast";
 import { Button } from "./components/ui";
 import { parseHash, navigate, type Route } from "./lib/router";
 import { AppProvider, useApp } from "./store";
 import { Dashboard } from "./pages/Dashboard";
+import { Bots } from "./pages/Bots";
 import { Logs } from "./pages/Logs";
 import { Models } from "./pages/Models";
 import { Setup } from "./pages/Setup";
@@ -74,6 +75,7 @@ function LoadingScreen() {
 function BottomTabs({ route, onNavigate }: { route: Route; onNavigate: (r: Route) => void }) {
   const items: { route: Route; label: string; icon: typeof LayoutDashboard }[] = [
     { route: { kind: "dashboard" }, label: "Dashboard", icon: LayoutDashboard },
+    { route: { kind: "bots" }, label: "Bots", icon: Bot },
     { route: { kind: "models" }, label: "Models", icon: Boxes },
     { route: { kind: "logs" }, label: "Logs", icon: ScrollText },
   ];
@@ -138,7 +140,9 @@ function AppInner() {
     const title =
       route.kind === "dashboard"
         ? "Dashboard"
-        : route.kind === "models"
+        : route.kind === "bots"
+          ? "Bots"
+          : route.kind === "models"
           ? "Models"
           : route.kind === "setup"
             ? "Setup"
@@ -162,7 +166,9 @@ function AppInner() {
   }
 
   let page;
-  if (route.kind === "models") {
+  if (route.kind === "bots") {
+    page = <Bots />;
+  } else if (route.kind === "models") {
     page = <Models providerId={route.providerId} />;
   } else if (route.kind === "setup") {
     page = <Setup />;

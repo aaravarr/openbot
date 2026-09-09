@@ -2,6 +2,7 @@
 
 export type Route =
   | { kind: "dashboard" }
+  | { kind: "bots" }
   | { kind: "models"; providerId?: string }
   | { kind: "setup" }
   | { kind: "logs"; logId?: string; page?: number };
@@ -16,6 +17,8 @@ export function parseHash(hash: string): Route {
     return { kind: "dashboard" };
   }
   switch (segments[0]) {
+    case "bots":
+      return { kind: "bots" };
     case "models": {
       const providerId = segments[1] ? decodeURIComponent(segments[1]) : undefined;
       return { kind: "models", providerId };
@@ -38,6 +41,8 @@ export function toHash(route: Route): string {
   switch (route.kind) {
     case "dashboard":
       return "#/";
+    case "bots":
+      return "#/bots";
     case "models":
       return route.providerId ? `#/models/${encodeURIComponent(route.providerId)}` : "#/models";
     case "setup":

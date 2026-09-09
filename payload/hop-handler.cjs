@@ -318,6 +318,25 @@ function readPauseState() {
   }
 }
 
+function pauseBotsPath() {
+  if (process.env.OPENBOT_PAUSE_BOTS) return process.env.OPENBOT_PAUSE_BOTS;
+  return path.join(sandDataDir(), "openbot-pause-bots.json");
+}
+
+function readPauseBotsState() {
+  try {
+    var parsed = JSON.parse(fs.readFileSync(pauseBotsPath(), "utf8"));
+    if (!parsed || !Array.isArray(parsed.pausedBotIds)) return [];
+    return parsed.pausedBotIds.filter(function (id) { return typeof id === "string" && id.trim(); });
+  } catch (err) {
+    return [];
+  }
+}
+
+function isBotPaused(botId) {
+  return typeof botId === "string" && readPauseBotsState().indexOf(botId) >= 0;
+}
+
 function secretsPath() {
   return process.env.OPENBOT_SECRETS || "/home/box/sand-data/secrets.json";
 }
@@ -1058,6 +1077,13 @@ async function handleCompletions(req, res) {
       fields.requestBody = body;
     }
     clientMeta = inboundClientMeta(req, body);
+    var botContext = requestLog.extractChatContext && requestLog.extractChatContext(body && body.messages);
+    if (botContext && botContext.botId && isBotPaused(botContext.botId)) {
+      var botPaused = { error: { message: "openbot bot paused", code: "bot_paused", botId: botContext.botId } };
+      record({ status: 503, error: "openbot bot paused", responseBody: botPaused });
+      sendJson(res, 503, botPaused);
+      return;
+    }
     var plan;
     try {
       plan = readJson(planPath());
@@ -1192,6 +1218,9 @@ exports.handleHopRequest = handleHopRequest;
 exports.sendJson = sendJson;
 exports.readPauseState = readPauseState;
 exports.pausePath = pausePath;
+exports.pauseBotsPath = pauseBotsPath;
+exports.readPauseBotsState = readPauseBotsState;
+exports.isBotPaused = isBotPaused;
 exports.inboundClientMeta = inboundClientMeta;
 exports.detectClientName = detectClientName;
 exports.parseClientVersion = parseClientVersion;

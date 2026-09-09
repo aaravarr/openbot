@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  Bot,
   Boxes,
   ChevronRight,
   Copy,
@@ -40,6 +41,7 @@ export function Shell({ route, onNavigate }: { route: Route; onNavigate: (r: Rou
 
   const navItems: { route: Route; label: string; icon: typeof LayoutDashboard }[] = [
     { route: { kind: "dashboard" }, label: "Dashboard", icon: LayoutDashboard },
+    { route: { kind: "bots" }, label: "Bots", icon: Bot },
     { route: { kind: "models" }, label: "Models", icon: Boxes },
     { route: { kind: "logs" }, label: "Logs", icon: ScrollText },
   ];

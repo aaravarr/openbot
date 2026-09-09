@@ -188,6 +188,18 @@ Rules:
 
 ## Hop per-request reload
 
+## Per-bot pause state
+
+The sand-data file openbot-pause-bots.json has this shape:
+
+{
+  "pausedBotIds": ["<bot UUID>"]
+}
+
+The list is normalized to unique, sorted, non-empty strings and written atomically with a trailing newline. Missing or corrupt JSON is treated as an empty list. GET /api/bots scans OPENBOT_AGENT_DATA/agents, or /home/box/agent-data/agents, and returns botId plus the profile.json name; missing, invalid, or nameless profiles fall back to the directory ID. GET /api/pause-bots returns the list. PUT /api/pause-bots accepts either {botId, paused} for one toggle or {pausedBotIds} for replacement; malformed JSON and wrong types return 400.
+
+The hop extracts the bot UUID from the system-message profile path and returns 503 with error message openbot bot paused, code bot_paused, and botId. The runtime performs the same check before the hop stream and throws openbot-runtime: bot paused. Both direct hop requests and runtime turns read the file each time, so the change is hot and needs no restart.
+
 On each `POST /v1/chat/completions`:
 
 - Plan: `readJson(OPENBOT_PLAN || /home/box/sand-data/openbot-plan.json)`

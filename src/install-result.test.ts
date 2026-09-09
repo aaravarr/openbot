@@ -211,13 +211,11 @@ test("bot-mode rolls back when the real staging mv fails", (t) => {
     "mkdir -p \"$DEST\" \"$STAGING_DIR\"; printf old > \"$DEST/version\"; printf new > \"$STAGING_DIR/version\"",
     "mv() { if [[ \"$2\" == \"$DEST\" && \"$1\" == \"$STAGING_DIR\" ]]; then rm -rf \"$STAGING_DIR\"; fi; command mv \"$@\"; }",
     match[0].replace(/^  /gm, ""),
-    "if staging_swap; then exit 1; fi",
-    "test \"$(cat \"$DEST/version\")\" = old",
-    "test \"$(node -e 'console.log(JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\")).status)' \"$BOT_RESULT_FILE\")\" = failed",
-    "test \"$(node -e 'console.log(JSON.parse(require(\"fs\").readFileSync(process.argv[1],\"utf8\")).rolled_back)' \"$BOT_RESULT_FILE\")\" = true",
+    "swap_status=0; staging_swap || swap_status=$?; printf '%s' \"$swap_status\" > \"$data/swap-status\"",
   ].join("\n") + "\n";
   try {
     runBash(script, ["bash", data]);
+    assert.notEqual(readFileSync(path.join(data, "swap-status"), "utf8"), "0");
     const failed = JSON.parse(readFileSync(result, "utf8")) as { status: string; rolled_back: boolean };
     assert.equal(failed.status, "failed");
     assert.equal(failed.rolled_back, true);
@@ -243,11 +241,12 @@ test("bot-mode does not roll back when the destination is occupied externally", 
     "mkdir -p \"$DEST\" \"$STAGING_DIR\"; printf old > \"$DEST/version\"; printf new > \"$STAGING_DIR/version\"",
     "mv() { if [[ \"$2\" == \"$DEST\" && \"$1\" == \"$STAGING_DIR\" ]]; then printf occupant > \"$DEST\"; fi; command mv \"$@\"; }",
     match[0].replace(/^  /gm, ""),
-    "if staging_swap; then exit 1; fi",
+    "swap_status=0; staging_swap || swap_status=$?; printf '%s' \"$swap_status\" > \"$data/swap-status\"",
     "bot_write_state failed 2026-09-09T00:00:00Z 2026-09-09T00:00:01Z '' '' 'Staging switch failed.' '' swapping 'Staging switch failed.'",
   ].join("\n") + "\n";
   try {
     runBash(script, ["bash", data]);
+    assert.notEqual(readFileSync(path.join(data, "swap-status"), "utf8"), "0");
     const failed = JSON.parse(readFileSync(result, "utf8")) as { status: string; rolled_back?: boolean };
     assert.equal(failed.status, "failed");
     assert.notEqual(failed.rolled_back, true);

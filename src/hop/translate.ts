@@ -4,6 +4,7 @@ export type JsonSchema = {
   readonly type: "object";
   readonly properties: Record<string, unknown>;
   readonly required?: readonly string[];
+  readonly [key: string]: unknown;
 };
 
 export type HostTool = {
@@ -27,6 +28,42 @@ export type OpenAiFunctionTool = {
   };
 };
 
+function isGptModelId(modelId: string | undefined): boolean {
+  return typeof modelId === "string" && modelId.toLowerCase().includes("gpt");
+}
+
+function closeObjectSchemas(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      closeObjectSchemas(item);
+    }
+    return value;
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  if (value.type === "object") {
+    value.additionalProperties = false;
+  }
+  for (const child of Object.values(value)) {
+    closeObjectSchemas(child);
+  }
+  return value;
+}
+
+function closeGptToolSchemas(tools: OpenAiFunctionTool[], modelId: string | undefined): OpenAiFunctionTool[] {
+  if (!isGptModelId(modelId)) {
+    return tools;
+  }
+  return tools.map((tool) => ({
+    ...tool,
+    function: {
+      ...tool.function,
+      parameters: closeObjectSchemas(structuredClone(tool.function.parameters)) as JsonSchema,
+    },
+  }));
+}
+
 export type HostToolCallPart = {
   readonly type: "tool-call";
   readonly toolCallId: string;
@@ -42,24 +79,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function asJsonSchema(value: unknown): JsonSchema {
+function asJsonSchema(value: unknown, preserveSchema = false): JsonSchema {
   if (!isRecord(value)) {
     return EMPTY_SCHEMA;
   }
   if (isRecord(value.jsonSchema)) {
-    return asJsonSchema(value.jsonSchema);
+    return asJsonSchema(value.jsonSchema, preserveSchema);
   }
   const properties = isRecord(value.properties) ? value.properties : {};
   const required = Array.isArray(value.required)
     ? value.required.filter((item): item is string => typeof item === "string")
     : undefined;
-  if (required) {
-    return { type: "object", properties, required };
+  if (preserveSchema) {
+    return required
+      ? { ...value, type: "object", properties, required }
+      : { ...value, type: "object", properties };
   }
-  return { type: "object", properties };
+  return required ? { type: "object", properties, required } : { type: "object", properties };
 }
 
-export function unwrapJsonSchemaTools(tools: readonly HostTool[]): OpenAiFunctionTool[] {
+export function unwrapJsonSchemaTools(tools: readonly HostTool[], modelId?: string): OpenAiFunctionTool[] {
   const out: OpenAiFunctionTool[] = [];
   for (const tool of tools) {
     if (!tool || tool.type === "provider-defined") {
@@ -75,11 +114,11 @@ export function unwrapJsonSchemaTools(tools: readonly HostTool[]): OpenAiFunctio
       function: {
         name,
         description: tool.description ?? fn.description ?? "",
-        parameters: asJsonSchema(tool.parameters ?? fn.parameters),
+        parameters: asJsonSchema(tool.parameters ?? fn.parameters, isGptModelId(modelId)),
       },
     });
   }
-  return out;
+  return closeGptToolSchemas(out, modelId);
 }
 
 export function mapToolCalls(openAiCalls: readonly unknown[]): HostToolCallPart[] {

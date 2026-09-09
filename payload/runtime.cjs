@@ -140,22 +140,51 @@ function recordHostStream(entry) {
   }
 }
 
-function asJsonSchema(value) {
+function asJsonSchema(value, preserveSchema) {
   if (!isRecord(value)) {
     return { type: "object", properties: {} };
   }
   if (isRecord(value.jsonSchema)) {
-    return asJsonSchema(value.jsonSchema);
+    return asJsonSchema(value.jsonSchema, preserveSchema);
   }
   var properties = isRecord(value.properties) ? value.properties : {};
-  var schema = { type: "object", properties: properties };
+  var schema = preserveSchema ? { ...value, type: "object", properties: properties } : { type: "object", properties: properties };
   if (Array.isArray(value.required)) {
     schema.required = value.required.filter(function (item) { return typeof item === "string"; });
   }
   return schema;
 }
 
-function unwrapJsonSchemaTools(tools) {
+function isGptModelId(modelId) {
+  return typeof modelId === "string" && modelId.toLowerCase().includes("gpt");
+}
+
+function closeObjectSchemas(value) {
+  if (Array.isArray(value)) {
+    for (var i = 0; i < value.length; i++) closeObjectSchemas(value[i]);
+    return value;
+  }
+  if (!isRecord(value)) return value;
+  if (value.type === "object") value.additionalProperties = false;
+  var values = Object.values(value);
+  for (var j = 0; j < values.length; j++) closeObjectSchemas(values[j]);
+  return value;
+}
+
+function closeGptToolSchemas(tools, modelId) {
+  if (!isGptModelId(modelId)) return tools;
+  return tools.map(function (tool) {
+    return {
+      ...tool,
+      function: {
+        ...tool.function,
+        parameters: closeObjectSchemas(structuredClone(tool.function.parameters)),
+      },
+    };
+  });
+}
+
+function unwrapJsonSchemaTools(tools, modelId) {
   if (!Array.isArray(tools) || !tools.length) return undefined;
   var out = [];
   for (var i = 0; i < tools.length; i++) {
@@ -169,11 +198,11 @@ function unwrapJsonSchemaTools(tools) {
       function: {
         name: name,
         description: tool.description || fn.description || "",
-        parameters: asJsonSchema(tool.parameters || fn.parameters),
+        parameters: asJsonSchema(tool.parameters || fn.parameters, isGptModelId(modelId)),
       },
     });
   }
-  return out.length ? out : undefined;
+  return out.length ? closeGptToolSchemas(out, modelId) : undefined;
 }
 
 function defaultMaxTokens(requested, cap) {
@@ -775,7 +804,7 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
         stream: true,
         max_tokens: defaultMaxTokens(options2 && options2.maxTokens, agent.maxOutputTokens),
       };
-      var openaiTools = unwrapJsonSchemaTools(tools);
+      var openaiTools = unwrapJsonSchemaTools(tools, agent.modelId);
       if (openaiTools) body.tools = openaiTools;
       var voiceTool = findVoiceTool(tools) || findVoiceTool(openaiTools);
       log("stream messages=" + body.messages.length + " tools=" + ((body.tools && body.tools.length) || 0));

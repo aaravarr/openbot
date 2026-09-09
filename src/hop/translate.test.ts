@@ -29,6 +29,56 @@ test("unwrapJsonSchemaTools peels AI SDK jsonSchema so properties are visible", 
   assert.equal("jsonSchema" in (parameters ?? {}), false);
 });
 
+test("unwrapJsonSchemaTools closes every nested object schema for gpt models", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      widget: {
+        type: "object",
+        properties: {
+          options: {
+            type: "array",
+            items: [{ type: "object", properties: { label: { type: "string" } } }],
+          },
+        },
+      },
+      choice: {
+        anyOf: [
+          { type: "object", properties: { value: { type: "string" } } },
+          { $ref: "#/$defs/choice" },
+        ],
+      },
+    },
+    patternProperties: {
+      "^x-": { type: "object", properties: { value: { type: "number" } } },
+    },
+    $defs: {
+      choice: { type: "object", properties: { name: { type: "string" } } },
+    },
+  };
+  const tools = unwrapJsonSchemaTools([{ name: "SendToUser", parameters: schema }], "fusionrouter/GpT-5.6-luna");
+  const parameters = tools[0]?.function.parameters as any;
+  assert.equal(parameters.additionalProperties, false);
+  assert.equal(parameters.properties.widget.additionalProperties, false);
+  assert.equal(parameters.properties.widget.properties.options.items[0]?.additionalProperties, false);
+  assert.equal(parameters.properties.choice.anyOf[0]?.additionalProperties, false);
+  assert.equal(parameters.$defs.choice.additionalProperties, false);
+  assert.equal(parameters.patternProperties["^x-"].additionalProperties, false);
+  assert.equal((schema as any).additionalProperties, undefined);
+  assert.equal((schema.properties.widget as any).additionalProperties, undefined);
+});
+
+test("unwrapJsonSchemaTools leaves non-gpt models and the original schema unchanged", () => {
+  const models = ["muse-spark-1.3-contributor", "glm-5.3-flash", "deepseek-v4-pro"];
+  for (const modelId of models) {
+    const schema = { type: "object", properties: { nested: { type: "object", properties: {} } } };
+    const tools = unwrapJsonSchemaTools([{ name: "tool", parameters: schema }], modelId);
+    assert.equal((tools[0]?.function.parameters as any).additionalProperties, undefined);
+    assert.equal((schema as any).additionalProperties, undefined);
+    assert.equal((schema.properties.nested as any).additionalProperties, undefined);
+  }
+});
+
 test("mapToolCalls keeps a second SendToUser; the generic hop does not drop it", () => {
   const parts = mapToolCalls([
     { id: "c1", function: { name: "SendToUser", arguments: "{\"message\":\"one\"}" } },

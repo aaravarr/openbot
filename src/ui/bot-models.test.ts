@@ -47,6 +47,13 @@ test("bot model API validates models and supports clearing and replacement", asy
     const replace = response();
     await handleBotModelsApi(request("PUT", { assignments: { "bot-2": "provider:model" } }), replace.res, new URL("http://localhost/api/bot-models"), current, readBody, (res, status, body) => { res.writeHead(status); res.end(JSON.stringify(body)); }, () => catalog);
     assert.deepEqual((replace.value.body as any).assignments, { "bot-2": "provider:model" });
+    const batch = response();
+    await handleBotModelsApi(request("PUT", { botIds: ["bot-3", "bot-4"], modelId: "provider:model" }), batch.res, new URL("http://localhost/api/bot-models"), current, readBody, (res, status, body) => { res.writeHead(status); res.end(JSON.stringify(body)); }, () => catalog);
+    assert.equal(batch.value.status, 200);
+    assert.deepEqual((batch.value.body as any).assignments, { "bot-2": "provider:model", "bot-3": "provider:model", "bot-4": "provider:model" });
+    const badBatch = response();
+    await handleBotModelsApi(request("PUT", { botIds: ["bot-3"], modelId: "missing" }), badBatch.res, new URL("http://localhost/api/bot-models"), current, readBody, (res, status, body) => { res.writeHead(status); res.end(JSON.stringify(body)); }, () => catalog);
+    assert.equal(badBatch.value.status, 400);
   } finally {
     if (previous === undefined) delete process.env.OPENBOT_BOT_MODELS;
     else process.env.OPENBOT_BOT_MODELS = previous;

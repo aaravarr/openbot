@@ -225,6 +225,15 @@ test("bot endpoints discover profiles and persist validated pause state", async 
       assert.deepEqual(replaced.json, { pausedBotIds: ["alpha", "missing"] });
       const resumed = await request(port, "/api/pause-bots", "PUT", Buffer.from(JSON.stringify({ botId: "alpha", paused: false })));
       assert.deepEqual(resumed.json, { pausedBotIds: ["missing"] });
+
+      // Interleaved toggle writes must serialize: every concurrently added id
+      // survives the whole-list replacement semantics.
+      const toggled = ["alpha", "blank", "broken", "missing"];
+      await Promise.all(toggled.map((botId) =>
+        request(port, "/api/pause-bots", "PUT", Buffer.from(JSON.stringify({ botId, paused: true }))),
+      ));
+      const concurrent = await request(port, "/api/pause-bots", "GET");
+      assert.deepEqual(concurrent.json, { pausedBotIds: ["alpha", "blank", "broken", "missing"] });
     } finally {
       server.close();
       server.closeAllConnections();

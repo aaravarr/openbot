@@ -11,7 +11,7 @@
     "openbot": "src/cli.ts"
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test \"src/**/*.test.ts\"",
+    "test": "node --experimental-strip-types --test \"src/**/*.test.ts\" \"web/src/**/*.test.ts\"",
     "test:install-result": "node --experimental-strip-types --test src/install-result.test.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web",
     "start": "node --experimental-strip-types src/cli.ts",

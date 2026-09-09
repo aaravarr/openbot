@@ -13,7 +13,8 @@ import {
 } from "lucide-react";
 import { getPause, hasKey, listLogs, modelById, providerById, setPause } from "../api/client";
 import type { GatewayPause, LogRecord, Model, SaveResult } from "../api/types";
-import { channelLabel, formatLatency, formatTime, formatTokens, labelReasoning } from "../lib/format";
+import { channelLabel, formatLatency, formatTime, labelReasoning } from "../lib/format";
+import { modelGroupsForState } from "../lib/model-options";
 import { deriveHealth } from "../lib/health";
 import { navigate } from "../lib/router";
 import { publicTunnelUrl } from "../lib/tunnel-url";
@@ -102,24 +103,7 @@ export function Dashboard() {
     }
   };
 
-  const groups: ListboxGroup[] = useMemo(() => {
-    return state.providers.map((p) => ({
-      label: p.name,
-      options: state.models
-        .filter((m) => m.providerId === p.id)
-        .map((m) => ({
-          value: m.id,
-          label: m.slug,
-          sublabel: hasKey(state, p.id) ? undefined : "no key",
-          badges: (
-            <>
-              {formatTokens(m.contextTokens) !== "—" ? <span className="badge">{formatTokens(m.contextTokens)}</span> : null}
-              {!hasKey(state, p.id) ? <span className="badge badge--warning">No key</span> : null}
-            </>
-          ),
-        })),
-    }));
-  }, [state]);
+  const groups: ListboxGroup[] = useMemo(() => modelGroupsForState(state), [state]);
 
   const run = async (
     id: string,

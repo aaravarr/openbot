@@ -285,7 +285,7 @@ if [[ "${1:-}" == "--bot-mode" ]]; then
         try {
           const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
           const url = value?.snapshot?.tunnel?.url;
-          if (typeof url === "string" && /^https:\/\/[a-z0-9-]+\\.trycloudflare\\.com$/i.test(url)) process.stdout.write(url);
+          if (typeof url === "string" && /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i.test(url)) process.stdout.write(url);
         } catch {}
       ' "$BOT_RESULT")"
       if [[ -n "$BOT_URL" ]]; then

@@ -12,6 +12,7 @@
   },
   "scripts": {
     "test": "node --experimental-strip-types --test \"src/**/*.test.ts\"",
+    "test:install-result": "node --experimental-strip-types --test src/install-result.test.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web",
     "start": "node --experimental-strip-types src/cli.ts",
     "start:ui": "node --experimental-strip-types src/ui/server.ts",

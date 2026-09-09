@@ -226,7 +226,8 @@ else
   DOWNLOAD_SOURCE=""
   DOWNLOAD_ERRORS=()
   download_source() {
-    local source="$1" url="$2" archive="$TMP/$source.tar.gz" attempt http_code curl_code detail
+    local source="$1" url="$2" attempt http_code curl_code detail archive
+    archive="$TMP/$source.tar.gz"
     for attempt in 1 2 3; do
       curl_code=0
       http_code="$(curl -sS -L -o "$archive" -w '%{http_code}' --connect-timeout 15 "$url" 2>"$TMP/$source.err")" || curl_code=$?
@@ -258,6 +259,7 @@ else
       echo 'OpenBot: download failed; reused existing install.' >&2
       DOWNLOAD_SOURCE=existing-install
       BOT_FAILURE_ERROR="download failed; reused existing install"
+      BOT_PROGRESS_SUMMARY="download failed; reused existing install"
       if [[ "$BOT_WORKER_MODE" == "1" ]]; then
         cp -a "$DEST"/. "$DEPLOY_DIR"/
       fi

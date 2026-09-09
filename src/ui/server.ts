@@ -82,6 +82,12 @@ type LogUsageBucket = {
   reasoningTokens: number;
   avgLatencyMs: number;
   avgFirstTokenMs: number | null;
+  avgTps: number | null;
+};
+
+type LogUsageSummary = LogUsageBucket & {
+  successRate: number;
+  cacheHitRate: number;
 };
 
 type LogUsage = {
@@ -93,6 +99,9 @@ type LogUsage = {
   byDay: LogUsageBucket[];
   byModel: LogUsageBucket[];
   byProvider: LogUsageBucket[];
+  summary: LogUsageSummary;
+  buckets: LogUsageBucket[];
+  bucketMs: number;
 };
 
 const require = createRequire(import.meta.url);
@@ -320,6 +329,8 @@ function parseUsageQuery(url: URL): Record<string, unknown> {
   if (to.trim()) query.to = to.trim();
   if (model.trim()) query.model = model.trim();
   if (provider.trim()) query.provider = provider.trim();
+  const range = url.searchParams.get("range") ?? "";
+  if (range.trim()) query.range = range.trim();
   return query;
 }
 

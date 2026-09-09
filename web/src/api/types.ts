@@ -227,7 +227,10 @@ export type LogUsageRow = {
   reasoningTokens: number;
   avgLatencyMs?: number;
   avgFirstTokenMs?: number;
+  avgTps?: number;
 };
+
+export type LogUsageSummary = LogUsageRow & { successRate: number; cacheHitRate: number };
 
 /** Usage payload from GET /api/logs/usage; `approximate` renders as the “约” marker in the UI. */
 export type LogUsage = {
@@ -240,6 +243,9 @@ export type LogUsage = {
   byModel: LogUsageRow[];
   /** Legacy alias kept for loose compat with older payloads; prefer byDay/byModel. */
   rows?: LogUsageRow[];
+  summary?: LogUsageSummary;
+  buckets?: LogUsageRow[];
+  bucketMs?: number;
 };
 
 export type LogFacets = {

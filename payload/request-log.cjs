@@ -1721,6 +1721,8 @@ function newUsageBucket() {
     latencyCount: 0,
     firstTokenSum: 0,
     firstTokenCount: 0,
+    tpsSum: 0,
+    tpsCount: 0,
   };
 }
 
@@ -1741,6 +1743,13 @@ function addUsageRow(bucket, row) {
     bucket.firstTokenSum += row.firstTokenMs;
     bucket.firstTokenCount += 1;
   }
+  var streamMs = typeof row.latencyMs === "number" && typeof row.firstTokenMs === "number"
+    ? Math.max(1, row.latencyMs - row.firstTokenMs) : undefined;
+  var completion = numField(row, "completionTokens");
+  if (streamMs !== undefined && completion > 0) {
+    bucket.tpsSum += completion / (streamMs / 1000);
+    bucket.tpsCount += 1;
+  }
 }
 
 function finalizeUsageBucket(key, bucket) {
@@ -1756,6 +1765,7 @@ function finalizeUsageBucket(key, bucket) {
     reasoningTokens: bucket.reasoningTokens,
     avgLatencyMs: bucket.latencyCount > 0 ? bucket.latencySum / bucket.latencyCount : 0,
     avgFirstTokenMs: bucket.firstTokenCount > 0 ? bucket.firstTokenSum / bucket.firstTokenCount : null,
+    avgTps: bucket.tpsCount > 0 ? bucket.tpsSum / bucket.tpsCount : null,
   };
 }
 
@@ -1765,7 +1775,11 @@ function usageNow(query) {
   var to = typeof q.to === "string" ? q.to : "";
   var modelFilter = typeof q.model === "string" ? q.model : "";
   var providerFilter = typeof q.provider === "string" ? q.provider : "";
-  var cacheKey = JSON.stringify([from, to, modelFilter, providerFilter]);
+  var range = typeof q.range === "string" ? q.range : "";
+  var rangeMs = ({"1h": 3600000, "6h": 21600000, "24h": 86400000, "7d": 604800000, "30d": 2592000000})[range] || 0;
+  if (range && !from && !to) { to = new Date().toISOString(); from = new Date(Date.now() - rangeMs).toISOString(); }
+  var bucketMs = ({"1h": 300000, "6h": 900000, "24h": 3600000, "7d": 21600000, "30d": 86400000})[range] || 86400000;
+  var cacheKey = JSON.stringify([from, to, modelFilter, providerFilter, range]);
   var nowMs = Date.now();
   if (usageCache && nowMs - usageCache.at < CACHE_TTL_MS && usageCache.key === cacheKey) {
     return usageCache.value;
@@ -1794,6 +1808,7 @@ function usageNow(query) {
   var byDay = {};
   var byModel = {};
   var byProvider = {};
+  var byBucket = {};
   for (var s = 0; s < scanned.length; s++) {
     var item = scanned[s];
     var day = typeof item.startedAt === "string" ? item.startedAt.slice(0, 10) : "(unknown)";
@@ -1810,6 +1825,10 @@ function usageNow(query) {
     addUsageRow(byDay[day], item);
     addUsageRow(byModel[modelKey], item);
     addUsageRow(byProvider[providerKey], item);
+    var ts = Date.parse(item.startedAt);
+    var bucketKey = Number.isFinite(ts) ? new Date(Math.floor(ts / bucketMs) * bucketMs).toISOString() : "(unknown)";
+    if (!byBucket[bucketKey]) byBucket[bucketKey] = newUsageBucket();
+    addUsageRow(byBucket[bucketKey], item);
   }
   var truncated = false;
   function finalizeGroups(map, sortDesc) {
@@ -1825,6 +1844,9 @@ function usageNow(query) {
     }
     return keys.map(function (key) { return finalizeUsageBucket(key, map[key]); });
   }
+  var summary = finalizeUsageBucket("summary", scanned.reduce(function (acc, item) { addUsageRow(acc, item); return acc; }, newUsageBucket()));
+  summary.successRate = summary.requests > 0 ? summary.ok / summary.requests : 0;
+  summary.cacheHitRate = summary.promptTokens > 0 ? summary.cachedTokens / summary.promptTokens : 0;
   var value = {
     approximate: capped || truncated,
     scanned: scanned.length,
@@ -1834,6 +1856,9 @@ function usageNow(query) {
     byDay: finalizeGroups(byDay, false),
     byModel: finalizeGroups(byModel, true),
     byProvider: finalizeGroups(byProvider, true),
+    summary: summary,
+    buckets: finalizeGroups(byBucket, false),
+    bucketMs: bucketMs,
   };
   usageCache = { key: cacheKey, value: value, at: nowMs };
   return value;

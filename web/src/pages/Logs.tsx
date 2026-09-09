@@ -119,6 +119,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
   const [usage, setUsage] = useState<LogUsage | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
   const [usageError, setUsageError] = useState<string | null>(null);
+  const [usageRange, setUsageRange] = useState<"1h" | "6h" | "24h" | "7d" | "30d">("24h");
   const [stats, setStats] = useState<LogStats | null>(null);
   const [facets, setFacets] = useState<LogFacets | null>(null);
   const [events, setEvents] = useState<LogEvent[]>([]);
@@ -248,13 +249,13 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
     setUsageLoading(true);
     setUsageError(null);
     try {
-      setUsage(await fetchLogUsage());
+      setUsage(await fetchLogUsage({ range: usageRange }));
     } catch (err) {
       setUsageError(err instanceof Error ? err.message : "Could not load usage.");
     } finally {
       setUsageLoading(false);
     }
-  }, []);
+  }, [usageRange]);
  
   useEffect(() => {
     if (activeTab === "usage" && usage === null && !usageLoading && !usageError) void loadUsage();
@@ -676,7 +677,14 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
           </div>
         </section>
       ) : activeTab === "usage" ? (
-        <UsageSection usage={usage} loading={usageLoading} error={usageError} onRetry={() => void loadUsage()} />
+        <RichUsageSection
+          usage={usage}
+          loading={usageLoading}
+          error={usageError}
+          range={usageRange}
+          onRangeChange={(next) => { setUsageRange(next); setUsage(null); }}
+          onRetry={() => void loadUsage()}
+        />
       ) : (
       <>
       {/* Toolbar + table */}
@@ -1114,6 +1122,50 @@ function UsageTable({
   );
 }
  
+type UsageRange = "1h" | "6h" | "24h" | "7d" | "30d";
+type UsageSummary = LogUsageRow & { successRate: number; cacheHitRate: number };
+
+function usageSummaryFallback(rows: LogUsageRow[]): UsageSummary {
+  const summary: UsageSummary = { key: "summary", requests: 0, ok: 0, fail: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedTokens: 0, reasoningTokens: 0, avgLatencyMs: 0, avgFirstTokenMs: undefined, avgTps: undefined, successRate: 0, cacheHitRate: 0 };
+  for (const row of rows) {
+    summary.requests += row.requests; summary.ok += row.ok; summary.fail += row.fail;
+    summary.promptTokens += row.promptTokens; summary.completionTokens += row.completionTokens;
+    summary.totalTokens += row.totalTokens; summary.cachedTokens += row.cachedTokens; summary.reasoningTokens += row.reasoningTokens;
+  }
+  summary.successRate = summary.requests ? summary.ok / summary.requests : 0;
+  summary.cacheHitRate = summary.promptTokens ? summary.cachedTokens / summary.promptTokens : 0;
+  return summary;
+}
+
+function RichUsageSection({ usage, loading, error, range, onRangeChange, onRetry }: { usage: LogUsage | null; loading: boolean; error: string | null; range: UsageRange; onRangeChange: (range: UsageRange) => void; onRetry: () => void }) {
+  const dayRows = usage?.byDay ?? []; const modelRows = usage?.byModel ?? [];
+  const summary = usage?.summary ?? usageSummaryFallback(dayRows);
+  const ranges: Array<[UsageRange, string]> = [["1h", "1h"], ["6h", "6h"], ["24h", "24h"], ["7d", "7d"], ["30d", "30d"]];
+  const empty = !usage || summary.requests === 0;
+  return <section className="card usage-board" aria-label="用量看板">
+    <div className="card__head logs-toolbar usage-board__head"><div><span className="card__label">Usage</span><span className="usage-board__hint">按请求记录统计</span></div><div className="usage-range" role="tablist" aria-label="时间范围">{ranges.map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={range === key} className={range === key ? "is-active" : ""} onClick={() => onRangeChange(key)}>{label}</button>)}</div><IconButton label="刷新用量" icon={RefreshCw} onClick={onRetry} /></div>
+    {loading && empty ? <div className="card__body"><div className="skel skel--block" /></div> : error && empty ? <div className="card__body stack"><div className="notice notice--warn"><span className="text">用量统计暂不可用：{error}</span></div><Button variant="secondary" onClick={onRetry}>重试</Button></div> : empty ? <div className="card__body"><EmptyState icon={ScrollText} title="暂无用量数据" body="产生请求后，这里会展示 token、延迟和模型分布。" /></div> : <div className="card__body usage-board__body">
+      <UsageSummaryCards summary={summary} approximate={usage?.approximate === true} />
+      <UsageTrend buckets={usage?.buckets ?? []} />
+      <div className="usage-board__split"><UsageDonut title="Token 构成" items={[{ label: "输入（未缓存）", value: Math.max(0, summary.promptTokens - summary.cachedTokens), color: "#6f9f9a" }, { label: "缓存", value: summary.cachedTokens, color: "#9fbbe0" }, { label: "输出", value: summary.completionTokens, color: "#d49a63" }, { label: "推理", value: summary.reasoningTokens, color: "#c0a8dd" }]} /><UsageBars title="模型分布" rows={modelRows.map(toUsageGroup)} /></div>
+      <UsageTable caption="按天" keyLabel="日期" groups={dayRows.map(toUsageGroup)} approximate={usage?.approximate === true} showOkFail /><UsageTable caption="按模型" keyLabel="模型" groups={modelRows.map(toUsageGroup)} approximate={usage?.approximate === true} showOkFail /><span className="usage-board__note">平均 TPS 按 completion tokens ÷（端到端延迟 − 首 token 延迟）计算；估算费用暂未接入价格表。</span>
+    </div>}
+  </section>;
+}
+
+function UsageSummaryCards({ summary, approximate }: { summary: UsageSummary; approximate: boolean }) {
+  const cards = [["请求数", `${usageCount(summary.requests, approximate)}（成功 ${summary.ok} / 失败 ${summary.fail}）`], ["成功率", `${(summary.successRate * 100).toFixed(1)}%`], ["平均延迟", formatLatency(summary.avgLatencyMs)], ["平均 TTFT", formatLatency(summary.avgFirstTokenMs)], ["平均 TPS", summary.avgTps ? `${summary.avgTps.toFixed(1)} tok/s` : "—"], ["总 Token", usageCount(summary.totalTokens, approximate)], ["输入 Token", usageCount(summary.promptTokens, approximate)], ["输出 Token", usageCount(summary.completionTokens, approximate)], ["缓存 Token", usageCount(summary.cachedTokens, approximate)], ["缓存命中率", `${(summary.cacheHitRate * 100).toFixed(1)}%`], ["推理 Token", usageCount(summary.reasoningTokens, approximate)]] as const;
+  return <div className="usage-metrics">{cards.map(([label, value]) => <div className="usage-metric" key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>;
+}
+
+function UsageTrend({ buckets }: { buckets: LogUsageRow[] }) {
+  const width = 720, height = 220, pad = 28; const max = Math.max(1, ...buckets.map((b) => b.promptTokens + b.completionTokens)); const maxReq = Math.max(1, ...buckets.map((b) => b.requests));
+  return <div className="usage-chart"><div className="usage-chart__title"><span>Token 趋势</span><span className="usage-legend">输入 · 缓存 · 输出 · 推理 · <em>● 请求数</em></span></div>{buckets.length ? <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Token 趋势图" className="usage-svg">{buckets.map((b, index) => { const x = pad + index * ((width - pad * 2) / buckets.length); const bw = Math.max(4, (width - pad * 2) / buckets.length - 3); let y = height - pad; const parts = [[Math.max(0, b.promptTokens - b.cachedTokens), "#6f9f9a"], [b.cachedTokens, "#9fbbe0"], [b.completionTokens, "#d49a63"], [b.reasoningTokens, "#c0a8dd"]] as const; const rects = parts.map(([value, color]) => { const h = value / max * (height - pad * 2); y -= h; return <rect key={color} x={x} y={y} width={bw} height={h} fill={color} />; }); const cy = height - pad - b.requests / maxReq * (height - pad * 2); return <g key={b.key}>{rects}<circle cx={x + bw / 2} cy={cy} r="2.5" fill="#f54e00" />{index % Math.max(1, Math.ceil(buckets.length / 6)) === 0 ? <text x={x + bw / 2} y={height - 8} textAnchor="middle">{b.key.slice(11, 16)}</text> : null}</g>; })}</svg> : <div className="usage-chart__empty">当前范围没有趋势数据</div>}</div>;
+}
+
+function UsageDonut({ title, items }: { title: string; items: Array<{ label: string; value: number; color: string }> }) { let cursor = 0; const total = items.reduce((sum, item) => sum + item.value, 0); const background = total ? `conic-gradient(${items.map((item) => { const start = cursor / total * 360; cursor += item.value; return `${item.color} ${start}deg ${cursor / total * 360}deg`; }).join(", ")})` : "var(--surface-2)"; return <div className="usage-panel"><div className="usage-chart__title">{title}</div><div className="usage-donut-row"><div className="usage-donut" style={{ background }}><strong>{total.toLocaleString("en-US")}</strong><small>tokens</small></div><div className="usage-key">{items.map((item) => <div key={item.label}><i style={{ background: item.color }} />{item.label}<b>{total ? `${(item.value / total * 100).toFixed(1)}%` : "0%"}</b></div>)}</div></div></div>; }
+function UsageBars({ title, rows }: { title: string; rows: UsageGroup[] }) { const max = Math.max(1, ...rows.map((row) => row.totalTokens)); return <div className="usage-panel"><div className="usage-chart__title">{title}</div><div className="usage-bars">{rows.slice(0, 8).map((row) => <div key={row.key}><span title={row.key}>{row.key}</span><div><i style={{ width: `${row.totalTokens / max * 100}%` }} /></div><b>{row.totalTokens.toLocaleString("en-US")}</b></div>)}</div></div>; }
+
 function UsageSection({
   usage,
   loading,

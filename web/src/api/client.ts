@@ -266,11 +266,12 @@ export async function getLogFacets(): Promise<LogFacets> {
 }
  
 /* ---- Usage: per-day / per-model token aggregates (lazy, never blocks the list) ---- */
-export async function fetchLogUsage(query: { from?: string; to?: string; model?: string } = {}): Promise<LogUsage> {
+export async function fetchLogUsage(query: { from?: string; to?: string; model?: string; range?: string } = {}): Promise<LogUsage> {
   const params = new URLSearchParams();
   if (query.from) params.set("from", query.from);
   if (query.to) params.set("to", query.to);
   if (query.model) params.set("model", query.model);
+  if (query.range) params.set("range", query.range);
   const suffix = params.toString();
   const data = await request(suffix ? `/api/logs/usage?${suffix}` : "/api/logs/usage");
   return normalizeLogUsage(data);
@@ -297,6 +298,7 @@ function normalizeUsageRow(row: unknown): LogUsageRow {
     typeof totalRaw === "number" && Number.isFinite(totalRaw) ? totalRaw : promptTokens + completionTokens;
   const latencyRaw = r.avgLatencyMs ?? r.avgLatency ?? r.latencyMs;
   const firstTokenRaw = r.avgFirstTokenMs ?? r.firstTokenMs ?? r.avgFirstToken ?? r.firstToken;
+  const tpsRaw = r.avgTps ?? r.tps;
   const keyRaw = r.key ?? r.day ?? r.date ?? r.model;
   return {
     key: typeof keyRaw === "string" ? keyRaw : "",
@@ -310,6 +312,7 @@ function normalizeUsageRow(row: unknown): LogUsageRow {
     reasoningTokens: numOrZero(r.reasoningTokens ?? r.reasoning_tokens),
     avgLatencyMs: numOrUndefined(latencyRaw),
     avgFirstTokenMs: numOrUndefined(firstTokenRaw),
+    avgTps: numOrUndefined(tpsRaw),
   };
 }
 
@@ -350,6 +353,15 @@ function normalizeLogUsage(data: unknown): LogUsage {
     byDay,
     byModel,
     rows: [...byDay],
+    summary: obj.summary
+      ? {
+          ...normalizeUsageRow(obj.summary),
+          successRate: numOrZero((obj.summary as Record<string, unknown>).successRate),
+          cacheHitRate: numOrZero((obj.summary as Record<string, unknown>).cacheHitRate),
+        }
+      : undefined,
+    buckets: parseUsageRows(obj.buckets),
+    bucketMs: numOrZero(obj.bucketMs),
   };
 }
 

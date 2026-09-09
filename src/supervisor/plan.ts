@@ -80,7 +80,14 @@ export function normalizeCatalog(catalog: Catalog): Catalog {
       models.push(model);
     }
   }
-  return { providers: catalog.providers, models, bindings: catalog.bindings };
+  return {
+    providers: catalog.providers.map((provider) => ({
+      ...provider,
+      apiType: provider.apiType === "responses" || provider.apiType === "anthropic" ? provider.apiType : "chat-completions",
+    })),
+    models,
+    bindings: catalog.bindings,
+  };
 }
 
 export function catalogFromPlanJson(raw: string | undefined): Catalog {
@@ -103,7 +110,10 @@ export function catalogFromPlanJson(raw: string | undefined): Catalog {
     }
   }
   return {
-    providers: catalog.providers as Catalog["providers"],
+    providers: (catalog.providers as Catalog["providers"]).map((provider) => ({
+      ...provider,
+      apiType: provider.apiType === "responses" || provider.apiType === "anthropic" ? provider.apiType : "chat-completions",
+    })),
     models,
     bindings: catalog.bindings as Catalog["bindings"],
   };

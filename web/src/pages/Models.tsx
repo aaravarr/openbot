@@ -564,9 +564,9 @@ export function Models({ providerId }: { providerId?: string }) {
         onClose={() => setEditProvider(false)}
         provider={selected ?? null}
         busy={busy === "provider"}
-        onSave={async (name, origin) => {
+        onSave={async (name, origin, apiType) => {
           if (!selected) return;
-          const ok = await run("provider", { kind: "update-provider", providerId: selected.id, name, origin }, { title: "Provider updated", message: `${name} now points to ${origin}.` });
+          const ok = await run("provider", { kind: "update-provider", providerId: selected.id, name, origin, apiType }, { title: "Provider updated", message: `${name} now points to ${origin}.` });
           if (ok) setEditProvider(false);
         }}
       />

@@ -5,6 +5,8 @@ import { Button } from "./ui";
 import { Field, Input, PasswordInput } from "./fields";
 import { Modal } from "./overlays";
 
+type ApiType = "chat-completions" | "responses" | "anthropic";
+
 export function EditProviderDialog({
   open,
   onClose,
@@ -16,16 +18,18 @@ export function EditProviderDialog({
   onClose: () => void;
   provider: Provider | null;
   busy?: boolean;
-  onSave: (name: string, origin: string) => Promise<void>;
+  onSave: (name: string, origin: string, apiType: ApiType) => Promise<void>;
 }) {
   const [name, setName] = useState("");
   const [origin, setOrigin] = useState("");
+  const [apiType, setApiType] = useState<ApiType>("chat-completions");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open && provider) {
       setName(provider.name);
       setOrigin(provider.origin);
+      setApiType(provider.apiType ?? "chat-completions");
       setError(null);
     }
   }, [open, provider]);
@@ -42,7 +46,7 @@ export function EditProviderDialog({
       return;
     }
     setError(null);
-    await onSave(n, o);
+    await onSave(n, o, apiType);
   };
 
   return (
@@ -65,6 +69,13 @@ export function EditProviderDialog({
           </Field>
           <Field label="Base URL" htmlFor="ep-origin" helper="Trailing slash is stripped.">
             <Input id="ep-origin" mono value={origin} onChange={(e) => setOrigin(e.target.value)} />
+          </Field>
+          <Field label="API type" htmlFor="ep-api-type">
+            <select id="ep-api-type" className="input" value={apiType} onChange={(e) => setApiType(e.target.value as ApiType)}>
+              <option value="chat-completions">Chat Completions</option>
+              <option value="responses">OpenAI Responses</option>
+              <option value="anthropic">Anthropic Messages</option>
+            </select>
           </Field>
           {error ? <span className="field" style={{ color: "var(--danger)" }}>{error}</span> : null}
         </div>

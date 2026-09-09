@@ -41,6 +41,7 @@ import type {
 } from "../api/types";
 import { LogChannelPair } from "../components/LogChannel";
 import { channelSubtitle, formatLatency, formatTime, formatTimestamp } from "../lib/format";
+import { botDisplayName } from "../lib/bot-label";
 import {
   findPairById,
   pairChannels,
@@ -939,7 +940,7 @@ function hasSource(r: LogRecord): boolean {
  
 /** Short source label for list rows; prefers client name, then conversation, then UA. */
 function sourceLabel(r: LogRecord, botNames?: ReadonlyMap<string, string>): ReactNode {
-  const bot = (r.botId ? botNames?.get(r.botId) : undefined)?.trim() || r.botName?.trim() || r.botId?.trim();
+  const bot = botDisplayName(r, botNames ?? new Map());
   if (r.chatType === "group") {
     const chat = r.chatName?.trim();
     if (chat && bot) return `${chat} - ${bot}`;
@@ -1401,7 +1402,7 @@ function LogLayer({ detail: d, stacked, botNames }: { detail: LogDetail; stacked
           {(d.botName || d.botId) ? (
             <>
               <span className="k">Bot</span>
-              <span className="v">{(d.botId ? botNames.get(d.botId) : undefined) ?? d.botName ?? d.botId}</span>
+              <span className="v">{botDisplayName(d, botNames)}</span>
             </>
           ) : null}
           {d.botId ? (

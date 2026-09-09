@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import test from "node:test";
 
@@ -152,6 +152,10 @@ test("bot endpoints discover profiles and persist validated pause state", async 
     writeFileSync(agents + "/blank/profile.json", JSON.stringify({ title: "No name" }));
     fss.mkdirSync(agents + "/broken", { recursive: true });
     writeFileSync(agents + "/broken/profile.json", "{broken");
+    utimesSync(agents + "/blank", new Date(1_000), new Date(4_000));
+    utimesSync(agents + "/alpha", new Date(1_000), new Date(3_000));
+    utimesSync(agents + "/broken", new Date(1_000), new Date(2_000));
+    utimesSync(agents + "/missing", new Date(1_000), new Date(1_000));
     writeFileSync("/tmp/openbot-sand-data/openbot-bot-models.json", JSON.stringify({ assignments: { orphan: "provider:model" } }));
 
     const { server, port } = await listen();
@@ -159,7 +163,7 @@ test("bot endpoints discover profiles and persist validated pause state", async 
       const bots = await request(port, "/api/bots", "GET");
       assert.equal(bots.status, 200);
       assert.equal(Array.isArray(bots.json), true);
-      const botRows = bots.json as Array<{ botId: string; botName: string; deleted: boolean }>;
+      const botRows = bots.json as Array<{ botId: string; botName: string; deleted: boolean; updatedAtMs: number | null; createdAtMs: number | null }>;
       assert.deepEqual(botRows.map((bot) => ({ botId: bot.botId, botName: bot.botName, deleted: bot.deleted })), [
         { botId: "blank", botName: "blank", deleted: false },
         { botId: "alpha", botName: "Alpha Bot", deleted: false },
@@ -167,6 +171,12 @@ test("bot endpoints discover profiles and persist validated pause state", async 
         { botId: "missing", botName: "missing", deleted: true },
         { botId: "orphan", botName: "orphan", deleted: true },
       ]);
+      assert.deepEqual(botRows.map((bot) => bot.updatedAtMs), [4_000, 3_000, 2_000, 1_000, null]);
+      assert.equal(botRows[0]?.createdAtMs, fss.statSync(agents + "/blank/profile.json").birthtimeMs);
+      assert.equal(botRows[1]?.createdAtMs, fss.statSync(agents + "/alpha/profile.json").birthtimeMs);
+      assert.equal(botRows[2]?.createdAtMs, fss.statSync(agents + "/broken/profile.json").birthtimeMs);
+      assert.equal(botRows[3]?.createdAtMs, null);
+      assert.equal(botRows[4]?.createdAtMs, null);
 
       const missing = await request(port, "/api/pause-bots", "GET");
       assert.deepEqual(missing.json, { pausedBotIds: [] });

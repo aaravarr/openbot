@@ -159,19 +159,52 @@ function readBots(current: SupervisorDeps): BotInfo[] {
   } catch { /* log facets are best effort */ }
   return [...ids].map((botId) => {
     const dir = path.join(agentsDir, botId);
+    let dirStat: fs.Stats;
     try {
-      const dirStat = fs.statSync(dir);
-      const profilePath = path.join(dir, "profile.json");
-      const profileStat = fs.statSync(profilePath);
-      const profile = JSON.parse(fs.readFileSync(profilePath, "utf8")) as { name?: unknown };
-      const name = typeof profile.name === "string" && profile.name.trim() ? profile.name.trim() : botId;
-      return { botId, botName: name, deleted: false, updatedAtMs: dirStat.mtimeMs, createdAtMs: profileStat.birthtimeMs || dirStat.birthtimeMs || dirStat.ctimeMs };
-    } catch {
-      let stat: fs.Stats | undefined;
-      try { stat = fs.statSync(dir); } catch { /* deleted directory */ }
-      return { botId, botName: botId, deleted: true, updatedAtMs: stat?.mtimeMs ?? null, createdAtMs: stat ? (stat.birthtimeMs || stat.ctimeMs) : null };
+      dirStat = fs.statSync(dir);
+    } catch (error) {
+      return { botId, botName: botId, deleted: isMissingFileError(error), updatedAtMs: null, createdAtMs: null };
     }
+
+    const profilePath = path.join(dir, "profile.json");
+    let profileStat: fs.Stats;
+    try {
+      profileStat = fs.statSync(profilePath);
+    } catch (error) {
+      return {
+        botId,
+        botName: botId,
+        deleted: isMissingFileError(error),
+        updatedAtMs: dirStat.mtimeMs,
+        createdAtMs: null,
+      };
+    }
+
+    let profileText: string;
+    try {
+      profileText = fs.readFileSync(profilePath, "utf8");
+    } catch {
+      return { botId, botName: botId, deleted: false, updatedAtMs: dirStat.mtimeMs, createdAtMs: profileCreatedAt(profileStat) };
+    }
+
+    let profile: { name?: unknown };
+    try {
+      profile = JSON.parse(profileText) as { name?: unknown };
+    } catch {
+      return { botId, botName: botId, deleted: true, updatedAtMs: dirStat.mtimeMs, createdAtMs: profileCreatedAt(profileStat) };
+    }
+
+    const name = typeof profile.name === "string" && profile.name.trim() ? profile.name.trim() : botId;
+    return { botId, botName: name, deleted: false, updatedAtMs: dirStat.mtimeMs, createdAtMs: profileCreatedAt(profileStat) };
   }).sort((a, b) => Number(a.deleted) - Number(b.deleted) || (b.updatedAtMs ?? -1) - (a.updatedAtMs ?? -1) || (b.createdAtMs ?? -1) - (a.createdAtMs ?? -1) || a.botName.localeCompare(b.botName));
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function profileCreatedAt(stat: fs.Stats): number | null {
+  return Number.isFinite(stat.birthtimeMs) ? stat.birthtimeMs : null;
 }
 
 function readPauseBots(current: SupervisorDeps): PauseBotsState {

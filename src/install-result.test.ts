@@ -77,7 +77,7 @@ test("bot-status reports missing, running, success, and failed result files", (t
     writeFileSync(result, JSON.stringify({ status: "running", startedAt: new Date().toISOString() }));
     const running = runStatus(data);
     assert.match(running, /OPENBOT_STATUS=running/);
-    assert.match(running, /OPENBOT_BOT_INSTRUCTION=.*SendToUser.*before the next poll/);
+    assert.match(running, /OPENBOT_BOT_INSTRUCTION=.*OPENBOT_PROGRESS_STAGE.*OPENBOT_PROGRESS_SUMMARY.*before the next poll/);
 
     writeFileSync(result, JSON.stringify({
       status: "running",
@@ -95,13 +95,14 @@ test("bot-status reports missing, running, success, and failed result files", (t
     const brief = runStatusBrief(data);
     assert.match(brief, /OPENBOT_STATUS=running/);
     assert.match(brief, /OPENBOT_PROGRESS_STAGE=deploying/);
+    assert.match(brief, /OPENBOT_BOT_INSTRUCTION=.*poll --bot-status --brief/);
     assert.equal(brief.includes("OPENBOT_PROGRESS_SUMMARY="), false);
     assert.equal(brief.includes("OPENBOT_TIMING_"), false);
 
     writeFileSync(result, JSON.stringify({ status: "running", startedAt: "2026-09-09T09:00:00Z" }));
     const warning = runStatus(data);
     assert.match(warning, /OPENBOT_WARNING=.*3 minutes/);
-    assert.match(warning, /OPENBOT_BOT_INSTRUCTION=.*appears stuck.*stop polling/);
+    assert.match(warning, /OPENBOT_BOT_INSTRUCTION=.*log tail.*stop polling/);
 
     writeFileSync(result, JSON.stringify({ status: "success", startedAt: "2026-09-09T10:00:00Z", finishedAt: "2026-09-09T10:01:00Z", url: "https://openbot.trycloudflare.com", qrPath: "/tmp/openbot.png", commit: "cafed00d", downloadSource: "github-archive" }));
     const success = runStatus(data);

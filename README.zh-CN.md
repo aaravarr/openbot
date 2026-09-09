@@ -22,6 +22,19 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 ## 安装
 
+<details>
+<summary>Grok Bot：一条命令完成安装</summary>
+
+当用户要求安排 `aaravarr/openbot` 时，请在 Grok Bot 的 Computer 上运行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-mode
+```
+
+`--bot-mode`` 全程非交互且可重复执行。它会安装或更新 OpenBot，通过项目现有的 reconcile 流程启用 Cloudflare quick tunnel，等待 `trycloudflare.com` 链接，并把二维码写入 `/tmp/openbot-install-qr.png`。结束后读取 `OPENBOT BOT RESULT` 结果块，用宿主已安装的 `SendToUser` 工具，严格按照该工具定义的图片/文件参数，把 `OPENBOT_URL` 和二维码图片发给用户；不要暴露密钥。如果结果块报告失败，应告知用户本机地址和重试命令。
+
+</details>
+
 在 **Computer 终端**里运行，不要在 Mac 上运行。Grok Bot 的聊天走 Computer；笔记本上的代理收不到回合。
 
 需要 Node 22 或更新。如果盒子里只有 Node 20，安装脚本会把 Node 22 放到 `sand-data`，不替换系统 Node。

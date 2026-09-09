@@ -20,6 +20,7 @@ import { censusHost } from "./host/census.ts";
 import { loopbackExpose, type Expose } from "./domain/types.ts";
 import { type SupervisorDeps } from "./supervisor/observe.ts";
 import { printResult, printStatus } from "./cli/print.ts";
+import { writeQrPng } from "./qrcode-png.ts";
 
 function depsFrom(paths: SupervisorDeps["paths"]): SupervisorDeps {
   return { paths, fs: nodeFs(), procs: nodeProcs() };
@@ -119,6 +120,12 @@ async function main(argv: string[]): Promise<number> {
   const parsed = parseInstallCommand({ argv, env: process.env, metaUrl: import.meta.url });
   const deps = depsFrom(parsed.paths);
   const savedExpose = readExposeFile(deps.fs, deps.paths.expose);
+
+  if (parsed.command.kind === "qrcode") {
+    writeQrPng(parsed.command.text, parsed.command.out);
+    console.log(parsed.command.out);
+    return 0;
+  }
 
   if (parsed.command.kind === "census-only") {
     const source = deps.fs.read(deps.paths.hostMain);

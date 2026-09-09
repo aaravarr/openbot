@@ -323,6 +323,26 @@ Reconcile refusals (`src/supervisor/reconcile.ts`):
 
 Do not adopt the foreign pid. `--census-only` is observe, not proof that wrap would succeed (`--dry-run` is `proveWrap`).
 
+## Bot-mode install output
+
+Run from the Computer terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-mode
+```
+
+The mode calls the existing CLI tunnel reconcile (`tunnel on --json`) with retries; it does not hand-edit `openbot-expose` or `openbot-tunnel.json`. On success it writes `/tmp/openbot-install-qr.png` and prints:
+
+```text
+===== OPENBOT BOT RESULT =====
+OPENBOT_URL=https://<random>.trycloudflare.com
+OPENBOT_QR_PATH=/tmp/openbot-install-qr.png
+OPENBOT_BOT_INSTRUCTION=...
+===== END OPENBOT BOT RESULT =====
+```
+
+The image-send call must use the actual `SendToUser` definition installed on that Computer. Do not infer or hard-code a tool schema. If that definition cannot be inspected, send the URL only and explain that image delivery needs host-tool access.
+
 ## CLI
 
 From `/home/box/sand-data/openbot` (or `openbot` on `PATH`):

@@ -394,6 +394,43 @@ test("update-provider keeps the provider id and rewrites name and origin", () =>
   assert.equal(parsed.secret, undefined);
 });
 
+test("a removed preset provider stays a routable generic catalog row", () => {
+  // Old installs saved DeepSeek before preset curation. The save parser must
+  // keep that row usable: editing another provider must not drop it, and the
+  // catalog handed to the hop is unchanged.
+  const disk = zhipuCatalog();
+  const deepseekId = parseProviderId("deepseek");
+  const deepseekModelId = parseModelId("deepseek:deepseek-v4-flash");
+  const catalog: Catalog = {
+    providers: [
+      ...disk.providers,
+      {
+        id: deepseekId,
+        name: "DeepSeek",
+        origin: parseUpstreamOrigin("https://api.deepseek.com"),
+        maxTokensDefault: HIGH_AGENT_MAX_TOKENS,
+        mapFile: "provider-maps.cjs",
+      },
+    ],
+    models: [
+      ...disk.models,
+      makeModel({ id: deepseekModelId, providerId: deepseekId, slug: parseModelSlug("deepseek-v4-flash") }),
+    ],
+    bindings: disk.bindings,
+  };
+  const parsed = parseUiProviderSave(
+    { kind: "use-model", modelId: "deepseek:deepseek-v4-flash" },
+    paths(),
+    catalog,
+  );
+  assert.equal(parsed.desired.kind, "custom");
+  if (parsed.desired.kind !== "custom") return;
+  assert.equal(parsed.desired.catalog.providers.some((row) => row.id === deepseekId), true);
+  assert.equal(parsed.desired.catalog.models.some((row) => row.id === deepseekModelId), true);
+  assert.equal(parsed.desired.catalog.bindings[0]?.modelId, deepseekModelId);
+  assert.equal(parsed.secret, undefined);
+});
+
 test("update-provider writes a secret when one is sent", () => {
   const parsed = parseUiProviderSave(
     {

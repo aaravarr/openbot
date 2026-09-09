@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { ArrowRight, Check, ChevronLeft, Info, ShieldAlert, TriangleAlert } from "lucide-react";
-import { ApiError } from "../api/client";
+import { ApiError, completeOpenAIOAuth, startOpenAIOAuth } from "../api/client";
 import type { SaveResult } from "../api/types";
 import { labelReasoning } from "../lib/format";
-import { PRESETS, type Preset } from "../lib/presets";
+import { OPENCODE_ZEN_FREE_MODELS, PRESETS, type Preset } from "../lib/presets";
 import { refusalKindLabel, refusalRemedy } from "../lib/refusal";
 import { navigate } from "../lib/router";
 import { useApp } from "../store";
-import { Button, Notice } from "../components/ui";
+import { Badge, Button, Notice } from "../components/ui";
 import { Field, Input, PasswordInput } from "../components/fields";
 
 function usedMessage(result: SaveResult): string {
@@ -21,13 +21,17 @@ function usedMessage(result: SaveResult): string {
 export function Setup() {
   const { save } = useApp();
   const [step, setStep] = useState(1);
-  const [presetId, setPresetId] = useState<string>("zhipu");
-  const [name, setName] = useState("Zhipu GLM");
-  const [origin, setOrigin] = useState("https://open.bigmodel.cn/api/paas/v4");
+  const [presetId, setPresetId] = useState<string>("openai");
+  const [name, setName] = useState("OpenAI");
+  const [origin, setOrigin] = useState("https://api.openai.com/v1");
   const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [fieldError, setFieldError] = useState<string | null>(null);
+  const [oauthSession, setOauthSession] = useState<string | null>(null);
+  const [oauthUrl, setOauthUrl] = useState<string | null>(null);
+  const [callbackUrl, setCallbackUrl] = useState("");
+  const [oauthConnected, setOauthConnected] = useState(false);
 
   const preset: Preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0]!;
 
@@ -53,11 +57,35 @@ export function Setup() {
       setFieldError("Base URL is required.");
       return;
     }
-    if (!secret.trim()) {
+    if (!secret.trim() && !oauthConnected) {
       setFieldError("API key is required — the hop would fail with no key.");
       return;
     }
     setStep(3);
+  };
+
+  const beginOAuth = async () => {
+    try {
+      const result = await startOpenAIOAuth();
+      setOauthSession(result.sessionId);
+      setOauthUrl(result.authorizationUrl);
+    } catch (err) {
+      setFieldError(err instanceof Error ? err.message : "Could not start OpenAI sign-in.");
+    }
+  };
+
+  const finishOAuth = async () => {
+    if (!oauthSession || !callbackUrl.trim()) return;
+    try {
+      await completeOpenAIOAuth(oauthSession, callbackUrl.trim());
+      setOauthConnected(true);
+      setOauthSession(null);
+      setOauthUrl(null);
+      setCallbackUrl("");
+      setFieldError(null);
+    } catch (err) {
+      setFieldError(err instanceof Error ? err.message : "OpenAI sign-in failed.");
+    }
   };
 
   const activate = async () => {
@@ -69,8 +97,8 @@ export function Setup() {
           kind: "upsert-provider",
           name: name.trim(),
           origin: origin.trim(),
-          modelSlug: "",
-          secret,
+          modelSlug: preset.id === "opencode" ? OPENCODE_ZEN_FREE_MODELS[0]?.id ?? preset.model : preset.model,
+          secret: oauthConnected ? "oauth" : secret,
         },
         { successTitle: "Activated", successMessage: usedMessage },
       );
@@ -137,7 +165,10 @@ export function Setup() {
                 onClick={() => pickPreset(p)}
                 aria-pressed={p.id === presetId}
               >
-                <span className="preset__name">{p.name}</span>
+                <span className="preset__name">
+                  {p.name}
+                  {p.id === "opencode" ? <Badge tone="success">Free</Badge> : null}
+                </span>
                 <span className="preset__origin">{p.origin || "your-endpoint.example"}</span>
               </button>
             ))}
@@ -173,6 +204,18 @@ export function Setup() {
                 placeholder="Paste your key"
               />
             </Field>
+            {preset.oauth ? (
+              <div className="card card--pad" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <Button variant="secondary" onClick={() => void beginOAuth()}>Sign in with OpenAI</Button>
+                {oauthUrl ? <a href={oauthUrl} target="_blank" rel="noreferrer">Open the OpenAI authorization page</a> : null}
+                {oauthSession ? <>
+                  <Field label="Authorization callback URL" htmlFor="oauth-callback" helper="Paste the complete localhost:1455 URL after authorization.">
+                    <Input id="oauth-callback" mono value={callbackUrl} onChange={(e) => setCallbackUrl(e.target.value)} placeholder="http://localhost:1455/auth/callback?..." />
+                  </Field>
+                  <Button variant="secondary" onClick={() => void finishOAuth()}>Complete OpenAI sign-in</Button>
+                </> : null}
+              </div>
+            ) : null}
             {fieldError ? (
               <Notice tone="warn" icon={TriangleAlert}>
                 {fieldError}

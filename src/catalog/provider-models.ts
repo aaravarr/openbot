@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { type Catalog, MAX_OUTPUT_TOKENS_CEILING } from "../domain/types.ts";
 import { keepReasoningOrder } from "../domain/model.ts";
 import { secretFor, type SecretStore } from "../supervisor/secrets.ts";
@@ -211,16 +212,25 @@ function timeoutMessage(err: unknown): string {
   return "provider is unreachable";
 }
 
+function opencodeModelsSession(providerId: string): string {
+  return createHash("sha256").update("openbot-opencode-models\0" + providerId, "utf8").digest("hex").slice(0, 32);
+}
+
 async function fetchProviderModels(input: {
   url: string;
   secret: string;
+  providerId: string;
   fetchFn: FetchLike;
   totalTimeoutMs: number;
 }): Promise<FetchProviderResult> {
   let res: { readonly status: number; readonly ok: boolean; text(): Promise<string> };
   try {
     res = await input.fetchFn(input.url, {
-      headers: { Authorization: `Bearer ${input.secret}`, Accept: "application/json" },
+      headers: {
+        ...(input.secret ? { Authorization: "Bearer " + input.secret } : {}),
+        Accept: "application/json",
+        ...(input.providerId === "opencode" ? { "x-opencode-session": opencodeModelsSession(input.providerId) } : {}),
+      },
       signal: AbortSignal.timeout(input.totalTimeoutMs),
     });
   } catch (err) {
@@ -295,7 +305,8 @@ export async function fetchModelsForProvider(input: {
   try {
     result = await fetchProviderModels({
       url: modelsUrl(provider.origin),
-      secret,
+      secret: secret ?? "",
+      providerId: provider.id,
       fetchFn: input.fetchFn ?? defaultFetch,
       totalTimeoutMs: PROVIDER_MODELS_TOTAL_TIMEOUT_MS,
     });

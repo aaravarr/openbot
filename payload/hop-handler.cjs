@@ -3,6 +3,7 @@
 var fs = require("fs");
 var http = require("http");
 var https = require("https");
+var nodeCrypto = require("crypto");
 var { URL } = require("url");
 var path = require("path");
 var { toOpenAIMessages, sanitizeToolCallIds } = require("./openai-messages.cjs");
@@ -242,6 +243,23 @@ function findConversationId(body) {
   return "";
 }
 
+// Deterministic OpenCode Zen session id per provider + conversation. The
+// upstream requires x-opencode-session since 2026-09-07 (MissingSessionID 400).
+// Identity is derived only from box-owned values: the routed provider id and
+// the conversation id already extracted for the request log. Inbound client
+// headers are never promoted to cross-request identity, so a caller cannot
+// forge or rotate another conversation's session. Requests without a
+// conversation id fall back to one fresh UUID per request; they are stateless
+// one-shot turns, so a stable id would be meaningless there.
+function opencodeSessionId(providerId, conversationId) {
+  var scope = String(providerId || "") + "\n" + String(conversationId || "");
+  var hex = nodeCrypto.createHash("sha256").update("openbot-opencode-session\0" + scope, "utf8").digest("hex").slice(0, 32).split("");
+  hex[12] = "5";
+  hex[16] = ["8", "9", "a", "b"][parseInt(hex[16], 16) & 3];
+  var compact = hex.join("");
+  return compact.slice(0, 8) + "-" + compact.slice(8, 12) + "-" + compact.slice(12, 16) + "-" + compact.slice(16, 20) + "-" + compact.slice(20);
+}
+
 function inboundClientMeta(req, body) {
   var headers = (req && req.headers) || {};
   var userAgent = headerValue(headers, "user-agent");
@@ -430,13 +448,98 @@ function lookupRoute(plan, requested) {
   return null;
 }
 
-function loadKey(providerId) {
+function loadStoredSecret(providerId) {
   var store = readJson(secretsPath());
   var providers = store && store.providers;
   if (!isRecord(providers) || typeof providers[providerId] !== "string") {
     return "";
   }
   return providers[providerId];
+}
+
+function requestOAuthRefresh(refreshToken) {
+  return new Promise(function (resolve, reject) {
+    var payload = Buffer.from("grant_type=refresh_token&client_id=app_EMoamEEZ73f0CkXaXp7hrann&refresh_token=" + encodeURIComponent(refreshToken), "utf8");
+    var req = https.request({
+      hostname: "auth.openai.com", path: "/oauth/token", method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": String(payload.length), Accept: "application/json" },
+    }, function (res) {
+      collectResponse(res).then(function (out) {
+        var parsed;
+        try { parsed = JSON.parse(out.raw.toString("utf8")); } catch (err) { parsed = null; }
+        if ((out.status || 500) < 200 || (out.status || 500) >= 300 || !parsed || typeof parsed.access_token !== "string") {
+          reject(new Error("openbot-hop: OpenAI OAuth refresh failed"));
+          return;
+        }
+        resolve(parsed);
+      }, reject);
+    });
+    req.on("error", reject);
+    req.setTimeout(TIMEOUT_MS, function () { req.destroy(new Error("openbot-hop: OAuth refresh timeout")); });
+    req.end(payload);
+  });
+}
+
+// Persist a rotated OAuth credential. Returns true when the new value is on
+// disk; a false return means the caller must treat the refresh as failed so a
+// later request never proceeds with an access token that was not persisted.
+function saveStoredSecret(providerId, value) {
+  try {
+    var file = secretsPath();
+    var store = readJson(file) || { providers: {} };
+    if (!isRecord(store.providers)) store.providers = {};
+    store.providers[providerId] = value;
+    var tmp = file + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(store, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(tmp, file);
+    return true;
+  } catch (err) { /* refresh persistence is best-effort; the request still uses the new token */ }
+  return false;
+}
+
+// Per-provider single-flight refresh. Concurrent requests share one token
+// exchange, so a rotating refresh token is written exactly once and no later
+// writer can overwrite it with credentials minted from the now-consumed token.
+var oauthRefreshFlights = {};
+
+function refreshOpenAIOAuthCredential(providerId, parsed) {
+  if (oauthRefreshFlights[providerId]) return oauthRefreshFlights[providerId];
+  var flight = requestOAuthRefresh(parsed.refreshToken)
+    .then(function (refreshed) {
+      var next = Object.assign({}, parsed, {
+        accessToken: refreshed.access_token,
+        refreshToken: refreshed.refresh_token || parsed.refreshToken,
+        expiresAt: Math.floor(Date.now() / 1000) + Math.max(1, Number(refreshed.expires_in) || 3600),
+      });
+      if (!saveStoredSecret(providerId, JSON.stringify(next))) {
+        throw new Error("openbot-hop: OpenAI OAuth credential was not persisted");
+      }
+      return next.accessToken;
+    })
+    .finally(function () {
+      delete oauthRefreshFlights[providerId];
+    });
+  oauthRefreshFlights[providerId] = flight;
+  return flight;
+}
+
+async function loadKey(providerId, provider) {
+  var raw = loadStoredSecret(providerId);
+  if (!raw) return "";
+  if (providerId !== "openai") return raw;
+  var parsed;
+  try { parsed = JSON.parse(raw); } catch (err) { return raw; }
+  if (!isRecord(parsed) || parsed.kind !== "openai-oauth" || typeof parsed.accessToken !== "string") return raw;
+  var expiresAt = Number(parsed.expiresAt || 0);
+  if (expiresAt > Math.floor(Date.now() / 1000) + 60) return parsed.accessToken;
+  if (typeof parsed.refreshToken !== "string" || !parsed.refreshToken) {
+    throw new Error("openbot-hop: OpenAI OAuth credential is expired with no refresh token");
+  }
+  try {
+    return await refreshOpenAIOAuthCredential(providerId, parsed);
+  } catch (err) {
+    throw new Error("openbot-hop: OpenAI OAuth refresh failed (" + err.message + ")");
+  }
 }
 
 function levelsHaveDefault(model) {
@@ -595,6 +698,15 @@ function openUpstream(urlStr, body, key, inbound, apiType) {
       headers["anthropic-version"] = "2023-06-01";
       delete headers.Authorization;
     }
+  }
+  var origin = String((inbound && inbound.providerOrigin) || "");
+  var providerId = String((inbound && inbound.providerId) || "");
+  if (providerId === "opencode" && inbound && inbound.opencodeSession) {
+    headers["x-opencode-session"] = inbound.opencodeSession;
+  }
+  if (providerId === "openrouter") {
+    headers["HTTP-Referer"] = "https://openbot.local";
+    headers["X-Title"] = "OpenBot";
   }
   applyOpenBotVersionHeader(headers);
   var ua = inboundUserAgent(inbound);
@@ -1214,7 +1326,25 @@ async function handleCompletions(req, res) {
     noteWireBytes(outboundBody);
     fields.requestBody = outboundBody;
     fields.stream = body.stream === true;
-    var key = loadKey(route.provider.id);
+    var conversationId = findConversationId(body);
+    fields.conversationId = conversationId || fields.conversationId;
+    var requestInbound = {
+      headers: req.headers || {},
+      providerId: route.provider.id,
+      providerOrigin: route.provider.origin,
+      opencodeSession: route.provider.id === "opencode"
+        ? (conversationId ? opencodeSessionId(route.provider.id, conversationId) : nodeCrypto.randomUUID())
+        : undefined,
+    };
+    var key;
+    try {
+      key = await loadKey(route.provider.id, route.provider);
+    } catch (keyErr) {
+      var refreshFailure = { error: { message: keyErr.message } };
+      record({ status: 503, error: keyErr.message, responseBody: refreshFailure });
+      sendJson(res, 503, refreshFailure);
+      return;
+    }
     if (!key) {
       var noSecret = { error: { message: "no secret for this provider" } };
       record({ status: 503, error: noSecret.error.message, responseBody: noSecret });
@@ -1315,6 +1445,8 @@ exports.inboundClientMeta = inboundClientMeta;
 exports.detectClientName = detectClientName;
 exports.parseClientVersion = parseClientVersion;
 exports.findConversationId = findConversationId;
+exports.opencodeSessionId = opencodeSessionId;
+exports.loadKey = loadKey;
 exports.noteFirstContent = noteFirstContent;
 exports.lookupRoute = lookupRoute;
 exports.completionsUrl = completionsUrl;

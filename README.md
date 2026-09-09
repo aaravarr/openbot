@@ -4,7 +4,7 @@
 
 **Use any model in Grok Bot.**
 
-Grok Bot 0.30 already has a Computer. OpenBot lets that Computer talk to the models you already pay for — OpenAI, GLM, DeepSeek, Kimi, Groq, OpenRouter, or any OpenAI-compatible API — without leaving the Grok Bot app. Official Grok is one click away when you want it back.
+Grok Bot 0.30 already has a Computer. OpenBot lets that Computer talk to OpenAI, OpenRouter, OpenCode Zen (sign up once, paste a key, use the $0 models), or any OpenAI-compatible API through Custom — without leaving the Grok Bot app. Official Grok is one click away when you want it back.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash

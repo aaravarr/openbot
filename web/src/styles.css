@@ -897,29 +897,12 @@ tr.is-open .row-indicator { border-left-color: var(--primary); }
 .mini-row .lat { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--muted); margin-left: auto; flex: none; }
 
 /* ==========================================================================
-   Models specifics (master–detail)
+   Models specifics (single list with a provider picker in the card head)
    ========================================================================== */
-.master-detail { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: var(--sp-4); align-items: start; min-width: 0; max-width: 100%; }
-.master-detail > * { min-width: 0; max-width: 100%; }
-.provider-rail { display: flex; flex-direction: column; border: 1px solid var(--hairline); border-radius: var(--r-lg); background: var(--surface); overflow: hidden; min-width: 0; max-width: 100%; }
-.provider-rail__head { padding: 12px var(--sp-4); border-bottom: 1px solid var(--hairline); }
-.provider-row {
-  display: flex; align-items: center; gap: var(--sp-2);
-  padding: 10px var(--sp-4); border-bottom: 1px solid var(--hairline-soft);
-  cursor: pointer; position: relative; background: transparent; border-left: none; border-right: none; border-top: none;
-  text-align: left; width: 100%; font-size: inherit; color: inherit;
-  transition: background var(--dur-1) var(--ease-standard);
-  min-width: 0;
-}
-.provider-row:last-of-type { border-bottom: none; }
-.provider-row:hover { background: var(--surface-3); }
-.provider-row.is-selected { background: var(--surface-3); }
-.provider-row.is-selected::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--primary); }
-.provider-row__main { flex: 1; min-width: 0; }
-.provider-row__name { font-size: var(--text-base); font-weight: 600; display: flex; align-items: center; gap: 6px; min-width: 0; }
-.provider-row__name svg { width: 12px; height: 12px; color: var(--primary-strong); flex: none; }
-.provider-row__origin { font-family: var(--font-mono); font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.provider-rail__foot { padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--hairline); }
+.models-main { display: grid; gap: var(--sp-4); min-width: 0; max-width: 100%; }
+.page-title-row > .sub { flex: 1; }
+.models-provider-picker { min-width: min(360px, 100%); }
+.models-card-foot { padding: var(--sp-3) var(--sp-5); border-top: 1px solid var(--hairline); }
 
 .model-meta-line { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .model-row-actions {
@@ -1233,7 +1216,6 @@ table.data td.cell-actions { white-space: nowrap; width: 1%; }
   .grid--12 { grid-template-columns: minmax(0, 1fr); }
   .col-8, .col-4, .col-6, .col-12 { grid-column: span 1; }
   .health-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .master-detail { grid-template-columns: minmax(0, 260px) minmax(0, 1fr); }
   .mode-pill__model { max-width: 16ch; }
 }
 
@@ -1243,7 +1225,6 @@ table.data td.cell-actions { white-space: nowrap; width: 1%; }
    nowrap row or table expand #root. Status strip condenses; tables stack into
    labeled cards. overflow-x: clip on html/body is the last-resort net. */
 @media (max-width: 768px) {
-  .master-detail { grid-template-columns: minmax(0, 1fr); }
   .health-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .preset-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .nav { display: none; }

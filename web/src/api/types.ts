@@ -104,6 +104,8 @@ export type BoxState = {
   logSettings: LogSettings;
 };
 
+export type BotModels = { assignments: Record<string, string>; available: string[] };
+
 export type SaveResult = BoxState & { ok: true; wrapBytesChanged: boolean };
 
 export type GatewayPause = {

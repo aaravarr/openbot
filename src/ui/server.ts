@@ -17,6 +17,7 @@ import { nodeFs, nodeProcs } from "../supervisor/procs.ts";
 import { reconcile } from "../supervisor/reconcile.ts";
 import { loadSecrets, saveSecrets, upsertSecret } from "../supervisor/secrets.ts";
 import { readExposeFile } from "../supervisor/tunnel.ts";
+import { handleBotModelsApi } from "./bot-models.ts";
 
 type LogSettings = {
   loggingEnabled: boolean;
@@ -732,6 +733,7 @@ async function handleGrokSkillsApi(req: http.IncomingMessage, res: http.ServerRe
 
 async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
   const current = deps();
+  if (await handleBotModelsApi(req, res, url, current, readBody, sendJson, catalogFromPlanJson)) return;
   if (req.method === "GET" && (url.pathname === "/api/snapshot" || url.pathname === "/api/state")) {
     const snapshot = await observe(current);
     sendJson(res, 200, { snapshot: snapshotForUi(snapshot), ...publicState(current) });

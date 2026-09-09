@@ -69,6 +69,7 @@ export type IdentityOfficialWrap = never;
 type SecretKeys = "apiKey" | "Authorization" | "API_SERVER_KEY" | "secret" | "key" | "password";
 
 export type ProviderParameter = { readonly id: string; readonly value: string };
+export type ApiType = "chat-completions" | "responses" | "anthropic";
 
 /** default = omit thinking fields. none = send an explicit off. */
 export type ReasoningLevel = "default" | "none" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -95,6 +96,7 @@ export type Provider = {
   readonly origin: UpstreamOrigin;
   readonly maxTokensDefault: number;
   readonly mapFile: "provider-maps.cjs";
+  readonly apiType?: ApiType;
 };
 
 export type Model = {

@@ -1,4 +1,4 @@
-import { HIGH_AGENT_MAX_TOKENS, loopbackExpose, type Catalog, type DesiredState, type Expose, type Model, type Provider } from "../domain/types.ts";
+import { HIGH_AGENT_MAX_TOKENS, loopbackExpose, type ApiType, type Catalog, type DesiredState, type Expose, type Model, type Provider } from "../domain/types.ts";
 import {
   DEFAULT_CONTEXT_TOKENS,
   DEFAULT_MODALITIES,
@@ -24,6 +24,7 @@ export type UiCommand =
       readonly kind: "upsert-provider";
       readonly name: string;
       readonly origin: string;
+      readonly apiType?: unknown;
       readonly modelSlug: string;
       readonly secret: string;
       readonly contextTokens?: unknown;
@@ -51,12 +52,17 @@ export type UiCommand =
       readonly providerId: string;
       readonly name: string;
       readonly origin: string;
+      readonly apiType?: unknown;
       readonly secret?: string;
     }
   | { readonly kind: "set-expose"; readonly expose: Expose };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseApiType(value: unknown): ApiType {
+  return value === "responses" || value === "anthropic" ? value : "chat-completions";
 }
 
 function limitsFrom(input: Record<string, unknown>): ModelLimitsInput {
@@ -103,6 +109,7 @@ export function parseUiCommand(input: unknown): UiCommand {
       kind: "upsert-provider",
       name: input.name,
       origin: input.origin,
+      apiType: parseApiType(input.apiType),
       modelSlug: input.modelSlug,
       secret: input.secret,
       ...limitsFrom(input),
@@ -159,6 +166,7 @@ export function parseUiCommand(input: unknown): UiCommand {
         providerId: input.providerId,
         name: input.name,
         origin: input.origin,
+        apiType: parseApiType(input.apiType),
         secret: input.secret,
       };
     }
@@ -167,6 +175,7 @@ export function parseUiCommand(input: unknown): UiCommand {
       providerId: input.providerId,
       name: input.name,
       origin: input.origin,
+      apiType: parseApiType(input.apiType),
     };
   }
   if (input.kind === "set-expose") {
@@ -290,6 +299,7 @@ export function applyUiCommand(input: {
       ...existing,
       name,
       origin,
+      apiType: parseApiType(command.apiType),
     });
     if (command.secret !== undefined) {
       return {
@@ -306,6 +316,7 @@ export function applyUiCommand(input: {
       id: providerId,
       name: command.name,
       origin,
+      apiType: parseApiType(command.apiType),
       maxTokensDefault: HIGH_AGENT_MAX_TOKENS,
       mapFile: "provider-maps.cjs",
     };

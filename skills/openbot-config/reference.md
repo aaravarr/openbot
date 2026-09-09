@@ -12,6 +12,7 @@ OpenBot is a box supervisor. Callers parse input into `DesiredState` (`OfficialB
 - `align(desired, wrap)` returns `needs-reinstall` when desired is custom and the host file is stock unmarked. That is not official.
 - Infer desired from `openbot-mode`, not from plan-file existence. Official keeps the plan.
 - Bindings are `{ conversation, modelId }`. Derive `hopBaseUrl` with `hopBaseUrl(LOOPBACK_HOP)` → `http://127.0.0.1:9280/v1`. Secret field names are unrepresentable on `Binding`.
+- Provider `apiType` is `chat-completions`, `responses`, or `anthropic`; omitted means `chat-completions`. Responses output limits are clamped before conversion and sent as `max_output_tokens`; Anthropic usage preserves cache-read plus cache-creation counts in `prompt_tokens_details.cached_tokens`. Tool-call IDs use the same UTF-8-byte clamp in TS and payload CJS. Responses `content_filter` wins over `incomplete` length mapping.
 - Live maps file is repo `payload/provider-maps.cjs` only, reloaded per hop call (`delete require.cache` then `require`).
 - `python …/hop-server.py` leftovers are SIGTERM'd. A leftover `hop-server.cjs` pid is stopped. Any other foreign listener on `:9280` is refused, not adopted.
 
@@ -102,6 +103,7 @@ Rules:
 - `model.id` must equal `providerId:slug`.
 - Hop `lookupRoute`: wildcard first (match requested against bound slug, id, or `agents["*"].modelId`), then catalog model by id, then by slug.
 - `mapFile` must stay `"provider-maps.cjs"`.
+- `apiType` is optional for backward compatibility and controls the upstream request/response converter.
 - Provider `id` = slugify(name) (`toLowerCase`, non-alphanumerics → `-`, trim dashes, empty → `provider`), `/^[a-z0-9][a-z0-9._-]{0,63}$/i`.
 - Reasoning universe order: `default`, `none`, `low`, `medium`, `high`, `xhigh`, `max` (`xhigh` is one step below `max`).
 - Default allow-list if omitted: `default`, `none`, `low`, `medium`, `high`. Always keep `default` in an edited allow-list.
@@ -189,6 +191,8 @@ Rules:
 - Path override: payload reads `OPENBOT_PAUSE` first, then `<OPENBOT_SAND_DATA>/openbot-pause.json`, then the directory inferred from `OPENBOT_PLAN`, then the default sand-data path.
 
 ## Hop per-request reload
+
+Protocol conversion is also per request. The payload converter is dependency-free CJS and mirrors `src/hop/protocol-converters.ts`; do not edit one without updating the other. Responses and Anthropic SSE parsing tolerates upstream streams that place consecutive `data:` records without an empty separator. A non-2xx upstream error is converted to an OpenAI-style error body while the original HTTP status, `x-request-id` / `Retry-After` headers, and any upstream `request_id` are preserved; the converted error also carries `upstream_status`.
 
 ## Per-bot pause state
 

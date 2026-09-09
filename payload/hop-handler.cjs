@@ -15,6 +15,7 @@ var {
 var { applyOpenBotVersionHeader } = require("./version.cjs");
 var requestLog = require("./request-log.cjs");
 var botModels = require("./bot-models.cjs");
+var protocolConverters = require("./protocol-converters.cjs");
 
 var TIMEOUT_MS = Number(process.env.OPENBOT_HOP_TIMEOUT || "1800000");
 var HIGH_AGENT_MAX_TOKENS = 65536;
@@ -182,8 +183,12 @@ function canRetryUpstreamError(err, attemptIndex, clientRes, sleepSpentMs) {
 
 function retryAfterForwardHeaders(upstreamHeaders) {
   var raw = headerValue(upstreamHeaders, "retry-after");
-  if (!raw) return undefined;
-  return { "Retry-After": raw };
+  var requestId = headerValue(upstreamHeaders, "x-request-id");
+  if (!raw && !requestId) return undefined;
+  var out = {};
+  if (raw) out["Retry-After"] = raw;
+  if (requestId) out["x-request-id"] = requestId;
+  return out;
 }
 
 // ---- Request source metadata (task: record every clue the hop sees). ----
@@ -370,6 +375,14 @@ function completionsUrl(origin) {
   return b + "/v1/chat/completions";
 }
 
+function upstreamUrl(origin, apiType) {
+  var b = String(origin || "").replace(/\/+$/, "");
+  if (!b) throw new Error("openbot-hop: missing origin");
+  if (apiType === "responses") return /\/responses$/i.test(b) ? b : (/\/v1$/i.test(b) ? b + "/responses" : b + "/v1/responses");
+  if (apiType === "anthropic") return /\/messages$/i.test(b) ? b : (/\/v1$/i.test(b) ? b + "/messages" : b + "/v1/messages");
+  return completionsUrl(b);
+}
+
 function findById(rows, id) {
   for (var i = 0; i < rows.length; i++) {
     if (rows[i] && rows[i].id === id) return rows[i];
@@ -467,7 +480,7 @@ function hopParameters(model) {
   return params;
 }
 
-function applyMaxTokens(body, model) {
+function applyMaxTokens(body, model, apiType) {
   // Generic outbound governance (all providers): the model cap itself is
   // clamped to the global ceiling first, because a poisoned catalog row
   // (e.g. 943718) would otherwise pass a self-comparison and sail through.
@@ -478,12 +491,12 @@ function applyMaxTokens(body, model) {
   if (Number.isFinite(rawCap) && rawCap > 0) {
     cap = Math.min(Math.floor(rawCap), MAX_OUTPUT_TOKENS_CEILING);
   }
-  var requested = Number(body.max_tokens);
+  var requested = Number(apiType === "responses" ? (body.max_output_tokens !== undefined ? body.max_output_tokens : body.max_tokens) : body.max_tokens);
   if (!Number.isFinite(requested) || requested <= 0) {
-    body.max_tokens = cap;
+    if (apiType === "responses") body.max_output_tokens = cap; else body.max_tokens = cap;
     return;
   }
-  if (requested > cap) body.max_tokens = cap;
+  if (requested > cap) { if (apiType === "responses") body.max_output_tokens = cap; else body.max_tokens = cap; }
 }
 
 function applyMaps(body, ctx) {
@@ -562,10 +575,12 @@ function inboundUserAgent(inbound) {
   return "";
 }
 
-function openUpstream(urlStr, body, key, inbound) {
+function openUpstream(urlStr, body, key, inbound, apiType) {
   var u = new URL(urlStr);
   var lib = u.protocol === "https:" ? https : http;
-  var payload = Buffer.from(JSON.stringify(body), "utf8");
+  var outboundBody = Object.assign({}, body);
+  delete outboundBody.__openbot_api_type;
+  var payload = Buffer.from(JSON.stringify(outboundBody), "utf8");
   var wantStream = body && body.stream === true;
   var headers = {
     "Content-Type": "application/json",
@@ -573,7 +588,14 @@ function openUpstream(urlStr, body, key, inbound) {
     "Accept": hopAccept(wantStream),
     "Accept-Encoding": "identity",
   };
-  if (key) headers.Authorization = "Bearer " + key;
+  if (key) {
+    headers.Authorization = "Bearer " + key;
+    if (apiType === "anthropic") {
+      headers["x-api-key"] = key;
+      headers["anthropic-version"] = "2023-06-01";
+      delete headers.Authorization;
+    }
+  }
   applyOpenBotVersionHeader(headers);
   var ua = inboundUserAgent(inbound);
   if (ua) headers["User-Agent"] = ua;
@@ -600,9 +622,9 @@ function collectResponse(res) {
   });
 }
 
-function postUpstreamOnce(urlStr, body, key, inbound) {
+function postUpstreamOnce(urlStr, body, key, inbound, apiType) {
   return new Promise(function (resolve, reject) {
-    var req = openUpstream(urlStr, body, key, inbound);
+    var req = openUpstream(urlStr, body, key, inbound, apiType);
     req.setTimeout(TIMEOUT_MS, function () {
       req.destroy();
       reject(new Error("openbot-hop: upstream timeout"));
@@ -618,9 +640,9 @@ function postUpstreamOnce(urlStr, body, key, inbound) {
 /** Same shape as postUpstreamOnce, but a network-layer failure or a retryable
  * status never rejects: it resolves with an attemptFailed marker so the retry
  * loop can count it without aborting the chain. */
-async function postUpstreamAttempt(urlStr, body, key, inbound) {
+async function postUpstreamAttempt(urlStr, body, key, inbound, apiType) {
   try {
-    var out = await postUpstreamOnce(urlStr, body, key, inbound);
+    var out = await postUpstreamOnce(urlStr, body, key, inbound, apiType);
     if (isRetryableUpstreamStatus(out.status)) {
       return { attemptFailed: true, status: out.status, headers: out.headers, raw: out.raw };
     }
@@ -631,7 +653,7 @@ async function postUpstreamAttempt(urlStr, body, key, inbound) {
   }
 }
 
-async function postUpstream(urlStr, body, key, inbound) {
+async function postUpstream(urlStr, body, key, inbound, apiType) {
   var attemptIndex = 0;
   var retriesSpent = 0;
   // Retry allowance is measured in backoff sleep, not wall clock: an attempt
@@ -653,7 +675,7 @@ async function postUpstream(urlStr, body, key, inbound) {
     var attemptStartedMs = Date.now();
     var out;
     try {
-      out = await postUpstreamOnce(urlStr, body, key, inbound);
+      out = await postUpstreamOnce(urlStr, body, key, inbound, apiType);
     } catch (err) {
       if (!canRetryUpstreamError(err, attemptIndex, null, sleepSpentMs)) {
         attempts.push({
@@ -740,9 +762,9 @@ function retryDelayMs(kind, attemptIndex, headers, nowMs, sleepSpentMs) {
   return delayBefore5xxRetryMs(attemptIndex, headers, nowMs, sleepSpentMs);
 }
 
-function pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeReq) {
+function pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeReq, transformResponse) {
   return new Promise(function (resolve, reject) {
-    var req = openUpstream(urlStr, body, key, inbound);
+    var req = openUpstream(urlStr, body, key, inbound, body && body.__openbot_api_type);
     if (activeReq) activeReq.current = req;
     var settled = false;
     function fail(err) {
@@ -789,14 +811,18 @@ function pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeR
       var firstContentAt = 0;
       res.on("data", function (c) {
         chunks.push(c);
-        if (!clientRes.writableEnded) clientRes.write(c);
+        if (!transformResponse && !clientRes.writableEnded) clientRes.write(c);
         if (!firstContentAt) {
           var at = noteFirstContent(scanState, c);
           if (at) firstContentAt = at;
         }
       });
       res.on("end", function () {
-        if (!clientRes.writableEnded) clientRes.end();
+        if (!clientRes.writableEnded) {
+          var outgoing = transformResponse ? transformResponse(Buffer.concat(chunks)) : Buffer.concat(chunks);
+          if (transformResponse) clientRes.write(outgoing);
+          clientRes.end();
+        }
         ok({
           status: status || 200,
           headers: res.headers,
@@ -811,7 +837,7 @@ function pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeR
   });
 }
 
-async function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
+async function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound, transformResponse) {
   var requestStartedMs = Date.now();
   var attemptIndex = 0;
   var activeReq = { current: null };
@@ -835,7 +861,7 @@ async function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
       var attemptStartedMs = Date.now();
       var out;
       try {
-        out = await pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeReq);
+        out = await pipeOrBufferUpstreamOnce(urlStr, body, key, clientRes, inbound, activeReq, transformResponse);
       } catch (err) {
         if (!canRetryUpstreamError(err, attemptIndex, clientRes, sleepSpentMs)) {
           attempts.push({
@@ -896,6 +922,7 @@ async function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
           decision: "final",
         });
         if (retriesSpent > 0) out.hopRetries = retriesSpent;
+        out = convertBufferedResponse(out, body.__openbot_api_type || "chat-completions");
         if (!clientRes.headersSent) {
           send(clientRes, out.status, out.raw, headerContentType(out.headers) || "application/json", retryAfterForwardHeaders(out.headers));
         }
@@ -910,6 +937,7 @@ async function pipeOrBufferUpstream(urlStr, body, key, clientRes, inbound) {
           decision: "final",
         });
         if (retriesSpent > 0) out.hopRetries = retriesSpent;
+        out = convertBufferedResponse(out, body.__openbot_api_type || "chat-completions");
         if (!clientRes.headersSent) {
           send(clientRes, out.status, out.raw, headerContentType(out.headers) || "application/json", retryAfterForwardHeaders(out.headers));
         }
@@ -952,6 +980,28 @@ function send(res, status, payload, contentType, extraHeaders) {
 
 function sendJson(res, status, payload) {
   send(res, status, JSON.stringify(payload), "application/json");
+}
+
+function convertBufferedResponse(out, apiType) {
+  if (!out || apiType === "chat-completions") return out;
+  var text = Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw || "");
+  if (out.status < 200 || out.status >= 300) {
+    try { out.raw = Buffer.from(JSON.stringify(protocolConverters.mapUpstreamError(JSON.parse(text), out.status)), "utf8"); } catch (err) { /* preserve non-JSON error */ }
+    out.headers = Object.assign({}, out.headers, { "content-type": "application/json" });
+    return out;
+  }
+  var eventStream = /(^|\n)(event:|data:)/.test(text) || /text\/event-stream/i.test(headerContentType(out.headers));
+  try {
+    if (eventStream) text = apiType === "responses" ? protocolConverters.responsesSseToChat(text) : protocolConverters.anthropicSseToChat(text);
+    else {
+      var parsed = JSON.parse(text);
+      parsed = apiType === "responses" ? protocolConverters.responsesToChat(parsed) : protocolConverters.anthropicToChat(parsed);
+      text = JSON.stringify(parsed);
+    }
+    out.raw = Buffer.from(text, "utf8");
+    out.headers = Object.assign({}, out.headers, { "content-type": eventStream ? "text/event-stream" : "application/json" });
+  } catch (err) { /* preserve upstream response for diagnostics */ }
+  return out;
 }
 
 function readBody(req) {
@@ -1137,6 +1187,7 @@ async function handleCompletions(req, res) {
     fields.model = route.model.slug;
     fields.providerId = route.provider.id;
     fields.providerName = route.provider.name;
+    var apiType = route.provider.apiType === "responses" || route.provider.apiType === "anthropic" ? route.provider.apiType : "chat-completions";
     body.model = route.model.slug;
     if (Array.isArray(body.messages)) {
       body.messages = toOpenAIMessages(body.messages);
@@ -1151,15 +1202,17 @@ async function handleCompletions(req, res) {
       // direct /v1/chat/completions path are covered.
       body.messages = sanitizeToolCallIds(body.messages);
     }
-    applyMaxTokens(body, route.model);
+    applyMaxTokens(body, route.model, apiType);
     applyMaps(body, {
       modelId: route.model.slug,
       baseUrl: route.provider.origin,
       maxMode: false,
       parameters: hopParameters(route.model),
     });
-    noteWireBytes(body);
-    fields.requestBody = body;
+    var outboundBody = apiType === "responses" ? protocolConverters.chatToResponses(body) : apiType === "anthropic" ? protocolConverters.chatToAnthropic(body) : body;
+    outboundBody.__openbot_api_type = apiType;
+    noteWireBytes(outboundBody);
+    fields.requestBody = outboundBody;
     fields.stream = body.stream === true;
     var key = loadKey(route.provider.id);
     if (!key) {
@@ -1168,11 +1221,14 @@ async function handleCompletions(req, res) {
       sendJson(res, 503, noSecret);
       return;
     }
-    var upstream = completionsUrl(route.provider.origin);
+    var upstream = upstreamUrl(route.provider.origin, apiType);
     fields.upstreamEndpoint = upstream;
     var out;
     if (body.stream === true) {
-      out = await pipeOrBufferUpstream(upstream, body, key, res, req);
+      out = await pipeOrBufferUpstream(upstream, outboundBody, key, res, req, apiType === "chat-completions" ? undefined : function (raw) {
+        var text = raw.toString("utf8");
+        return Buffer.from(apiType === "responses" ? protocolConverters.responsesSseToChat(text) : protocolConverters.anthropicSseToChat(text), "utf8");
+      });
       record({
         status: out.status,
         error: retrySuffix(out),
@@ -1182,7 +1238,8 @@ async function handleCompletions(req, res) {
         firstTokenMs: out.firstTokenMs,
       });
     } else {
-      out = await postUpstream(upstream, body, key, req);
+      out = await postUpstream(upstream, outboundBody, key, req, apiType);
+      out = convertBufferedResponse(out, apiType);
       record({
         status: out.status,
         error: retrySuffix(out),

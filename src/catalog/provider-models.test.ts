@@ -177,6 +177,21 @@ test("fetch-models succeeds and forwards the stored secret server-side", async (
   assert.equal(body.models[0]?.modalities.length, 0);
 });
 
+test("fetch-models reuses a stable OpenCode session across requests", async () => {
+  const catalog = makeCatalog([{ id: "opencode", name: "OpenCode", origin: "https://opencode.ai/zen/v1" }]);
+  const sessions: string[] = [];
+  const fetchFn: FetchLike = async (_url, init) => {
+    sessions.push(init?.headers?.["x-opencode-session"] ?? "");
+    return jsonResponse(200, { data: [{ id: "big-pickle" }] });
+  };
+  const input = { providerId: "opencode", catalog, secretStore: makeSecrets({ opencode: "zen-key" }), fetchFn };
+  assert.equal((await fetchModelsForProvider(input)).status, 200);
+  assert.equal((await fetchModelsForProvider(input)).status, 200);
+  assert.equal(sessions.length, 2);
+  assert.ok(sessions[0]);
+  assert.equal(sessions[0], sessions[1]);
+});
+
 test("fetch-models returns 404 provider-not-found", async () => {
   const result = await fetchModelsForProvider({
     providerId: "missing",

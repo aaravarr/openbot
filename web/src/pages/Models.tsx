@@ -463,6 +463,7 @@ export function Models({ providerId }: { providerId?: string }) {
                       <tr key={m.id}>
                         <td className="cell-primary" data-label="Model">
                           <span className="mono">{m.slug}</span>{" "}
+                          {m.providerId === OPENCODE_ZEN_PROVIDER_ID && OPENCODE_ZEN_FREE_MODELS.some((free) => free.id === m.slug) ? <Badge tone="success">Free</Badge> : null}{" "}
                           {isActive ? <Zap style={{ width: 12, height: 12, color: "var(--primary-strong)", verticalAlign: -2 }} aria-hidden="true" /> : null}
                         </td>
                         <td className="mono" data-label="Context">{formatTokens(m.contextTokens)}</td>

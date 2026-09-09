@@ -698,6 +698,7 @@ function openUpstream(urlStr, body, key, inbound, apiType) {
       headers["anthropic-version"] = "2023-06-01";
       delete headers.Authorization;
     }
+  }
   var origin = String((inbound && inbound.providerOrigin) || "");
   var providerId = String((inbound && inbound.providerId) || "");
   if (providerId === "opencode" && inbound && inbound.opencodeSession) {
@@ -1445,6 +1446,7 @@ exports.detectClientName = detectClientName;
 exports.parseClientVersion = parseClientVersion;
 exports.findConversationId = findConversationId;
 exports.opencodeSessionId = opencodeSessionId;
+exports.loadKey = loadKey;
 exports.noteFirstContent = noteFirstContent;
 exports.lookupRoute = lookupRoute;
 exports.completionsUrl = completionsUrl;

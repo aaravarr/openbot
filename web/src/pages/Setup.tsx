@@ -3,7 +3,7 @@ import { ArrowRight, Check, ChevronLeft, Info, ShieldAlert, TriangleAlert } from
 import { ApiError, completeOpenAIOAuth, startOpenAIOAuth } from "../api/client";
 import type { SaveResult } from "../api/types";
 import { labelReasoning } from "../lib/format";
-import { PRESETS, type Preset } from "../lib/presets";
+import { OPENCODE_ZEN_FREE_MODELS, PRESETS, type Preset } from "../lib/presets";
 import { refusalKindLabel, refusalRemedy } from "../lib/refusal";
 import { navigate } from "../lib/router";
 import { useApp } from "../store";
@@ -97,7 +97,7 @@ export function Setup() {
           kind: "upsert-provider",
           name: name.trim(),
           origin: origin.trim(),
-          modelSlug: "",
+          modelSlug: preset.id === "opencode" ? OPENCODE_ZEN_FREE_MODELS[0]?.id ?? preset.model : preset.model,
           secret: oauthConnected ? "oauth" : secret,
         },
         { successTitle: "Activated", successMessage: usedMessage },

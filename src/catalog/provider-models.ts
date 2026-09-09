@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { type Catalog, MAX_OUTPUT_TOKENS_CEILING } from "../domain/types.ts";
 import { keepReasoningOrder } from "../domain/model.ts";
 import { secretFor, type SecretStore } from "../supervisor/secrets.ts";
@@ -212,6 +212,10 @@ function timeoutMessage(err: unknown): string {
   return "provider is unreachable";
 }
 
+function opencodeModelsSession(providerId: string): string {
+  return createHash("sha256").update("openbot-opencode-models\0" + providerId, "utf8").digest("hex").slice(0, 32);
+}
+
 async function fetchProviderModels(input: {
   url: string;
   secret: string;
@@ -225,7 +229,7 @@ async function fetchProviderModels(input: {
       headers: {
         ...(input.secret ? { Authorization: "Bearer " + input.secret } : {}),
         Accept: "application/json",
-        ...(input.providerId === "opencode" ? { "x-opencode-session": randomUUID() } : {}),
+        ...(input.providerId === "opencode" ? { "x-opencode-session": opencodeModelsSession(input.providerId) } : {}),
       },
       signal: AbortSignal.timeout(input.totalTimeoutMs),
     });

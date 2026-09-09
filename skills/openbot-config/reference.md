@@ -2,6 +2,18 @@
 
 Read this from [SKILL.md](SKILL.md) when you need disk shapes, HTTP/CLI contracts, presets, or hop maps. Do not put secrets in examples.
 
+## Detached bot-mode installer protocol
+
+`install.sh --bot-mode` starts a detached Linux worker with `setsid`, `nohup`, redirected output, and `/dev/null` stdin, then exits 0. The worker reuses the normal installer, tunnel reconcile, and QR generation path. A second invocation while the pid in `openbot-install.pid` is alive reports that an install is already running.
+
+Default files under `/home/box/sand-data` (override with `OPENBOT_SAND_DATA`; individual overrides are `OPENBOT_BOT_RESULT`, `OPENBOT_BOT_LOG`, and `OPENBOT_BOT_PID`):
+
+- `openbot-install-result.json`: atomically replaced JSON with `status` (`running`, `success`, or `failed`), `startedAt`, and optional `finishedAt`, `url`, `qrPath`, `error`, and `logTail`.
+- `openbot-install.log`: detached worker stdout/stderr.
+- `openbot-install.pid`: worker pid, removed on worker exit.
+
+Run `install.sh --bot-status` repeatedly. A running result older than 15 minutes keeps `OPENBOT_STATUS=running` but adds a warning that the process may have been interrupted and points to the log. Missing result files report `not-installed`. Do not treat a stale running record as success.
+
 ## Architecture
 
 OpenBot is a box supervisor. Callers parse input into `DesiredState` (`OfficialBox | CustomBox` in `src/domain/types.ts`), then `reconcile(desired)`. They do not sequence wrap, hop start, and host bounce themselves.

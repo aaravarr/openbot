@@ -14,6 +14,14 @@ BOT_RESULT_FILE="${OPENBOT_BOT_RESULT:-$DATA/openbot-install-result.json}"
 BOT_LOG_FILE="${OPENBOT_BOT_LOG:-$DATA/openbot-install.log}"
 BOT_PID_FILE="${OPENBOT_BOT_PID:-$DATA/openbot-install.pid}"
 bot_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+bot_write_running_result() {
+  local started="$1" started_json tmp="${BOT_RESULT_FILE}.$$"
+  # bot_now emits an ISO-8601 timestamp containing no JSON-significant characters.
+  started_json="$started"
+  mkdir -p "$(dirname "$BOT_RESULT_FILE")"
+  printf '{"status":"running","startedAt":"%s"}\n' "$started_json" >"$tmp"
+  mv -f "$tmp" "$BOT_RESULT_FILE"
+}
 bot_write_result() {
   local status="$1" started="$2" finished="$3" url="$4" qr="$5" error="$6" tail_text="$7" tmp="${BOT_RESULT_FILE}.$$"
   mkdir -p "$(dirname "$BOT_RESULT_FILE")"
@@ -197,18 +205,18 @@ payload_vendor_compression_present() {
 
 warn_npm_install_failed() {
   {
-    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-    echo "WARN: OpenBot could not npm-install the compression libraries."
-    echo "      Reason: $1"
+    printf '%s\\n' '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+    printf '%s\\n' 'WARN: OpenBot could not npm-install the compression libraries.'
+    printf '%s\\n' "      Reason: $1"
     if payload_vendor_compression_present; then
-      echo "      Bundled libs in payload/vendor/ cover this: image compression stays available."
+      printf '%s\\n' '      Bundled libs in payload/vendor/ cover this: image compression stays available.'
     else
-      echo "      No bundled libs found: image compression is DISABLED. The hop still"
-      echo "      routes, but oversized images degrade to omit placeholders."
-      echo "      Remediation: give the box npm registry access (or set a mirror),"
-      echo "      then re-run this installer."
+      printf '%s\\n' '      No bundled libs found: image compression is DISABLED. The hop still'
+      printf '%s\\n' '      routes, but oversized images degrade to omit placeholders.'
+      printf '%s\\n' '      Remediation: give the box npm registry access (or set a mirror),'
+      printf '%s\\n' '      then re-run this installer.'
     fi
-    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    printf '%s\\n' '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
   } >&2
 }
 
@@ -372,10 +380,10 @@ if [[ "${1:-}" == "--bot-mode" ]]; then
   rm -f "$BOT_PID_FILE"
   BOT_STARTED_AT="$(bot_now)"
   export BOT_RESULT_FILE BOT_LOG_FILE BOT_PID_FILE BOT_STARTED_AT
-  bot_write_result running "$BOT_STARTED_AT" '' '' '' '' ''
+  bot_write_running_result "$BOT_STARTED_AT"
   export -f bot_now bot_write_result bot_pid_running bot_print_status bot_worker_exit install_main
-  (setsid nohup bash -c 'trap bot_worker_exit EXIT; BOT_WORKER_DONE=0; install_main --bot-mode-worker' </dev/null >>"$BOT_LOG_FILE" 2>&1) &
-  printf '%s\\n' "$!" >"${BOT_PID_FILE}.tmp"
+  (setsid nohup bash -euo pipefail -c 'trap bot_worker_exit EXIT; BOT_WORKER_DONE=0; install_main --bot-mode-worker' </dev/null >>"$BOT_LOG_FILE" 2>&1) &
+  printf '%s\n' "$!" >"${BOT_PID_FILE}.tmp"
   mv -f "${BOT_PID_FILE}.tmp" "$BOT_PID_FILE"
   printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=started' "OPENBOT_RESULT_FILE=$BOT_RESULT_FILE" "OPENBOT_LOG_FILE=$BOT_LOG_FILE" 'OPENBOT_BOT_INSTRUCTION=Reply to the user now: OpenBot installation has started. After 60-120 seconds (or in the next turn), run install.sh --bot-status. When status=success, send the tunnel URL and QR image to the user with the host SendToUser tool. Do not expose secrets.' '===== END OPENBOT BOT RESULT ====='
   exit 0

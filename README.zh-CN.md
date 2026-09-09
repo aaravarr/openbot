@@ -33,9 +33,13 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 `--bot-mode` 全程非交互且可重复执行。它会安装或更新 OpenBot，通过项目现有的 reconcile 流程启用 Cloudflare quick tunnel，等待 `trycloudflare.com` 链接，并把二维码写入 `/tmp/openbot-install-qr.png`。结束后读取 `OPENBOT BOT RESULT` 结果块，用宿主已安装的 `SendToUser` 工具，严格按照该工具定义的图片/文件参数，把 `OPENBOT_URL` 和二维码图片发给用户；不要暴露密钥。如果结果块报告失败，应告知用户本机地址和重试命令。
 
+--bot-mode 会立即返回，后台安装与宿主进程树脱离，因此宿主重启不会中断 Bot 回合。请按两步操作：
+
+1. 立即回复用户“安装已开始”。
+2. 等待 60-120 秒或下一回合，运行 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-status 轮询，直到 OPENBOT_STATUS=success，再用 SendToUser 发送 OPENBOT_URL 和 OPENBOT_QR_PATH。状态文件和日志分别位于 /home/box/sand-data/openbot-install-result.json 与 /home/box/sand-data/openbot-install.log（路径随 OPENBOT_SAND_DATA 变化）。失败时告知日志路径并重试 --bot-mode，不要暴露密钥。
+
 </details>
 
-`--bot-mode` 会立即返回，后台安装与宿主进程树脱离，因此宿主重启不会中断 Bot 回合。请按两步操作：先立即回复用户“安装已开始”；等待 60-120 秒或下一回合，运行 `curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-status` 轮询，直到 `OPENBOT_STATUS=success`，再用 `SendToUser` 发送 `OPENBOT_URL` 和 `OPENBOT_QR_PATH`。状态文件和日志分别位于 `/home/box/sand-data/openbot-install-result.json` 与 `/home/box/sand-data/openbot-install.log`（路径随 `OPENBOT_SAND_DATA` 变化）。失败时告知日志路径并重试 `--bot-mode`，不要暴露密钥。
 
 在 **Computer 终端**里运行，不要在 Mac 上运行。Grok Bot 的聊天走 Computer；笔记本上的代理收不到回合。
 

@@ -126,29 +126,85 @@ const requestLog = require("../../payload/request-log.cjs") as {
   usageNow: (query: Record<string, unknown>) => LogUsage;
 };
 
-export type BotInfo = { botId: string; botName: string };
+export type BotInfo = {
+  botId: string;
+  botName: string;
+  deleted: boolean;
+  updatedAtMs: number | null;
+  createdAtMs: number | null;
+};
 export type PauseBotsState = { pausedBotIds: string[] };
 
-function readBots(): BotInfo[] {
+function readBots(current: SupervisorDeps): BotInfo[] {
   const root = process.env.OPENBOT_AGENT_DATA ?? "/home/box/agent-data";
   const agentsDir = path.join(root, "agents");
+  const ids = new Set<string>();
   try {
-    return fs.readdirSync(agentsDir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => {
-        const botId = entry.name;
-        try {
-          const profile = JSON.parse(fs.readFileSync(path.join(agentsDir, botId, "profile.json"), "utf8")) as { name?: unknown };
-          const name = typeof profile.name === "string" && profile.name.trim() ? profile.name.trim() : botId;
-          return { botId, botName: name };
-        } catch {
-          return { botId, botName: botId };
-        }
-      })
-      .sort((a, b) => a.botName.localeCompare(b.botName) || a.botId.localeCompare(b.botId));
+    for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) ids.add(entry.name);
+    }
   } catch {
-    return [];
+    // Keep known deleted bots visible below the live agents.
   }
+  for (const id of readPauseBots(current).pausedBotIds) ids.add(id);
+  try {
+    const assignmentsPath = process.env.OPENBOT_BOT_MODELS ?? path.join(String(current.paths.sandData), "openbot-bot-models.json");
+    const assignments = JSON.parse(fs.readFileSync(assignmentsPath, "utf8")) as { assignments?: unknown };
+    if (assignments.assignments && typeof assignments.assignments === "object") {
+      for (const id of Object.keys(assignments.assignments)) ids.add(id);
+    }
+  } catch { /* absent or corrupt assignment state */ }
+  try {
+    for (const bot of requestLog.facetsNow().bots) if (bot.botId) ids.add(bot.botId);
+  } catch { /* log facets are best effort */ }
+  return [...ids].map((botId) => {
+    const dir = path.join(agentsDir, botId);
+    let dirStat: fs.Stats;
+    try {
+      dirStat = fs.statSync(dir);
+    } catch (error) {
+      return { botId, botName: botId, deleted: isMissingFileError(error), updatedAtMs: null, createdAtMs: null };
+    }
+
+    const profilePath = path.join(dir, "profile.json");
+    let profileStat: fs.Stats;
+    try {
+      profileStat = fs.statSync(profilePath);
+    } catch (error) {
+      return {
+        botId,
+        botName: botId,
+        deleted: isMissingFileError(error),
+        updatedAtMs: dirStat.mtimeMs,
+        createdAtMs: null,
+      };
+    }
+
+    let profileText: string;
+    try {
+      profileText = fs.readFileSync(profilePath, "utf8");
+    } catch {
+      return { botId, botName: botId, deleted: false, updatedAtMs: dirStat.mtimeMs, createdAtMs: profileCreatedAt(profileStat) };
+    }
+
+    let profile: { name?: unknown };
+    try {
+      profile = JSON.parse(profileText) as { name?: unknown };
+    } catch {
+      return { botId, botName: botId, deleted: true, updatedAtMs: dirStat.mtimeMs, createdAtMs: profileCreatedAt(profileStat) };
+    }
+
+    const name = typeof profile.name === "string" && profile.name.trim() ? profile.name.trim() : botId;
+    return { botId, botName: name, deleted: false, updatedAtMs: dirStat.mtimeMs, createdAtMs: profileCreatedAt(profileStat) };
+  }).sort((a, b) => Number(a.deleted) - Number(b.deleted) || (b.updatedAtMs ?? -1) - (a.updatedAtMs ?? -1) || (b.createdAtMs ?? -1) - (a.createdAtMs ?? -1) || a.botName.localeCompare(b.botName));
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function profileCreatedAt(stat: fs.Stats): number | null {
+  return Number.isFinite(stat.birthtimeMs) ? stat.birthtimeMs : null;
 }
 
 function readPauseBots(current: SupervisorDeps): PauseBotsState {
@@ -180,7 +236,7 @@ function writePauseBots(current: SupervisorDeps, state: PauseBotsState): PauseBo
 async function handlePauseBotsApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
   const current = deps();
   if (req.method === "GET" && url.pathname === "/api/bots") {
-    sendJson(res, 200, readBots());
+    sendJson(res, 200, readBots(current));
     return true;
   }
   if (req.method === "GET" && url.pathname === "/api/pause-bots") {

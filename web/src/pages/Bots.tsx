@@ -1,9 +1,18 @@
 import { useEffect, useState } from "react";
-import { Bot as BotIcon, Pause, Play } from "lucide-react";
+import { Bot as BotIcon } from "lucide-react";
 import { getBotModels, getBots, getPauseBots, setBotModel, setPauseBot } from "../api/client";
 import type { BotInfo, BotModels } from "../api/types";
 import { useApp, useBoxState } from "../store";
 import { Badge, EmptyState, Spinner, Switch } from "../components/ui";
+import { Listbox, type ListboxGroup } from "../components/Listbox";
+
+function formatBotTime(value: number | null): string {
+  if (value === null) return "Time unavailable";
+  const age = Math.max(0, Date.now() - value);
+  if (age < 60 * 60 * 1000) return `Updated ${Math.max(1, Math.round(age / 60000))}m ago`;
+  if (age < 24 * 60 * 60 * 1000) return `Updated ${Math.round(age / 3600000)}h ago`;
+  return `Updated ${new Date(value).toLocaleDateString()}`;
+}
 
 export function Bots() {
   const state = useBoxState();
@@ -80,6 +89,14 @@ export function Bots() {
     }
   };
 
+  const modelGroups = (bot: BotInfo): ListboxGroup[] => [{
+    label: "Models",
+    options: [
+      { value: "", label: "Default (global)" },
+      ...(botModels?.available ?? []).map((id) => ({ value: id, label: state.models.find((model) => model.id === id)?.slug ?? id })),
+    ],
+  }];
+
   return (
     <div className="stack">
       <div className="page-title-row">
@@ -116,34 +133,27 @@ export function Bots() {
               const paused = pausedBotIds.has(bot.botId);
               const busy = busyBotId === bot.botId;
               return (
-                <div className="bot-row" key={bot.botId}>
-                  <span className={"bot-row__icon" + (paused ? " is-paused" : "")} aria-hidden="true">
-                    {paused ? <Pause /> : <Play />}
-                  </span>
+                <div className={"bot-row" + (bot.deleted ? " is-deleted" : "")} key={bot.botId} title={bot.deleted ? "Deleted" : undefined}>
+                  <span className="bot-row__icon" aria-hidden="true"><BotIcon /></span>
                   <div className="bot-row__main">
                     <strong>{bot.botName}</strong>
                     <span className="mono">{bot.botId}</span>
+                    <span className="bot-row__time">{bot.deleted ? "Deleted" : formatBotTime(bot.updatedAtMs)}</span>
                   </div>
                   <div className="bot-row__model">
-                    <select
-                      aria-label={"Model for " + bot.botName}
+                    <Listbox
+                      label={"Model for " + bot.botName}
+                      groups={modelGroups(bot)}
                       value={modelDraft[bot.botId] ?? ""}
-                      disabled={modelBusyBotId === bot.botId || botModels === null}
-                      onChange={(e) => void saveModel(bot, e.target.value)}
-                    >
-                      <option value="">Default (global)</option>
-                      {(botModels?.available ?? []).map((id) => (
-                        <option value={id} key={id}>
-                          {state.models.find((model) => model.id === id)?.slug ?? id}
-                        </option>
-                      ))}
-                    </select>
+                      disabled={bot.deleted || modelBusyBotId === bot.botId || botModels === null}
+                      onChange={(id) => void saveModel(bot, id)}
+                    />
                   </div>
                   <Switch
-                    checked={paused}
-                    disabled={busy}
+                    checked={!paused}
+                    disabled={bot.deleted || busy}
                     label={busy ? "Saving" : paused ? "Paused" : "Active"}
-                    onChange={(next) => void toggle(bot, next)}
+                    onChange={(next) => void toggle(bot, !next)}
                   />
                 </div>
               );

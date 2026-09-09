@@ -357,7 +357,7 @@ test("request rows record bot identity and chat source from OpenAI messages", ()
     });
     const row = log.listRequests().items[0] as Record<string, unknown>;
     assert.equal(row.botId, "1cf5a3e0-2623-468c-ba97-6b14f8f3c12a");
-    assert.equal(row.botName, "测试");
+    assert.equal(row.botName, undefined);
     assert.equal(row.chatType, "group");
     assert.equal(row.chatName, "测试群聊");
   });

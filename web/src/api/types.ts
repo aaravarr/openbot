@@ -115,7 +115,7 @@ export type GatewayPause = {
   note: string | null;
 };
 
-export type BotInfo = { botId: string; botName: string };
+export type BotInfo = { botId: string; botName: string; deleted: boolean; updatedAtMs: number | null; createdAtMs: number | null };
 export type PauseBotsState = { pausedBotIds: string[] };
 
 export type ModelLimitsPayload = {

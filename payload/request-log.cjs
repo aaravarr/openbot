@@ -1097,13 +1097,10 @@ function recordHopInner(input) {
   if (origin) row.origin = origin;
   var context = extractChatContext(src.requestBody && src.requestBody.messages);
   if (context.botId) row.botId = context.botId;
-  if (context.botName) row.botName = context.botName;
   if (context.chatType) row.chatType = context.chatType;
   if (context.chatName) row.chatName = context.chatName;
   var botId = cleanText(src.botId, 64);
   if (botId) row.botId = botId;
-  var botName = cleanText(src.botName, 200);
-  if (botName) row.botName = botName;
   var chatType = src.chatType === "group" || src.chatType === "dm" || src.chatType === "routine" ? src.chatType : undefined;
   if (chatType) row.chatType = chatType;
   var chatName = cleanText(src.chatName, 200);

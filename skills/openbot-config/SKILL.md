@@ -71,7 +71,7 @@ If `openbot` is on `PATH`, `openbot status` is the same.
 
 ### Bot-mode install and status
 
-When Grok Bot updates OpenBot from the Computer, use `install.sh --bot-mode`. It returns immediately and runs the install, tunnel, and QR work in a detached Linux worker so a host bounce cannot abort the Bot turn. Reply that installation has started, then run `install.sh --bot-status` after 60-120 seconds or in the next turn. On `success`, send the reported tunnel URL and QR path with the host `SendToUser` tool; on `failed`, include the log path and retry. The result JSON is `/home/box/sand-data/openbot-install-result.json` and the worker log is `/home/box/sand-data/openbot-install.log` (both follow `OPENBOT_SAND_DATA`).
+When Grok Bot updates OpenBot from the Computer, use `install.sh --bot-mode`. It returns immediately and runs the install, tunnel, and QR work in a detached Linux worker so a host bounce cannot abort the Bot turn. The worker stages and syntax-checks the new tree, then performs one final cutover/reconcile; the existing tunnel is kept alive. Reply immediately that installation has started, then run `install.sh --bot-status` every 30-60 seconds while it is running. Relay `OPENBOT_PROGRESS_STAGE`, `OPENBOT_PROGRESS_SUMMARY`, and `OPENBOT_TIMING_*_MS`; on `success`, send the reported tunnel URL and QR path with the host `SendToUser` tool; on `failed`, include the log path and retry. The result JSON is `/home/box/sand-data/openbot-install-result.json` and the worker log is `/home/box/sand-data/openbot-install.log` (both follow `OPENBOT_SAND_DATA`).
 
 ### Official / custom
 

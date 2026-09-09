@@ -256,25 +256,33 @@ async function handlePauseBotsApi(req: http.IncomingMessage, res: http.ServerRes
     return true;
   }
   const body = parsed as { botId?: unknown; paused?: unknown; pausedBotIds?: unknown };
-  const currentState = readPauseBots(current);
-  let nextIds: string[];
-  if (Array.isArray(body.pausedBotIds)) {
-    if (!body.pausedBotIds.every((id) => typeof id === "string" && id.trim())) {
-      sendJson(res, 400, { error: "pausedBotIds must be an array of strings" });
-      return true;
-    }
-    nextIds = body.pausedBotIds as string[];
-  } else {
-    if (typeof body.botId !== "string" || !body.botId.trim() || typeof body.paused !== "boolean") {
-      sendJson(res, 400, { error: "botId and paused are required" });
-      return true;
-    }
-    const ids = new Set(currentState.pausedBotIds);
-    if (body.paused) ids.add(body.botId.trim());
-    else ids.delete(body.botId.trim());
-    nextIds = [...ids];
+  const rawIds: unknown = body.pausedBotIds;
+  const replacementIds = Array.isArray(rawIds)
+    ? rawIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+    : undefined;
+  if (Array.isArray(rawIds) && replacementIds !== undefined && replacementIds.length !== rawIds.length) {
+    sendJson(res, 400, { error: "pausedBotIds must be an array of strings" });
+    return true;
   }
-  const state = await enqueueSave(async () => writePauseBots(current, { pausedBotIds: nextIds }));
+  if (replacementIds === undefined && (typeof body.botId !== "string" || !body.botId.trim() || typeof body.paused !== "boolean")) {
+    sendJson(res, 400, { error: "botId and paused are required" });
+    return true;
+  }
+  let nextIds: string[] = replacementIds ?? [];
+  const toggleBotId = replacementIds === undefined && typeof body.botId === "string" ? body.botId.trim() : "";
+  const togglePaused = body.paused === true;
+  // Toggle read-modify-write must run inside the save queue: if another save is
+  // in flight, reading outside the queue could base the replacement list on
+  // stale ids and drop a concurrently added pause.
+  const state = await enqueueSave(async () => {
+    if (replacementIds === undefined) {
+      const ids = new Set(readPauseBots(current).pausedBotIds);
+      if (togglePaused) ids.add(toggleBotId);
+      else ids.delete(toggleBotId);
+      nextIds = [...ids];
+    }
+    return writePauseBots(current, { pausedBotIds: nextIds });
+  });
   sendJson(res, 200, state);
   return true;
 }

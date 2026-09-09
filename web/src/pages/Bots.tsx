@@ -6,6 +6,7 @@ import { useApp, useBoxState } from "../store";
 import { Badge, EmptyState, Spinner, Switch } from "../components/ui";
 import { Listbox } from "../components/Listbox";
 import { modelGroupsForState } from "../lib/model-options";
+import { computePauseIds, computeResumeIds } from "../lib/batch-pause";
 
 function formatBotTime(value: number | null): string {
   if (value === null) return "Time unavailable";
@@ -113,7 +114,14 @@ export function Bots() {
         setModelDraft(next.assignments);
         pushToast("success", "Models updated", `Updated ${selectedActiveIds.length} bot${selectedActiveIds.length === 1 ? "" : "s"}.`);
       } else {
-        const next = await setPauseBots(kind === "pause" ? [...new Set([...pausedBotIds, ...selectedActiveIds])] : [...pausedBotIds].filter((id) => !selectedActiveIds.includes(id)));
+        // PUT /api/pause-bots replaces the whole list, so compute the new list
+        // from the latest server state, not React state — otherwise a pause
+        // added by another client between loads would be dropped.
+        const latest = await getPauseBots();
+        const nextIds = kind === "pause"
+          ? computePauseIds(latest.pausedBotIds, selectedActiveIds)
+          : computeResumeIds(latest.pausedBotIds, selectedActiveIds);
+        const next = await setPauseBots(nextIds);
         setPausedBotIds(new Set(next.pausedBotIds));
         pushToast("success", kind === "pause" ? "Bots paused" : "Bots resumed", `Updated ${selectedActiveIds.length} bot${selectedActiveIds.length === 1 ? "" : "s"}.`);
       }

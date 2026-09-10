@@ -3,23 +3,27 @@
 set -euo pipefail
 
 HOST="${OPENBOT_HOST_MAIN:-/home/box/sand-host/host-main.cjs}"
-DATA="${OPENBOT_SAND_DATA:-/home/box/sand-data}"
+DATA="${OPENBOT_SAND_DATA-/home/box/sand-data}"
 RESULT_FILE="${OPENBOT_BOT_RESULT:-$DATA/openbot-uninstall-result.json}"
 LOG_FILE="${OPENBOT_BOT_LOG:-$DATA/openbot-uninstall.log}"
 PID_FILE="${OPENBOT_BOT_PID:-$DATA/openbot-uninstall.pid}"
 YES=0
-PURGE_SECRETS="${OPENBOT_UNINSTALL_PURGE_SECRETS:-0}"
+PURGE_SECRETS=0
 WORKER=0
 WORKER_ENTRY=0
 
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 sanity_check() {
-  case "$DATA" in
-    */sand-data|*/sand-data/*) ;;
+  local normalized
+  [[ -n "$DATA" ]] || { echo 'OpenBot: refusing to operate on an empty OPENBOT_SAND_DATA (expected a /sand-data path).' >&2; exit 2; }
+  [[ "$DATA" == /* ]] || { echo "OpenBot: refusing to operate on unsafe OPENBOT_SAND_DATA=$DATA (expected an absolute /sand-data path)." >&2; exit 2; }
+  normalized="$(realpath -m -- "$DATA" 2>/dev/null)" || { echo "OpenBot: refusing to operate on unsafe OPENBOT_SAND_DATA=$DATA (expected a /sand-data path)." >&2; exit 2; }
+  [[ "$normalized" == /* && "$normalized" != / ]] || { echo "OpenBot: refusing to operate on unsafe OPENBOT_SAND_DATA=$DATA (expected a /sand-data path)." >&2; exit 2; }
+  case "$normalized" in
+    */sand-data|*/sand-data/*) DATA="$normalized" ;;
     *) echo "OpenBot: refusing to operate on unsafe OPENBOT_SAND_DATA=$DATA (expected a /sand-data path)." >&2; exit 2 ;;
   esac
-  [[ "$DATA" != / ]] || { echo 'OpenBot: refusing to operate on /.' >&2; exit 2; }
 }
 
 json_write() {
@@ -76,15 +80,18 @@ stop_guard() {
     echo 'Guard daemon was not running.'
   fi
   [[ -e "$file" ]] && rm -f "$file"
+  return 0
 }
 
 stop_tunnel() {
   local file="$DATA/openbot-tunnel.pid" pid
   pid="$(pid_from_file "$file" || true)"
   if [[ -n "$pid" ]] && alive "$pid"; then
-    if [[ "$(argv_of "$pid")" == *cloudflared* ]]; then kill "$pid" 2>/dev/null || true; echo 'Cloudflare Tunnel stopped.'; else echo "Tunnel pidfile $pid does not match cloudflared; left process untouched."; fi
+    local args="$(argv_of "$pid")"
+    if [[ "$args" == *cloudflared* && "$args" == *--url* && "$args" == *127.0.0.1:9280* ]]; then kill "$pid" 2>/dev/null || true; echo 'Cloudflare Tunnel stopped.'; else echo "Tunnel pidfile $pid does not match the owned cloudflared command; left process untouched."; fi
   else echo 'Cloudflare Tunnel was not running.'; fi
   [[ -e "$file" ]] && rm -f "$file"
+  return 0
 }
 
 stop_hop() {
@@ -95,6 +102,7 @@ stop_hop() {
     if [[ "$result" -eq 0 ]]; then echo 'Standalone hop stopped.'; elif [[ "$result" -eq 2 ]]; then echo "Hop pidfile $pid does not match hop-server; left process untouched."; fi
   else echo 'Standalone hop was not running.'; fi
   [[ -e "$file" ]] && rm -f "$file"
+  return 0
 }
 
 port_pids() {
@@ -108,29 +116,50 @@ stop_ui() {
   pid="$(pid_from_file "$file" || true)"
   if [[ -n "$pid" ]] && alive "$pid"; then
     args="$(argv_of "$pid")"
-    if [[ "$args" == *"src/ui/server.ts"* ]]; then kill "$pid" 2>/dev/null || true; found=1; echo 'OpenBot UI server stopped.'; else echo "UI pidfile $pid does not match OpenBot UI; left process untouched."; fi
+    if [[ "$args" == *openbot*src/ui/server.ts* ]]; then kill "$pid" 2>/dev/null || true; found=1; echo 'OpenBot UI server stopped.'; else echo "UI pidfile $pid does not match OpenBot UI; left process untouched."; fi
   fi
   if [[ "$found" -eq 0 ]]; then
     while read -r pid; do
       [[ -n "$pid" ]] || continue
       args="$(argv_of "$pid")"
-      if [[ "$args" == *"src/ui/server.ts"* ]]; then kill "$pid" 2>/dev/null || true; found=1; echo 'OpenBot UI server stopped by argv fallback.'; fi
+      if [[ "$args" == *openbot*src/ui/server.ts* ]]; then kill "$pid" 2>/dev/null || true; found=1; echo 'OpenBot UI server stopped by argv fallback.'; fi
     done < <(port_pids)
   fi
   if [[ "$found" -eq 0 ]] && [[ -n "$(port_pids)" ]]; then echo '9280 is occupied by a foreign process; it was not killed.'; fi
   [[ -e "$file" ]] && rm -f "$file"
+  return 0
 }
 
 restore_host() {
-  local backup="${HOST}.pre-openbot"
-  if [[ -f "$backup" ]]; then
-    mv "$backup" "$HOST"
-    echo "Restored the stock host from $backup."
+  local backup="$DATA/host-main.cjs.pre-openbot" legacy="${HOST}.pre-openbot" first_line
+  local invalid_message="$(printf '%b' '\345\244\207\344\273\275\346\227\240\346\225\210\357\274\214\344\277\235\347\225\231\345\275\223\345\211\215\345\256\277\344\270\273\346\226\207\344\273\266')"
+  HOST_RESTORE_INVALID=0
+  HOST_RESTORE_SUMMARY=''
+  [[ -f "$backup" ]] || backup="$legacy"
+  if [[ -e "$backup" && ( ! -s "$backup" || ! -r "$backup" ) ]]; then
+    HOST_RESTORE_INVALID=1
+    HOST_RESTORE_SUMMARY="Host backup invalid; current host file preserved ($invalid_message)"
+    echo "$invalid_message"
+  elif [[ -f "$backup" ]]; then
+    first_line="$(sed -n '1p' "$backup" 2>/dev/null || true)"
+    if [[ -z "${first_line//[[:space:]]/}" ]]; then
+      HOST_RESTORE_INVALID=1
+      HOST_RESTORE_SUMMARY="Host backup invalid; current host file preserved ($invalid_message)"
+      echo "$invalid_message"
+    elif mv -f -- "$backup" "$HOST"; then
+      HOST_RESTORE_SUMMARY="Restored the stock host from $backup."
+      echo "$HOST_RESTORE_SUMMARY"
+    else
+      HOST_RESTORE_INVALID=1
+      HOST_RESTORE_SUMMARY="Host backup invalid; current host file preserved ($invalid_message)"
+      echo "$invalid_message"
+    fi
   elif [[ -f "$HOST" ]]; then
     echo 'No OpenBot host backup found; host was left unchanged.'
   else
     echo 'No OpenBot host backup or host file found.'
   fi
+  [[ "$HOST_RESTORE_INVALID" -eq 0 ]]
 }
 
 remove_data() {
@@ -147,12 +176,16 @@ remove_data() {
 verify() {
   local port="$(port_pids)"
   [[ -z "$port" ]] && echo 'Verification: 9280 is not listening.' || echo "Verification: 9280 still has listener pid(s) $port; foreign listeners were not killed."
-  if [[ -f "${HOST}.pre-openbot" ]]; then echo 'Verification: stock host backup still exists; host restore needs attention.'; elif [[ -f "$HOST" ]]; then echo 'Verification: host-main.cjs is present.'; else echo 'Verification: host-main.cjs is missing.'; fi
+  if [[ -f "$DATA/host-main.cjs.pre-openbot" || -f "${HOST}.pre-openbot" ]]; then echo 'Verification: stock host backup still exists; host restore needs attention.'; elif [[ -f "$HOST" ]]; then echo 'Verification: host-main.cjs is present.'; else echo 'Verification: host-main.cjs is missing.'; fi
 }
 
 uninstall_main() {
   local mode
-  mode="$(tr -d '[:space:]' <"$DATA/openbot-mode" 2>/dev/null || true)"
+  if [[ -f "$DATA/openbot-mode" ]]; then
+    mode="$(tr -d '[:space:]' <"$DATA/openbot-mode")"
+  else
+    mode=''
+  fi
   [[ "$mode" == custom ]] && echo 'OpenBot is currently in custom mode.' || echo "OpenBot is currently in official mode or has no mode file; residual files will still be removed."
   [[ "$YES" -eq 1 ]] || {
     cat <<EOF
@@ -172,12 +205,19 @@ EOF
   [[ "$WORKER" -eq 1 ]] && json_write running ui 'Stopping the OpenBot UI.'
   stop_ui
   [[ "$WORKER" -eq 1 ]] && json_write running host 'Restoring the stock Grok Bot host.'
-  restore_host
+  restore_host || true
   echo 'The Grok Bot host was not restarted by uninstall; restart Grok Bot on the Computer if it is still running.'
   [[ "$WORKER" -eq 1 ]] && json_write running files 'Removing OpenBot files.'
   remove_data
   verify
-  [[ "$WORKER" -eq 1 ]] && json_write success verify 'Uninstall complete. Restart Grok Bot on the Computer if needed.' '' "$(now)"
+  if [[ "$WORKER" -eq 1 && "$HOST_RESTORE_INVALID" -eq 1 ]]; then
+    json_write failed verify "$HOST_RESTORE_SUMMARY" 'The host backup failed validation; the current host file was preserved.' "$(now)"
+    return 1
+  fi
+  if [[ "$WORKER" -eq 1 ]]; then
+    json_write success verify "Uninstall complete. Restart Grok Bot on the Computer if needed.${HOST_RESTORE_SUMMARY:+ $HOST_RESTORE_SUMMARY}" '' "$(now)"
+  fi
+  return 0
 }
 
 bot_status() {
@@ -197,10 +237,17 @@ while [[ $# -gt 0 ]]; do case "$1" in --yes) YES=1 ;; --purge-secrets) PURGE_SEC
 if [[ "$WORKER" -eq 1 && "${1:-}" != '--bot-mode-worker' ]]; then :; fi
 if [[ "$WORKER" -eq 1 && -f "$PID_FILE" ]]; then
   old="$(pid_from_file "$PID_FILE" || true)"
-  if [[ -n "$old" ]] && alive "$old" && [[ "$(argv_of "$old")" == *uninstall-worker* ]]; then printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=started' "OPENBOT_RESULT_FILE=$RESULT_FILE" 'OPENBOT_BOT_INSTRUCTION=SendToUser now: 卸载已开始。Then poll --bot-status in 30-60 seconds.' '===== END OPENBOT BOT RESULT ====='; exit 0; fi
+  if [[ -n "$old" ]] && alive "$old" && [[ "$(argv_of "$old")" == *uninstall-worker* ]]; then printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=started' "OPENBOT_RESULT_FILE=$RESULT_FILE" 'OPENBOT_BOT_INSTRUCTION=SendToUser now: uninstall is already running; poll --bot-status in 30-60 seconds.' '===== END OPENBOT BOT RESULT ====='; exit 0; fi
 fi
 if [[ "$WORKER" -eq 1 && "$WORKER_ENTRY" -eq 0 ]]; then
-  mkdir -p "$DATA"; export OPENBOT_UNINSTALL_PURGE_SECRETS="$PURGE_SECRETS"; json_write running starting 'Uninstall worker started.'; (setsid bash -euo pipefail -c 'exec -a openbot-uninstall-worker bash "$1" --bot-mode-worker' bash "$0" </dev/null >>"$LOG_FILE" 2>&1) & echo "$!" >"$PID_FILE"; printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=started' "OPENBOT_RESULT_FILE=$RESULT_FILE" "OPENBOT_LOG_FILE=$LOG_FILE" 'OPENBOT_BOT_INSTRUCTION=SendToUser now: 卸载已开始。请在 30-60 秒后轮询 --bot-status；终态时转述结果摘要。' '===== END OPENBOT BOT RESULT ====='; exit 0
+  mkdir -p "$DATA"
+  purge_arg=()
+  [[ "$PURGE_SECRETS" -eq 1 ]] && purge_arg+=(--purge-secrets)
+  json_write running starting 'Uninstall worker started.'
+  (setsid bash -euo pipefail -c 'exec -a openbot-uninstall-worker bash "$1" "${@:2}"' bash "$0" --bot-mode-worker "${purge_arg[@]}" </dev/null >>"$LOG_FILE" 2>&1) &
+  echo "$!" >"$PID_FILE"
+  printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=started' "OPENBOT_RESULT_FILE=$RESULT_FILE" "OPENBOT_LOG_FILE=$LOG_FILE" 'OPENBOT_BOT_INSTRUCTION=SendToUser now: uninstall started; poll --bot-status in 30-60 seconds.' '===== END OPENBOT BOT RESULT ====='
+  exit 0
 fi
 if [[ "$WORKER_ENTRY" -eq 1 ]]; then
   set +e

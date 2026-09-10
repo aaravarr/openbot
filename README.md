@@ -14,9 +14,17 @@ Run this on the **Grok Bot Computer**, not on your Mac:
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
 ```
 
+> **Grok Bot bot mode**
+>
+> `curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-mode`
+>
+> Run it, then follow the printed `OPENBOT_BOT_INSTRUCTION`.
+>
+> One command handles installation and updates; the script decides, so no pre-check is needed.
+
 OpenBot needs Node 22 or newer. If the Computer only has Node 20, the installer puts Node 22 in `sand-data` without replacing system Node. On the first install, type `y` at the Cloudflare prompt for a phone URL and QR code, or press Enter to stay local. Then open [http://127.0.0.1:9280](http://127.0.0.1:9280) in the Computer browser.
 
-The same command is also the updater, and it is re-entrant: run it whenever you like. With no OpenBot it installs; with one it attempts to fetch `main` and replace the code (bot-mode runs staging and switch in one step), keeping Official/custom mode, providers, models, keys, and the saved tunnel choice. The installer handles host, Node, existing-install, wrap/mode-drift, leftover-process, and tunnel checks during the run.
+The same command handles installation and updates to the current `main`, keeping Official/custom mode, providers, models, keys, and the saved tunnel choice. The installer handles host, Node, existing-install, wrap/mode-drift, leftover-process, and tunnel checks during the run.
 
 <details>
 <summary>Grok Bot: automatic install</summary>

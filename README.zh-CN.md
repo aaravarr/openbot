@@ -14,9 +14,17 @@ Grok Bot 0.30 已经有一台 Computer。OpenBot 让这台 Computer 调用 OpenA
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
 ```
 
+> **Grok Bot bot 模式**
+>
+> `curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-mode`
+>
+> 运行它，然后按打印出的 `OPENBOT_BOT_INSTRUCTION` 执行。
+>
+> 同一条命令处理安装和更新；脚本自行判断，不需要预先检查任何东西。
+
 OpenBot 需要 Node 22 或更新。如果 Computer 里只有 Node 20，安装脚本会把 Node 22 放进 `sand-data`，不替换系统 Node。第一次安装时，Cloudflare 提示出现后输入 `y` 会启用手机 URL 和二维码；直接回车则只保留本机访问。然后用 Computer 浏览器打开 [http://127.0.0.1:9280](http://127.0.0.1:9280)。
 
-同一条命令也用于更新，而且它是可重入的：任何时候重复运行都安全。没有 OpenBot 时它执行安装；已有 OpenBot 时会尝试获取 `main` 并替换代码（bot 模式会先 staging，再一次性切换目录），保留官方/自定义模式、provider、模型、Key 与已保存的 Tunnel。宿主、Node、已有安装、wrap/模式漂移、遗留进程和 Tunnel 的检查都在脚本运行过程中完成。
+同一条命令负责安装并更新到当前 `main`，保留官方/自定义模式、provider、模型、Key 与已保存的 Tunnel。宿主、Node、已有安装、wrap/模式漂移、遗留进程和 Tunnel 的检查都在脚本运行过程中完成。
 
 <details>
 <summary>Grok Bot：自动安装</summary>

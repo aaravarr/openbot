@@ -77,7 +77,18 @@ export function printRefused(result: Extract<ReconcileResult, { kind: "refused" 
 export function printResult(result: ReconcileResult, json: boolean): void {
   if (json) {
     if (result.kind === "ok") {
-      console.log(JSON.stringify({ ok: true, wrapBytesChanged: result.wrapBytesChanged, snapshot: result.snapshot }, null, 2));
+      console.log(
+        JSON.stringify(
+          {
+            ok: true,
+            wrapBytesChanged: result.wrapBytesChanged,
+            hostBounce: result.hostBounce,
+            snapshot: result.snapshot,
+          },
+          null,
+          2,
+        ),
+      );
       return;
     }
     console.error(JSON.stringify(result, null, 2));

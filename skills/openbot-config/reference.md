@@ -6,10 +6,17 @@ Read this from [SKILL.md](SKILL.md) when you need disk shapes, HTTP/CLI contract
 
 Default files under `/home/box/sand-data` (override with `OPENBOT_SAND_DATA`; individual overrides are `OPENBOT_BOT_RESULT`, `OPENBOT_BOT_LOG`, and `OPENBOT_BOT_PID`):
 
-- `openbot-install-result.json`: atomically replaced JSON with `status` (`running`, `success`, or `failed`), `startedAt`, and optional `finishedAt`, `url`, `qrPath`, `error`, and `logTail`. While running, `progress` is `{stage, summary, updatedAt}` where stage is `starting`, `downloading`, `deploying`, `restarting`, `tunnel`, or `qr`. `timings` always contains `downloadMs`, `deployMs`, `restartMs`, and `totalMs`.
+- `openbot-install-result.json`: atomically replaced JSON with `status` (`running`, `success`, or `failed`), `startedAt`, and optional `finishedAt`, `url`, `qrPath`, `error`, `logTail`, and `hostBounce` (`pending`/`done`/`disabled` as seen at write time). While running, `progress` is `{stage, summary, updatedAt}` where stage is `starting`, `downloading`, `deploying`, `restarting`, `tunnel`, or `qr`. `timings` always contains `downloadMs`, `deployMs`, `restartMs`, and `totalMs`.
 - `openbot-install.log`: detached worker stdout/stderr.
 - `openbot-install.pid`: worker pid, removed on worker exit.
 - `openbot-uninstall-result.json`, `openbot-uninstall.log`, `openbot-uninstall.pid`: detached uninstall result, worker log, and worker pid.
+
+Deferred host bounce (bot-mode upgrades only; see `OPENBOT_HOST_BOUNCE` in SKILL.md):
+
+- `openbot-pending-bounce.json`: marker written instead of SIGTERMing the host. Shape `{armedAt, armedAtMs, fingerprint, hostPids, source}`. A reconcile that rewrites the host file while it exists refreshes this marker instead of bouncing; the bounce is applied only when the host is idle.
+- `openbot-turn-lease.json`: hop-written idle oracle, `{active, lastStartAt, lastEndAt, lastFinishReason, updatedAt}`. Last activity is updated on every request boundary. Do not hand-edit.
+- `openbot-finalize.pid`: pid of the detached `finalize-host` applier. The guard daemon retries the bounce when this pid is gone.
+- Applying is gated: never before 120 s after arming, never while a request is in flight, and never before a quiet window measured from the last hop activity (90 s after a finished answer, 300 s otherwise). Only the marker's recorded host pids are signalled, and only while they still run `host-main.cjs` on a process started before the arm.
 
 
 ## Architecture
@@ -345,9 +352,12 @@ node --experimental-strip-types src/cli.ts official
 node --experimental-strip-types src/cli.ts tunnel on
 node --experimental-strip-types src/cli.ts tunnel off
 node --experimental-strip-types src/cli.ts tunnel status
+node --experimental-strip-types src/cli.ts finalize-host
 ```
 
-Install / update (reconcile from disk or new provider): `--origin` and `--model` together require `OPENBOT_API_KEY`. `--tunnel cloudflare|off`. `--host-main`, `--sand-data`, `--json`. `--census-only` is not wrap proof. `--dry-run` is.
+Install / update (reconcile from disk or new provider): `--origin` and `--model` together require `OPENBOT_API_KEY`. `--tunnel cloudflare|off`. `--host-main`, `--sand-data`, `--json`. `--census-only` is not wrap proof. `--dry-run` is. `--defer-host-bounce` (or `OPENBOT_DEFER_HOST_BOUNCE=1`) arms `openbot-pending-bounce.json` instead of SIGTERMing the host — that is what the bot-mode worker uses.
+
+`finalize-host` applies an armed bounce once the host is idle: `--once` (single attempt), `--force` (skip the quiet wait; never the 120 s grace window and never an in-flight request), `--grace-ms`, `--wait-idle-ms`, `--busy-wait-ms`, `--max-wait-ms`, `--poll-ms`. The first three are floored at 1000 ms and a smaller value is rejected: below that the idle protection is gone. `openbot-pending-bounce.json` is written through a temp file and renamed, so a polling finalizer never reads a half-written marker.
 
 ## Presets (origins only)
 

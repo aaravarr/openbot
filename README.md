@@ -29,6 +29,8 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 Follow the `OPENBOT_BOT_INSTRUCTION` printed by each command; that output is the authority. In short: start the command, then follow its printed `--bot-status` instruction. Installation usually takes 15–60 seconds. Poll at most twice; if it is still stuck after 3 minutes, send the log tail to the user and stop.
 
+The Bot's own turn runs inside the Grok Bot host, so the update never restarts that host while the turn is talking: a changed payload is written immediately and the restart is deferred to `openbot-pending-bounce.json`, applied by a detached finalizer once the host is idle. `--bot-status` reports this as `OPENBOT_HOST_BOUNCE=pending` (then `done`); nothing needs rerunning and no message is lost.
+
 </details>
 
 ## Uninstall

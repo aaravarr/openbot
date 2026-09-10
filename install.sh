@@ -20,7 +20,7 @@ bot_epoch_ms() { date +%s%3N; }
 bot_write_state() {
   local status="$1" started="$2" finished="$3" url="$4" qr="$5" error="$6" tail_text="$7" stage="$8" summary="$9" rolled_back="${10:-}" download_source="${11:-${OPENBOT_DOWNLOAD_SOURCE:-}}" tmp="${BOT_RESULT_FILE}.$$"
   mkdir -p "$(dirname "$BOT_RESULT_FILE")"
-  OPENBOT_INSTALL_COMMIT="${OPENBOT_INSTALL_COMMIT:-}" node -e 'const fs=require("fs");const [file,status,startedAt,finishedAt,url,qrPath,error,logTail,stage,summary,downloadMs,deployMs,restartMs,totalMs,rolledBack,downloadSource]=process.argv.slice(1);let result={};try{result=JSON.parse(fs.readFileSync(file,"utf8"));}catch{};result.status=status;result.startedAt=startedAt;if(finishedAt)result.finishedAt=finishedAt;else delete result.finishedAt;if(url)result.url=url;else delete result.url;if(qrPath)result.qrPath=qrPath;else delete result.qrPath;if(error)result.error=error;else delete result.error;if(logTail)result.logTail=logTail;else delete result.logTail;if(stage)result.progress={stage,summary:summary||"",updatedAt:new Date().toISOString()};if(process.env.OPENBOT_INSTALL_COMMIT)result.commit=process.env.OPENBOT_INSTALL_COMMIT;if(downloadSource)result.downloadSource=downloadSource;else delete result.downloadSource;if(rolledBack==="true")result.rolled_back=true;else delete result.rolled_back;result.timings={downloadMs:Number(downloadMs)||0,deployMs:Number(deployMs)||0,restartMs:Number(restartMs)||0,totalMs:Number(totalMs)||0};fs.writeFileSync(file,JSON.stringify(result,null,2)+"\n");' "$tmp" "$status" "$started" "$finished" "$url" "$qr" "$error" "$tail_text" "$stage" "$summary" "${BOT_DOWNLOAD_MS:-0}" "${BOT_DEPLOY_MS:-0}" "${BOT_RESTART_MS:-0}" "${BOT_TOTAL_MS:-0}" "$rolled_back" "$download_source"
+  OPENBOT_INSTALL_COMMIT="${OPENBOT_INSTALL_COMMIT:-}" node -e 'const fs=require("fs");const [file,status,startedAt,finishedAt,url,qrPath,error,logTail,stage,summary,downloadMs,deployMs,restartMs,totalMs,rolledBack,downloadSource]=process.argv.slice(1);let result={};try{result=JSON.parse(fs.readFileSync(file,"utf8"));}catch{};result.status=status;result.startedAt=startedAt;if(finishedAt)result.finishedAt=finishedAt;else delete result.finishedAt;if(url)result.url=url;else delete result.url;if(qrPath)result.qrPath=qrPath;else delete result.qrPath;if(error)result.error=error;else delete result.error;if(logTail)result.logTail=logTail;else delete result.logTail;if(stage)result.progress={stage,summary:summary||"",updatedAt:new Date().toISOString()};if(process.env.OPENBOT_INSTALL_COMMIT)result.commit=process.env.OPENBOT_INSTALL_COMMIT;if(downloadSource)result.downloadSource=downloadSource;else delete result.downloadSource;if(rolledBack==="true")result.rolled_back=true;else delete result.rolled_back;if(process.env.OPENBOT_HOST_BOUNCE)result.hostBounce=process.env.OPENBOT_HOST_BOUNCE;else delete result.hostBounce;result.timings={downloadMs:Number(downloadMs)||0,deployMs:Number(deployMs)||0,restartMs:Number(restartMs)||0,totalMs:Number(totalMs)||0};fs.writeFileSync(file,JSON.stringify(result,null,2)+"\n");' "$tmp" "$status" "$started" "$finished" "$url" "$qr" "$error" "$tail_text" "$stage" "$summary" "${BOT_DOWNLOAD_MS:-0}" "${BOT_DEPLOY_MS:-0}" "${BOT_RESTART_MS:-0}" "${BOT_TOTAL_MS:-0}" "$rolled_back" "$download_source"
   mv -f "$tmp" "$BOT_RESULT_FILE"
 }
 bot_write_running_result() {
@@ -59,7 +59,34 @@ bot_print_status() {
     printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=not-installed' "OPENBOT_RESULT_FILE=$BOT_RESULT_FILE" 'OPENBOT_BOT_INSTRUCTION=No detached OpenBot installation has been recorded yet. Run install.sh --bot-mode to start one.' '===== END OPENBOT BOT RESULT ====='
     return 0
   fi
-  BOT_LOG_FILE="$BOT_LOG_FILE" OPENBOT_BOT_STATUS_BRIEF="$brief" node -e 'const fs=require("fs");const file=process.argv[1];let v;try{v=JSON.parse(fs.readFileSync(file,"utf8"));}catch{console.log("===== OPENBOT BOT RESULT =====\nOPENBOT_STATUS=failed\nOPENBOT_ERROR=Result file is not valid JSON.\nOPENBOT_RESULT_FILE="+file+"\n===== END OPENBOT BOT RESULT =====");process.exit(0);}const age=v.status==="running"&&v.startedAt?Date.now()-Date.parse(v.startedAt):0;const logPath=process.env.BOT_LOG_FILE||"the install log";const brief=process.env.OPENBOT_BOT_STATUS_BRIEF==="1";const lines=["===== OPENBOT BOT RESULT =====","OPENBOT_STATUS="+(v.status||"failed")];if(v.progress?.stage)lines.push("OPENBOT_PROGRESS_STAGE="+v.progress.stage);if(v.url)lines.push("OPENBOT_URL="+v.url);if(v.qrPath)lines.push("OPENBOT_QR_PATH="+v.qrPath);if(brief){if(v.status==="running"&&age>180000){lines.push("OPENBOT_WARNING=Installation exceeded 3 minutes; stop polling.");lines.push("OPENBOT_LOG_FILE="+logPath);let tail=v.logTail;try{tail=tail||fs.readFileSync(logPath,"utf8").split(/\r?\n/).slice(-20).join("\n");}catch{}if(tail)lines.push("OPENBOT_LOG_TAIL="+tail.replace(/\n/g,"\\n"));}if(v.status==="running")lines.push("OPENBOT_BOT_INSTRUCTION="+(age>180000?"Send the log tail to the user and stop polling.":"Relay the current stage to the user; poll --bot-status --brief no more than once more after 30-60 seconds."));else if(v.status==="success")lines.push("OPENBOT_BOT_INSTRUCTION=Send OPENBOT_URL and attach OPENBOT_QR_PATH as an image using the installed SendToUser tool.");else lines.push("OPENBOT_BOT_INSTRUCTION=Tell the user the installation failed and include the log path "+logPath+".");lines.push("===== END OPENBOT BOT RESULT =====");console.log(lines.join("\n"));process.exit(0);}lines.splice(2,0,"OPENBOT_RESULT_FILE="+file);if(v.startedAt)lines.push("OPENBOT_STARTED_AT="+v.startedAt);if(v.finishedAt)lines.push("OPENBOT_FINISHED_AT="+v.finishedAt);if(v.progress?.summary)lines.push("OPENBOT_PROGRESS_SUMMARY="+v.progress.summary);if(v.commit)lines.push("OPENBOT_COMMIT="+v.commit);if(v.downloadSource)lines.push("OPENBOT_DOWNLOAD_SOURCE="+v.downloadSource);if(v.timings)for(const k of ["downloadMs","deployMs","restartMs","totalMs"])if(Number.isFinite(v.timings[k]))lines.push("OPENBOT_TIMING_"+k.replace(/Ms$/,"").toUpperCase()+"_MS="+v.timings[k]);if(age>180000)lines.push("OPENBOT_WARNING=Installation exceeded 3 minutes; include the log tail and stop polling. Check "+logPath+".");if(v.error)lines.push("OPENBOT_ERROR="+v.error);if(v.logTail)lines.push("OPENBOT_LOG_TAIL="+v.logTail.replace(/\n/g,"\\n"));if(v.status==="running")lines.push("OPENBOT_BOT_INSTRUCTION="+(age>180000?"Send the log tail to the user and stop polling.":"Run install.sh --bot-status --brief again in 30-60 seconds; relay OPENBOT_PROGRESS_STAGE and OPENBOT_PROGRESS_SUMMARY to the user before the next poll, with no extra verification."));if(v.status==="success")lines.push("OPENBOT_BOT_INSTRUCTION=OpenBot is installed (commit "+(v.commit||"unknown")+"). Send OPENBOT_URL="+(v.url||"")+" to the user and attach OPENBOT_QR_PATH="+(v.qrPath||"")+" as an image using the installed SendToUser tool; do not expose secrets.");if(v.status==="failed")lines.push("OPENBOT_BOT_INSTRUCTION=Tell the user the installation failed; summarize OPENBOT_ERROR and OPENBOT_LOG_TAIL, include the log path "+logPath+", and retry install.sh --bot-mode. Do not claim success.");lines.push("===== END OPENBOT BOT RESULT =====");console.log(lines.join("\n"));' "$BOT_RESULT_FILE"
+  BOT_LOG_FILE="$BOT_LOG_FILE" BOT_PENDING_BOUNCE_FILE="$DATA/openbot-pending-bounce.json" OPENBOT_BOT_STATUS_BRIEF="$brief" node -e 'const fs=require("fs");const file=process.argv[1];let v;try{v=JSON.parse(fs.readFileSync(file,"utf8"));}catch{console.log("===== OPENBOT BOT RESULT =====\nOPENBOT_STATUS=failed\nOPENBOT_ERROR=Result file is not valid JSON.\nOPENBOT_RESULT_FILE="+file+"\n===== END OPENBOT BOT RESULT =====");process.exit(0);}const age=v.status==="running"&&v.startedAt?Date.now()-Date.parse(v.startedAt):0;const logPath=process.env.BOT_LOG_FILE||"the install log";const brief=process.env.OPENBOT_BOT_STATUS_BRIEF==="1";const lines=["===== OPENBOT BOT RESULT =====","OPENBOT_STATUS="+(v.status||"failed")];if(v.progress?.stage)lines.push("OPENBOT_PROGRESS_STAGE="+v.progress.stage);if(v.url)lines.push("OPENBOT_URL="+v.url);if(v.qrPath)lines.push("OPENBOT_QR_PATH="+v.qrPath);const pb=process.env.BOT_PENDING_BOUNCE_FILE||"";let hb="";try{if(pb&&fs.statSync(pb).isFile())hb="pending";}catch{}if(!hb&&v.hostBounce)hb=v.hostBounce==="pending"?"done":v.hostBounce;if(hb)lines.push("OPENBOT_HOST_BOUNCE="+hb);if(brief){if(v.status==="running"&&age>180000){lines.push("OPENBOT_WARNING=Installation exceeded 3 minutes; stop polling.");lines.push("OPENBOT_LOG_FILE="+logPath);let tail=v.logTail;try{tail=tail||fs.readFileSync(logPath,"utf8").split(/\r?\n/).slice(-20).join("\n");}catch{}if(tail)lines.push("OPENBOT_LOG_TAIL="+tail.replace(/\n/g,"\\n"));}if(v.status==="running")lines.push("OPENBOT_BOT_INSTRUCTION="+(age>180000?"Send the log tail to the user and stop polling.":"Relay the current stage to the user; poll --bot-status --brief no more than once more after 30-60 seconds."));else if(v.status==="success")lines.push("OPENBOT_BOT_INSTRUCTION=Send OPENBOT_URL and attach OPENBOT_QR_PATH as an image using the installed SendToUser tool."+(hb==="pending"?" The Grok Bot host restarts itself once it is idle, after your turn; do not rerun the install for it.":""));else lines.push("OPENBOT_BOT_INSTRUCTION=Tell the user the installation failed and include the log path "+logPath+".");lines.push("===== END OPENBOT BOT RESULT =====");console.log(lines.join("\n"));process.exit(0);}lines.splice(2,0,"OPENBOT_RESULT_FILE="+file);if(v.startedAt)lines.push("OPENBOT_STARTED_AT="+v.startedAt);if(v.finishedAt)lines.push("OPENBOT_FINISHED_AT="+v.finishedAt);if(v.progress?.summary)lines.push("OPENBOT_PROGRESS_SUMMARY="+v.progress.summary);if(v.commit)lines.push("OPENBOT_COMMIT="+v.commit);if(v.downloadSource)lines.push("OPENBOT_DOWNLOAD_SOURCE="+v.downloadSource);if(v.timings)for(const k of ["downloadMs","deployMs","restartMs","totalMs"])if(Number.isFinite(v.timings[k]))lines.push("OPENBOT_TIMING_"+k.replace(/Ms$/,"").toUpperCase()+"_MS="+v.timings[k]);if(age>180000)lines.push("OPENBOT_WARNING=Installation exceeded 3 minutes; include the log tail and stop polling. Check "+logPath+".");if(v.error)lines.push("OPENBOT_ERROR="+v.error);if(v.logTail)lines.push("OPENBOT_LOG_TAIL="+v.logTail.replace(/\n/g,"\\n"));if(v.status==="running")lines.push("OPENBOT_BOT_INSTRUCTION="+(age>180000?"Send the log tail to the user and stop polling.":"Run install.sh --bot-status --brief again in 30-60 seconds; relay OPENBOT_PROGRESS_STAGE and OPENBOT_PROGRESS_SUMMARY to the user before the next poll, with no extra verification."+(hb==="pending"?" A deferred Grok Bot host restart is scheduled for after this turn; do not rerun the installer for it.":"")));if(v.status==="success")lines.push("OPENBOT_BOT_INSTRUCTION=OpenBot is installed (commit "+(v.commit||"unknown")+"). Send OPENBOT_URL="+(v.url||"")+" to the user and attach OPENBOT_QR_PATH="+(v.qrPath||"")+" as an image using the installed SendToUser tool; do not expose secrets."+(hb==="pending"?" The Grok Bot host is scheduled to restart itself once it is idle; that happens after your turn, so this report is not interrupted and the install must not be rerun.":""));if(v.status==="failed")lines.push("OPENBOT_BOT_INSTRUCTION=Tell the user the installation failed; summarize OPENBOT_ERROR and OPENBOT_LOG_TAIL, include the log path "+logPath+", and retry install.sh --bot-mode. Do not claim success.");lines.push("===== END OPENBOT BOT RESULT =====");console.log(lines.join("\n"));' "$BOT_RESULT_FILE"
+}
+# Applies an armed deferred host bounce (openbot-pending-bounce.json) once
+# the host is idle. Detached on purpose: the caller — the update worker or the
+# bot itself — must never wait for the host to exit, because that host is the
+# process running the caller's turn.
+bot_finalize_running() {
+  local file="$DATA/openbot-finalize.pid"
+  [[ -f "$file" ]] || return 1
+  local pid="$(tr -d '[:space:]' <"$file" 2>/dev/null || true)"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+spawn_finalize_host() {
+  local data="$1" host="$2" log="$3" cli="$4"
+  local pid_file="$data/openbot-finalize.pid"
+  [[ -f "$cli" ]] || return 0
+  local args=(--experimental-strip-types "$cli" finalize-host --host-main "$host" --sand-data "$data"
+    --wait-idle-ms "${OPENBOT_FINALIZE_IDLE_MS:-90000}"
+    --busy-wait-ms "${OPENBOT_FINALIZE_BUSY_MS:-300000}"
+    --max-wait-ms "${OPENBOT_FINALIZE_MAX_WAIT_MS:-1800000}")
+  if command -v setsid >/dev/null 2>&1; then
+    (setsid nohup node "${args[@]}" </dev/null >>"$log" 2>&1) &
+  else
+    (nohup node "${args[@]}" </dev/null >>"$log" 2>&1) &
+  fi
+  printf '%s\n' "$!" >"${pid_file}.tmp"
+  mv -f "${pid_file}.tmp" "$pid_file"
 }
 bot_worker_exit() {
   local code="$?"
@@ -67,6 +94,13 @@ bot_worker_exit() {
   if [[ "${BOT_WORKER_DONE:-0}" != "1" ]]; then
     BOT_TOTAL_MS="$(( $(bot_epoch_ms) - ${BOT_START_EPOCH_MS:-$(bot_epoch_ms)} ))"
     bot_write_result failed "${BOT_STARTED_AT:-$(bot_now)}" "$(bot_now)" '' '' "${BOT_FAILURE_ERROR:-OpenBot detached installation exited with code $code.}" "$(tail -n 20 "$BOT_LOG_FILE" 2>/dev/null || true)" || true
+  fi
+  # A failed update can still have rewritten the host file and armed the
+  # bounce before it failed. Apply it (detached) so the box is not stranded on
+  # the previous payload while files on disk say otherwise. The pidfile guards
+  # against a second finalizer, and this only runs when a marker exists.
+  if [[ -f "$DATA/openbot-pending-bounce.json" ]] && ! bot_finalize_running; then
+    spawn_finalize_host "$DATA" "$HOST" "$BOT_LOG_FILE" "$DEST/src/cli.ts"
   fi
   rm -f "$BOT_PID_FILE"
   exit "$code"
@@ -476,7 +510,36 @@ fi
 stop_old_guard_for_update || true
 stop_stale_hop_for_update || true
 
-node --experimental-strip-types src/cli.ts install --host-main "$HOST" --sand-data "$DATA"
+# Bot-mode is a self-upgrade: this worker was started by a bot turn that runs
+# inside the host process (host-main.cjs). A payload change rewrites the host
+# file, and the default path then SIGTERMs that host from inside the very turn
+# that asked for the upgrade, so the bot goes silent before it can report the
+# result. OPENBOT_DEFER_HOST_BOUNCE=1 makes reconcile arm a pending marker
+# instead; the finalizer spawned after a successful tunnel applies it once the
+# host is idle. A CLI-direct install (a human shell, not a host child) keeps
+# the immediate bounce and its previous output byte for byte.
+OPENBOT_HOST_BOUNCE="disabled"
+if [[ "$BOT_WORKER_MODE" == "1" ]]; then
+  BOT_RECONCILE_JSON="$DATA/openbot-reconcile.json"
+  if OPENBOT_DEFER_HOST_BOUNCE=1 node --experimental-strip-types src/cli.ts install \
+    --host-main "$HOST" --sand-data "$DATA" --json >"$BOT_RECONCILE_JSON"; then
+    OPENBOT_HOST_BOUNCE="$(node -e '
+      const fs = require("fs");
+      try {
+        const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        process.stdout.write(value && value.hostBounce === "deferred" ? "pending" : "disabled");
+      } catch (err) {
+        process.stdout.write("disabled");
+      }
+    ' "$BOT_RECONCILE_JSON")"
+  else
+    echo "OpenBot: reconcile failed during the detached update." >&2
+    exit 1
+  fi
+  export OPENBOT_HOST_BOUNCE
+else
+  node --experimental-strip-types src/cli.ts install --host-main "$HOST" --sand-data "$DATA"
+fi
 if [[ "$BOT_WORKER_MODE" == "1" ]]; then
   bot_mark_stage tunnel 'The host is ready; ensuring the tunnel stays available.'
 fi
@@ -500,7 +563,11 @@ if [[ "${1:-}" == "--bot-mode-worker" ]]; then
   BOT_TUNNEL_ERROR=""
   for BOT_ATTEMPT in 1 2 3; do
     bot_write_progress tunnel "Tunnel attempt ${BOT_ATTEMPT}/3."
-    if OPENBOT_TUNNEL=cloudflare node --experimental-strip-types src/cli.ts tunnel on --json >"$BOT_RESULT"; then
+    # --host-main/--sand-data are explicit like every other cli call in this
+    # file: the CLI defaults to /home/box/..., so a box installed anywhere
+    # else would have its tunnel reconcile refuse with host-missing.
+    if OPENBOT_TUNNEL=cloudflare node --experimental-strip-types src/cli.ts tunnel on --json \
+      --host-main "$HOST" --sand-data "$DATA" >"$BOT_RESULT"; then
       BOT_URL="$(node -e '
         const fs = require("fs");
         try {
@@ -524,6 +591,12 @@ if [[ "${1:-}" == "--bot-mode-worker" ]]; then
     echo "OpenBot bot-mode could not obtain a Cloudflare Tunnel URL after 3 attempts." >&2
     echo "${BOT_TUNNEL_ERROR:-Check $DATA/openbot-tunnel.log and retry with: openbot tunnel on}" >&2
     echo "The local control page may still be available at http://127.0.0.1:9280." >&2
+    # The host file was already rewritten and the bounce armed; a failed
+    # tunnel must not strand the box on the previous payload. The EXIT trap
+    # covers this too; doing it here keeps the log line next to the failure.
+    if [[ -f "$DATA/openbot-pending-bounce.json" ]] && ! bot_finalize_running; then
+      spawn_finalize_host "$DATA" "$HOST" "$BOT_LOG_FILE" "$DEST/src/cli.ts"
+    fi
     exit 1
   fi
 
@@ -531,20 +604,49 @@ if [[ "${1:-}" == "--bot-mode-worker" ]]; then
     rm -f "$BOT_RESULT"
     echo "OpenBot bot-mode obtained $BOT_URL but could not write QR PNG to $BOT_QR_PATH." >&2
     echo "Retry with OPENBOT_BOT_QR_PATH set to a writable path." >&2
+    if [[ -f "$DATA/openbot-pending-bounce.json" ]] && ! bot_finalize_running; then
+      spawn_finalize_host "$DATA" "$HOST" "$BOT_LOG_FILE" "$DEST/src/cli.ts"
+    fi
     exit 1
   fi
   rm -f "$BOT_RESULT"
   BOT_TOTAL_MS="$(( $(bot_epoch_ms) - ${BOT_START_EPOCH_MS:-$(bot_epoch_ms)} ))"
+  # The payload change rewrote the host file but deliberately did not SIGTERM
+  # the host: that host is running the bot turn that asked for this upgrade.
+  # Hand the bounce to a detached finalizer, which applies it once the host is
+  # idle. This runs before the success write so the result file records
+  # hostBounce=pending; the worker still returns immediately and the bot
+  # reports the URL/QR first.
+  if [[ -f "$DATA/openbot-pending-bounce.json" ]] && ! bot_finalize_running; then
+    spawn_finalize_host "$DATA" "$HOST" "$BOT_LOG_FILE" "$DEST/src/cli.ts"
+    export OPENBOT_HOST_BOUNCE=pending
+  fi
+
   BOT_PROGRESS_STAGE=qr BOT_PROGRESS_SUMMARY='Tunnel is ready; QR code generated.' bot_write_state success "$BOT_STARTED_AT" "$(bot_now)" "$BOT_URL" "$BOT_QR_PATH" "" "" qr 'Tunnel is ready; QR code generated.'
   BOT_WORKER_DONE=1
 
+  # Only promise a host restart when one is actually scheduled: with no wrap
+  # change (first install, official box, or an unchanged payload) the host file
+  # was not touched at all and saying otherwise would be wrong. "done" cannot
+  # come from this path (reconcile reports deferred or none here); it is kept
+  # for the same wording used by --bot-status.
+  BOT_BOUNCE_NOTE=""
+  case "${OPENBOT_HOST_BOUNCE:-disabled}" in
+    pending|done)
+      BOT_BOUNCE_NOTE=" The Grok Bot host restarts itself once it is idle; that restart is scheduled for after your turn, so your report is not interrupted and no rerun is needed."
+      ;;
+    *)
+      BOT_BOUNCE_NOTE=" This upgrade did not change the host file, so nothing restarts and no action is needed."
+      ;;
+  esac
   cat <<EOF
 
 ===== OPENBOT BOT RESULT =====
 OPENBOT_URL=$BOT_URL
 OPENBOT_QR_PATH=$BOT_QR_PATH
 OPENBOT_COMMIT=$COMMIT
-OPENBOT_BOT_INSTRUCTION=OpenBot is installed (commit $COMMIT). Send OPENBOT_URL=$BOT_URL to the user and attach OPENBOT_QR_PATH=$BOT_QR_PATH as an image using the installed SendToUser tool; do not expose secrets.
+OPENBOT_HOST_BOUNCE=${OPENBOT_HOST_BOUNCE:-disabled}
+OPENBOT_BOT_INSTRUCTION=OpenBot is installed (commit $COMMIT). Send OPENBOT_URL=$BOT_URL to the user and attach OPENBOT_QR_PATH=$BOT_QR_PATH as an image using the installed SendToUser tool; do not expose secrets.$BOT_BOUNCE_NOTE
 ===== END OPENBOT BOT RESULT =====
 EOF
 fi
@@ -552,6 +654,20 @@ fi
 }
 if [[ "${1:-}" == "--bot-status" ]]; then
   bot_print_status "$@"
+  exit 0
+fi
+if [[ "${1:-}" == "--bot-finalize" ]]; then
+  # Manual fallback for the deferred host bounce: ask for it now and return
+  # immediately. It is still gated on the host being idle, so a bot turn that
+  # calls this never kills itself.
+  if [[ ! -f "$DATA/openbot-pending-bounce.json" ]]; then
+    printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=not-installed' 'OPENBOT_HOST_BOUNCE=disabled' 'OPENBOT_BOT_INSTRUCTION=No deferred Grok Bot host restart is pending; nothing to do.' '===== END OPENBOT BOT RESULT ====='
+    exit 0
+  fi
+  if ! bot_finalize_running; then
+    spawn_finalize_host "$DATA" "$HOST" "$BOT_LOG_FILE" "$DEST/src/cli.ts"
+  fi
+  printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=started' 'OPENBOT_HOST_BOUNCE=pending' 'OPENBOT_BOT_INSTRUCTION=The Grok Bot host will restart once it is idle; this command returns immediately and must not be waited on. Report any installed URL and QR to the user now.' '===== END OPENBOT BOT RESULT ====='
   exit 0
 fi
 if [[ "${1:-}" == "--bot-mode" ]]; then
@@ -569,7 +685,7 @@ if [[ "${1:-}" == "--bot-mode" ]]; then
   # variables (HOST, DATA, ...) that install_main reads, the bot_* helper
   # functions, and BOT_WORKER_DONE=1 semantics inside bot_worker_exit.
   export HOST DATA DEST DEFAULT_TARBALL REPO_TARBALL DEFAULT_ARCHIVE_TARBALL ARCHIVE_TARBALL NODE_DIST NODE_VERSION
-  export -f bot_now bot_epoch_ms bot_write_state bot_write_running_result bot_write_result bot_write_progress bot_mark_stage bot_pid_running bot_print_status bot_worker_exit install_main
+  export -f bot_now bot_epoch_ms bot_write_state bot_write_running_result bot_write_result bot_write_progress bot_mark_stage bot_pid_running bot_print_status bot_worker_exit bot_finalize_running spawn_finalize_host install_main
   (setsid nohup bash -euo pipefail -c 'trap bot_worker_exit EXIT; BOT_WORKER_DONE=0; install_main --bot-mode-worker' </dev/null >>"$BOT_LOG_FILE" 2>&1) &
   printf '%s\n' "$!" >"${BOT_PID_FILE}.tmp"
   mv -f "${BOT_PID_FILE}.tmp" "$BOT_PID_FILE"

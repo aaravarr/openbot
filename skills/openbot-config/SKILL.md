@@ -27,6 +27,8 @@ New provider setup is curated to four choices, in order: OpenAI (API key or Open
 
 Apply this skill when the user wants to configure OpenBot: set up a provider, switch models or thinking, add or rotate a key, go official or custom, turn the tunnel on/off, pause or resume the gateway, change log settings, or edit `/home/box/sand-data` files (`openbot-plan.json`, `secrets.json`, `openbot-logs.json`, `openbot-pause.json`, `openbot-mode`, `openbot-expose`). Also when diagnosing an unexpected flip to official or custom: read `openbot-audit.jsonl`.
 
+Uninstall: run `uninstall.sh` (or `uninstall.sh --bot-mode` from a Bot turn); its stdout carries bot-facing instructions.
+
 ## JSON vs API save vs CLI
 
 | Change | Path | Takes effect |

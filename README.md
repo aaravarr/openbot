@@ -40,6 +40,15 @@ The script usually finishes in about 15-60 seconds. Bots should reply immediatel
 
 </details>
 
+## Uninstall
+
+<details>
+<summary>Remove OpenBot</summary>
+
+On the Grok Bot Computer, run `curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/uninstall.sh | bash -s -- --bot-mode` from a Bot turn, or run the same script without `--bot-mode` for interactive confirmation. Provider secrets are retained by default; add `--purge-secrets` to remove them.
+
+</details>
+
 Run the command **in the Computer terminal**, not on your Mac. Grok Bot routes chat on the Computer. A proxy on your laptop never sees a turn.
 
 Needs Node 22 or newer. If the box only has Node 20, the installer puts Node 22 in `sand-data` and leaves system Node alone.

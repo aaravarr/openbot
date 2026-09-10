@@ -9,6 +9,7 @@ Default files under `/home/box/sand-data` (override with `OPENBOT_SAND_DATA`; in
 - `openbot-install-result.json`: atomically replaced JSON with `status` (`running`, `success`, or `failed`), `startedAt`, and optional `finishedAt`, `url`, `qrPath`, `error`, and `logTail`. While running, `progress` is `{stage, summary, updatedAt}` where stage is `starting`, `downloading`, `deploying`, `restarting`, `tunnel`, or `qr`. `timings` always contains `downloadMs`, `deployMs`, `restartMs`, and `totalMs`.
 - `openbot-install.log`: detached worker stdout/stderr.
 - `openbot-install.pid`: worker pid, removed on worker exit.
+- `openbot-uninstall-result.json`, `openbot-uninstall.log`, `openbot-uninstall.pid`: detached uninstall result, worker log, and worker pid.
 
 
 ## Architecture

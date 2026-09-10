@@ -42,6 +42,15 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 </details>
 
+## 卸载
+
+<details>
+<summary>移除 OpenBot</summary>
+
+在 Grok Bot 的 Computer 上，Bot 回合中运行 `curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/uninstall.sh | bash -s -- --bot-mode`；也可以去掉 `--bot-mode`，使用交互式确认。Provider secrets 默认保留；加上 `--purge-secrets` 才会删除。
+
+</details>
+
 
 在 **Computer 终端**里运行，不要在 Mac 上运行。Grok Bot 的聊天走 Computer；笔记本上的代理收不到回合。
 

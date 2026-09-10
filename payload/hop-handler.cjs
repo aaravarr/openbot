@@ -457,6 +457,11 @@ function loadStoredSecret(providerId) {
   return providers[providerId];
 }
 
+function resolveUpstreamUrl(provider, isOpenAIOAuth, apiType) {
+  if (isOpenAIOAuth) return "https://chatgpt.com/backend-api/codex/responses";
+  return upstreamUrl(provider && provider.origin, apiType);
+}
+
 function openAIOAuthAccountId(credential) {
   if (!isRecord(credential)) return "";
   if (typeof credential.chatgptAccountId === "string" && credential.chatgptAccountId.trim()) return credential.chatgptAccountId.trim();
@@ -1388,9 +1393,7 @@ async function handleCompletions(req, res) {
       sendJson(res, 503, noSecret);
       return;
     }
-    var upstream = isOpenAIOAuth
-      ? "https://chatgpt.com/backend-api/codex/responses"
-      : upstreamUrl(route.provider.origin, apiType);
+    var upstream = resolveUpstreamUrl(route.provider, isOpenAIOAuth, apiType);
     fields.upstreamEndpoint = upstream;
     var out;
     if (body.stream === true) {
@@ -1489,6 +1492,7 @@ exports.loadKey = loadKey;
 exports.noteFirstContent = noteFirstContent;
 exports.lookupRoute = lookupRoute;
 exports.completionsUrl = completionsUrl;
+exports.resolveUpstreamUrl = resolveUpstreamUrl;
 exports.hopParameters = hopParameters;
 exports.hopReasoning = hopReasoning;
 exports.applyMaxTokens = applyMaxTokens;

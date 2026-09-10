@@ -9,11 +9,16 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
 const hopPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../payload/hop-handler.cjs");
-const hop = createRequire(import.meta.url)(hopPath) as { loadKey: (providerId: string, provider: unknown) => Promise<string> };
+const hop = createRequire(import.meta.url)(hopPath) as { loadKey: (providerId: string, provider: unknown) => Promise<string>; resolveUpstreamUrl: (provider: { origin: string }, oauth: boolean, apiType: string) => string };
 
 function expiredCredential(): string {
   return JSON.stringify({ kind: "openai-oauth", accessToken: "old-access", refreshToken: "refresh", expiresAt: 1 });
 }
+
+test("OpenAI OAuth resolves to the ChatGPT Codex Responses upstream", () => {
+  assert.equal(hop.resolveUpstreamUrl({ origin: "https://api.openai.com/v1" }, true, "responses"), "https://chatgpt.com/backend-api/codex/responses");
+  assert.equal(hop.resolveUpstreamUrl({ origin: "https://api.openai.com/v1" }, false, "chat-completions"), "https://api.openai.com/v1/chat/completions");
+});
 
 function installRefreshStub(t: test.TestContext, body: object): { calls: () => number } {
   let calls = 0;

@@ -32,7 +32,13 @@ export type ReconcileError =
   | { readonly kind: "listen-failed"; readonly port: number };
 
 export type ReconcileResult =
-  | { readonly kind: "ok"; readonly snapshot: Snapshot; readonly wrapBytesChanged: boolean }
+  | {
+      readonly kind: "ok";
+      readonly snapshot: Snapshot;
+      readonly wrapBytesChanged: boolean;
+      /** What happened to the stale host: bounced now, armed for later, or not needed. */
+      readonly hostBounce: HostBounce;
+    }
   | { readonly kind: "refused"; readonly error: ReconcileError };
 
 export type ReconcileOpts = {
@@ -40,6 +46,13 @@ export type ReconcileOpts = {
   readonly reloadService?: boolean;
   /** Who asked for this reconcile; recorded on every audit line. */
   readonly source?: string;
+  /**
+   * Never SIGTERM the host inside this call. The caller is a bot turn running
+   * inside host-main.cjs, so an immediate bounce kills the turn that started
+   * the upgrade. A wrap change is written to disk as usual and a pending
+   * marker is armed instead; `finalize-host` applies it once the host is idle.
+   */
+  readonly deferHostBounce?: boolean;
 };
 
 export type SharedEnv = {
@@ -136,6 +149,361 @@ function writeMode(deps: SupervisorDeps, kind: "official" | "custom", opts: Reco
   appendAudit(deps, opts, "mode", from, kind);
 }
 
+/** Outcome of the host-bounce half of a reconcile. */
+export type HostBounce = "none" | "done" | "deferred";
+
+/**
+ * Quiet windows for the deferred bounce, measured from the last hop activity.
+ * `stop` is a model that finished its answer, so the turn is almost certainly
+ * over; anything else (tool_calls, no answer yet) may still have a shell tool
+ * running and waits much longer.
+ */
+export const DEFERRED_BOUNCE_STOP_QUIET_MS = 90_000;
+export const DEFERRED_BOUNCE_BUSY_QUIET_MS = 300_000;
+/**
+ * Nothing may be applied while the marker is younger than this, however
+ * healthy the lease looks. The install that arms the marker is writing its
+ * result and the first guard tick runs right after the service restart, so a
+ * freshly armed marker is never "idle" no matter what the lease says.
+ */
+export const DEFERRED_BOUNCE_GRACE_MS = 120_000;
+/** Hard upper bound on how long an armed bounce may stay pending. */
+export const DEFERRED_BOUNCE_MAX_WAIT_MS = 600_000;
+/** An `active` count quieter than this is a leak (killed hop, dropped client). */
+export const DEFERRED_BOUNCE_STALE_ACTIVE_MS = 900_000;
+
+/** Marker written when a payload upgrade defers the host bounce. */
+export type PendingHostBounce = {
+  readonly armedAt: string;
+  readonly armedAtMs: number;
+  /** Payload fingerprint the host file was rewritten with. */
+  readonly fingerprint: string;
+  /** Host pids seen when the bounce was armed (informational; re-checked on apply). */
+  readonly hostPids: readonly number[];
+  readonly source: string;
+};
+
+/** Idle oracle written by the hop process on every request boundary. */
+export type TurnLease = {
+  readonly active: number;
+  readonly lastStartAt: number;
+  readonly lastEndAt: number;
+  readonly lastFinishReason: string | undefined;
+  /** Latest of start/end/updated: the quiet window is measured from here. */
+  readonly updatedAt: number;
+};
+
+export type DeferredBounceTuning = {
+  /** Injected clock for tests. */
+  readonly nowMs?: number;
+  readonly stopQuietMs?: number;
+  readonly busyQuietMs?: number;
+  readonly maxWaitMs?: number;
+  readonly graceMs?: number;
+  readonly staleActiveMs?: number;
+  /** Skip the quiet gate. Never skips the grace window or an in-flight request. */
+  readonly force?: boolean;
+};
+
+/** Why an armed bounce was left alone; every one of these is a no-kill path. */
+export type DeferredBounceHoldReason = "grace" | "no-lease" | "turn-active" | "quiet-window";
+
+export type DeferredBounceOutcome =
+  | { readonly kind: "applied"; readonly pids: readonly number[]; readonly forced: boolean }
+  | { readonly kind: "idle-pending"; readonly reason: DeferredBounceHoldReason }
+  | {
+      readonly kind: "skipped";
+      readonly reason: "no-marker" | "corrupt-marker" | "stamp-changed" | "host-absent" | "already-restarted";
+    };
+
+function numberOrZero(raw: unknown): number {
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
+}
+
+/** True when a pending marker exists on disk (even a corrupt one). */
+export function pendingHostBounce(deps: SupervisorDeps): boolean {
+  return deps.fs.read(deps.paths.pendingBounce) !== undefined;
+}
+
+function parsePendingBounce(raw: string): PendingHostBounce | undefined {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const fingerprint = parsed.fingerprint;
+    if (typeof fingerprint !== "string" || fingerprint === "") {
+      return undefined;
+    }
+    const parsedAt = typeof parsed.armedAt === "string" ? Date.parse(parsed.armedAt) : Number.NaN;
+    const armedAtMs = Number.isFinite(numberOrZero(parsed.armedAtMs))
+      ? numberOrZero(parsed.armedAtMs) || parsedAt
+      : parsedAt;
+    if (!Number.isFinite(armedAtMs)) {
+      return undefined;
+    }
+    const hostPids = Array.isArray(parsed.hostPids)
+      ? parsed.hostPids.filter((pid): pid is number => Number.isInteger(pid))
+      : [];
+    return {
+      armedAt: new Date(armedAtMs).toISOString(),
+      armedAtMs,
+      fingerprint,
+      hostPids,
+      source: typeof parsed.source === "string" ? parsed.source : "unknown",
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function readPendingBounce(deps: SupervisorDeps): PendingHostBounce | undefined {
+  const raw = deps.fs.read(deps.paths.pendingBounce);
+  return raw === undefined ? undefined : parsePendingBounce(raw);
+}
+
+/** Corrupt lease = no lease: the caller falls back to the conservative window. */
+export function readTurnLease(deps: SupervisorDeps): TurnLease | undefined {
+  const raw = deps.fs.read(deps.paths.turnLease);
+  if (raw === undefined) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      // Valid JSON that is not a lease object is still "no lease".
+      return undefined;
+    }
+    const row = parsed as Record<string, unknown>;
+    const lastStartAt = numberOrZero(row.lastStartAt);
+    const lastEndAt = numberOrZero(row.lastEndAt);
+    return {
+      active: Math.max(0, Math.trunc(numberOrZero(row.active))),
+      lastStartAt,
+      lastEndAt,
+      lastFinishReason: typeof row.lastFinishReason === "string" ? row.lastFinishReason : undefined,
+      updatedAt: Math.max(numberOrZero(row.updatedAt), lastStartAt, lastEndAt),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The upgrade must not end the caller's turn: SIGTERM the host only when no
+ * hop request is in flight and the last one has been quiet long enough. With
+ * no lease at all (official mode never hops) the marker's own age is the only
+ * evidence, so the conservative window applies.
+ */
+export function deferredBounceIdle(input: {
+  readonly lease: TurnLease | undefined;
+  readonly nowMs: number;
+  readonly armedAtMs: number;
+  readonly stopQuietMs?: number;
+  readonly busyQuietMs?: number;
+  readonly graceMs?: number;
+  readonly staleActiveMs?: number;
+}): boolean {
+  return deferredBounceHold(input) === undefined;
+}
+
+/**
+ * Why (or whether) the bounce must wait. `undefined` means "apply now".
+ *
+ * Order matters and each gate is a hard stop:
+ * 1. grace: the marker itself must be old enough — the first guard tick after
+ *    the install that armed it must never apply.
+ * 2. an in-flight hop request, unless the lease is so old that it is a leak.
+ * 3. a lease must exist at all. The box that upgrades from a release without
+ *    lease support has no file until its new UI starts, and "no evidence of
+ *    idleness" is not evidence of idleness.
+ * 4. the quiet window, measured from max(last activity, armed at), so a quiet
+ *    lease from before the marker was armed cannot shorten the wait.
+ *
+ * `stop` (a model that finished its answer) is the only reason that uses the
+ * short window; a tool call still running keeps the long one.
+ */
+export function deferredBounceHold(input: {
+  readonly lease: TurnLease | undefined;
+  readonly nowMs: number;
+  readonly armedAtMs: number;
+  readonly stopQuietMs?: number;
+  readonly busyQuietMs?: number;
+  readonly graceMs?: number;
+  readonly staleActiveMs?: number;
+}): DeferredBounceHoldReason | undefined {
+  const graceMs = input.graceMs ?? DEFERRED_BOUNCE_GRACE_MS;
+  if (!(input.nowMs - input.armedAtMs >= graceMs)) {
+    return "grace";
+  }
+  const lease = input.lease;
+  const busyQuietMs0 = input.busyQuietMs ?? DEFERRED_BOUNCE_BUSY_QUIET_MS;
+  if (lease === undefined) {
+    // No lease at all means "no evidence of an idle host", never "idle": the
+    // quiet window is measured from the marker instead, so the bounce stays
+    // deferred but cannot be stranded forever on a box whose lease was never
+    // written (a UI that failed to restart, a hand-edited sand-data dir).
+    return input.nowMs - input.armedAtMs >= busyQuietMs0 ? undefined : "no-lease";
+  }
+  const staleActiveMs = input.staleActiveMs ?? DEFERRED_BOUNCE_STALE_ACTIVE_MS;
+  if (lease.active > 0 && input.nowMs - Math.max(lease.lastStartAt, lease.updatedAt) < staleActiveMs) {
+    return "turn-active";
+  }
+  const busyQuietMs = input.busyQuietMs ?? DEFERRED_BOUNCE_BUSY_QUIET_MS;
+  const quietMs = lease.lastFinishReason === "stop" ? input.stopQuietMs ?? DEFERRED_BOUNCE_STOP_QUIET_MS : busyQuietMs;
+  // The clock starts at the later of the last hop activity and the marker:
+  // a lease file that predates the upgrade never shortens the wait.
+  if (input.nowMs - Math.max(lease.updatedAt, input.armedAtMs) < quietMs) {
+    return "quiet-window";
+  }
+  return undefined;
+}
+
+/**
+ * Record that the host file changed but the running host must not be killed
+ * yet. Re-arming keeps the first `armedAt` so `maxWaitMs` stays a real bound
+ * across repeated installs; the fingerprint and targets are refreshed.
+ */
+export function armDeferredHostBounce(
+  deps: SupervisorDeps,
+  opts: ReconcileOpts,
+  fingerprint: string,
+): PendingHostBounce {
+  const existing = readPendingBounce(deps);
+  const nowMs = Date.now();
+  // armedAt only ever moves forward: refreshing it on every re-arm would reset
+  // the max-wait bound, so an install loop would never converge. The grace and
+  // quiet windows then also measure from the oldest arm, which is the
+  // conservative direction (later bounce).
+  const armedAtMs = Math.min(existing?.armedAtMs ?? nowMs, nowMs);
+  const marker: PendingHostBounce = {
+    armedAt: new Date(armedAtMs).toISOString(),
+    armedAtMs,
+    fingerprint,
+    hostPids: deps.procs.hostPids(deps.paths.hostMain),
+    source: opts.source ?? "unknown",
+  };
+  deps.fs.write(deps.paths.pendingBounce, `${JSON.stringify(marker, null, 2)}\n`, 0o644);
+  return marker;
+}
+
+/**
+ * Compare-and-clear: only drop the marker we actually read. A concurrent
+ * finalizer that already replaced or consumed it keeps its own copy.
+ */
+function clearPendingBounce(deps: SupervisorDeps, seen: string | undefined): void {
+  if (seen !== undefined && deps.fs.read(deps.paths.pendingBounce) !== seen) {
+    return;
+  }
+  deps.fs.remove(deps.paths.pendingBounce);
+}
+
+/** A live finalizer owns the marker; the guard tick leaves it alone. */
+export function finalizeHostRunning(deps: SupervisorDeps): boolean {
+  const pid = deps.procs.readPidFile(deps.paths.finalizePid);
+  return pid !== undefined && deps.procs.pidAlive(pid);
+}
+
+/** Start time of a recorded pid, when the platform can report it. */
+function pidStartMs(deps: SupervisorDeps, pid: number): number | undefined {
+  return deps.procs.pidStartMs?.(parseOwnedPid(pid));
+}
+
+/**
+ * A host process that started after the marker was armed is already running
+ * the new payload (the box rebooted, or the supervisor relaunched the host).
+ * Killing it would bounce a healthy host for nothing, so the marker is retired
+ * instead. Undefined start time means "cannot tell" and the argv check rules.
+ */
+function pidPredatesMarker(deps: SupervisorDeps, pid: number, armedAtMs: number): boolean {
+  const start = pidStartMs(deps, pid);
+  return start === undefined || start <= armedAtMs + 5_000;
+}
+
+function pidStillTheHost(deps: SupervisorDeps, pid: number): boolean {
+  const owned = parseOwnedPid(pid);
+  if (deps.procs.hostPidMatches !== undefined) {
+    return deps.procs.hostPidMatches(owned, deps.paths.hostMain);
+  }
+  // Without a direct argv probe the enumeration itself is the argv check.
+  return deps.procs.hostPids(deps.paths.hostMain).includes(owned);
+}
+
+/**
+ * Apply an armed deferred bounce when the host is idle, then clear the marker.
+ * Idempotent: the marker is the single source of truth, so a second call (or a
+ * second finalizer) is a no-op. The stamp is re-checked first, so a later
+ * reconcile that already rewrote the wrap (mode switch, another payload)
+ * abandons the stale marker instead of bouncing a host it no longer knows.
+ */
+export function applyDeferredHostBounce(
+  deps: SupervisorDeps,
+  opts: ReconcileOpts = {},
+  tuning: DeferredBounceTuning = {},
+): DeferredBounceOutcome {
+  const raw = deps.fs.read(deps.paths.pendingBounce);
+  if (raw === undefined) {
+    return { kind: "skipped", reason: "no-marker" };
+  }
+  // An unreadable marker is retired loudly instead of being re-read forever:
+  // a silent exit here is what leaves a stale host running with a new payload.
+  const marker = parsePendingBounce(raw);
+  if (marker === undefined) {
+    clearPendingBounce(deps, raw);
+    appendAudit(deps, opts, "wrap", "bounce:deferred", "bounce:corrupt");
+    return { kind: "skipped", reason: "corrupt-marker" };
+  }
+  if (marker.fingerprint !== currentPayloadFingerprint(deps)) {
+    clearPendingBounce(deps, raw);
+    appendAudit(deps, opts, "wrap", "bounce:deferred", "bounce:stale");
+    return { kind: "skipped", reason: "stamp-changed" };
+  }
+  const nowMs = tuning.nowMs ?? Date.now();
+  const lease = readTurnLease(deps);
+  const maxWaitMs = tuning.maxWaitMs ?? DEFERRED_BOUNCE_MAX_WAIT_MS;
+  // Max wait forces past the quiet window only. It never skips the grace
+  // window and never kills a request that is in flight: a mid-turn SIGTERM is
+  // the exact failure this marker exists to avoid, and the upstream timeout
+  // bounds how long one request can sit in the lease.
+  const forced = tuning.force === true || nowMs - marker.armedAtMs >= maxWaitMs;
+  const hold = deferredBounceHold({
+    lease,
+    nowMs,
+    armedAtMs: marker.armedAtMs,
+    ...(tuning.stopQuietMs !== undefined ? { stopQuietMs: tuning.stopQuietMs } : {}),
+    ...(tuning.busyQuietMs !== undefined ? { busyQuietMs: tuning.busyQuietMs } : {}),
+    ...(tuning.graceMs !== undefined ? { graceMs: tuning.graceMs } : {}),
+    ...(tuning.staleActiveMs !== undefined ? { staleActiveMs: tuning.staleActiveMs } : {}),
+  });
+  // Forcing past the wait is allowed to expire the quiet window and the
+  // no-lease fallback. It is never allowed to skip the grace period or to end
+  // a request that is still in flight (X4): those two are the failure modes
+  // this whole marker exists to prevent.
+  if (hold !== undefined && !(forced && (hold === "quiet-window" || hold === "no-lease"))) {
+    return { kind: "idle-pending", reason: hold };
+  }
+  // Targets come from the marker only. Re-enumerating host pids would kill the
+  // replacement the supervisor starts right after the first SIGTERM, once per
+  // tick; a marker that no longer names a live host is retired instead.
+  // Re-proving argv keeps a recycled pid from being signalled.
+  const targets = marker.hostPids.filter(
+    (pid) => pidPredatesMarker(deps, pid, marker.armedAtMs) && pidStillTheHost(deps, pid),
+  );
+  if (targets.length === 0) {
+    const restarted = marker.hostPids.some((pid) => !pidPredatesMarker(deps, pid, marker.armedAtMs));
+    clearPendingBounce(deps, raw);
+    appendAudit(deps, opts, "wrap", "bounce:deferred", restarted ? "bounce:already-restarted" : "bounce:absent");
+    return { kind: "skipped", reason: restarted ? "already-restarted" : "host-absent" };
+  }
+  for (const pid of targets) {
+    try {
+      deps.procs.term(parseOwnedPid(pid));
+    } catch {
+      /* raced with a relaunch or an earlier term: already gone */
+    }
+  }
+  clearPendingBounce(deps, raw);
+  appendAudit(deps, opts, "wrap", forced ? "bounce:deferred+max-wait" : "bounce:deferred", "bounce:done");
+  return { kind: "applied", pids: targets, forced };
+}
+
 async function bounceHostIfNeeded(deps: SupervisorDeps, wrapBytesChanged: boolean): Promise<void> {
   if (!wrapBytesChanged) {
     return;
@@ -211,6 +579,26 @@ function startService(deps: SupervisorDeps): void {
     log: deps.paths.uiLog,
     pidFile: deps.paths.uiPid,
   });
+}
+
+/**
+ * A refused ensureService returns before finishOk, after the host file has
+ * already been rewritten. Without the marker the next reconcile sees no wrap
+ * change and the stale host runs forever on the old payload, so the arm
+ * happens here too. Only the deferred path changes: the immediate path keeps
+ * its long-standing "no bounce on refusal" behaviour.
+ */
+function refusalKeepingTheWrapChange(
+  deps: SupervisorDeps,
+  opts: ReconcileOpts,
+  wrapBytesChanged: boolean,
+  payloadFp: string,
+  refusal: ReconcileResult,
+): ReconcileResult {
+  if (wrapBytesChanged && (opts.deferHostBounce === true || pendingHostBounce(deps))) {
+    armDeferredHostBounce(deps, opts, payloadFp);
+  }
+  return refusal;
 }
 
 async function ensureService(
@@ -374,6 +762,8 @@ async function finishOk(
   deps: SupervisorDeps,
   desired: DesiredState,
   wrapBytesChanged: boolean,
+  opts: ReconcileOpts,
+  payloadFp: string,
 ): Promise<ReconcileResult> {
   // Official must never leave the custom guard patrol running: with a
   // non-empty catalog on disk the guard treats official mode as drift and
@@ -384,13 +774,31 @@ async function finishOk(
   if (desired.kind === "official" || wrapBytesChanged) {
     stopStaleGuardForUpdate(deps);
   }
-  await bounceHostIfNeeded(deps, wrapBytesChanged);
+  // A wrap change normally bounces the stale host here. A bot self-upgrade
+  // passes deferHostBounce: the caller is a bot turn living inside that very
+  // host, so the file is rewritten and a pending marker is armed instead; the
+  // detached finalizer (or the guard tick) applies the SIGTERM once idle.
+  let hostBounce: HostBounce = "none";
+  if (wrapBytesChanged) {
+    // An armed marker means a bounce is already scheduled for later. Every
+    // other reconcile caller (guard repair, UI save, tunnel on/off) must not
+    // jump the queue and SIGTERM a host that may be mid-turn: the pending
+    // bounce is refreshed instead and applied once idle.
+    if (opts.deferHostBounce === true || pendingHostBounce(deps)) {
+      armDeferredHostBounce(deps, opts, payloadFp);
+      hostBounce = "deferred";
+    } else {
+      await bounceHostIfNeeded(deps, true);
+      hostBounce = "done";
+    }
+  }
   const tunnel = await reconcileExpose(desired.expose, deps);
   const snapshot = await observe(deps);
   return {
     kind: "ok",
     snapshot: { ...snapshot, tunnel },
     wrapBytesChanged,
+    hostBounce,
   };
 }
 
@@ -456,9 +864,9 @@ export async function reconcile(
     }
     const service = await ensureService(deps, before.uiListen.kind, opts);
     if (service) {
-      return service;
+      return refusalKeepingTheWrapChange(deps, opts, wrapBytesChanged, payloadFp, service);
     }
-    return finishOk(deps, desired, wrapBytesChanged);
+    return finishOk(deps, desired, wrapBytesChanged, opts, payloadFp);
   }
 
   const census = censusHost(source);
@@ -481,7 +889,7 @@ export async function reconcile(
 
   const service = await ensureService(deps, before.uiListen.kind, opts);
   if (service) {
-    return service;
+    return refusalKeepingTheWrapChange(deps, opts, wrapBytesChanged, payloadFp, service);
   }
-  return finishOk(deps, desired, wrapBytesChanged);
+  return finishOk(deps, desired, wrapBytesChanged, opts, payloadFp);
 }

@@ -110,6 +110,10 @@ const require = createRequire(import.meta.url);
 const hop = require("../../payload/hop-handler.cjs") as {
   handleHopRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<boolean>;
 };
+const turnLease = require("../../payload/turn-lease.cjs") as {
+  touch: () => void;
+  snapshot: () => unknown;
+};
 const requestLog = require("../../payload/request-log.cjs") as {
   loadSettings: () => LogSettings;
   saveSettings: (input: unknown) => LogSettings;
@@ -1018,6 +1022,14 @@ function startServer(): void {
     const box = paths();
     fs.mkdirSync(box.sandData, { recursive: true });
     fs.writeFileSync(box.uiPid, `${String(process.pid)}\n`);
+    // A fresh service writes a turn lease immediately: from this moment a
+    // deferred host bounce has a real idle oracle instead of "no evidence".
+    // Best-effort — the lease must never keep the control page from serving.
+    try {
+      turnLease.touch();
+    } catch {
+      /* the lease is best-effort */
+    }
     // Non-blocking: load the public catalog cache from disk, then re-fetch in the background.
     void modelCatalog().start();
     process.stdout.write(`openbot listening on http://${host}:${String(port)}\n`);

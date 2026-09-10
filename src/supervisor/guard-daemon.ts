@@ -1,7 +1,7 @@
 import { guardCustom, type GuardResult } from "./guard.ts";
 import { type SupervisorDeps } from "./observe.ts";
 import { parseOwnedPid } from "./procs.ts";
-import { appendGuardAudit } from "./reconcile.ts";
+import { appendGuardAudit, applyDeferredHostBounce, finalizeHostRunning, pendingHostBounce } from "./reconcile.ts";
 import { DEFAULT_HOP_FAILURE_THRESHOLD, runHopHealthCheck } from "./hop-health.ts";
 
 /**
@@ -159,6 +159,23 @@ export async function runGuardTickWithHopHealth(
       const message = err instanceof Error ? err.message : String(err);
       io.stderr(`openbot-guard: hop health failed: ${message}`);
       hopStatus = "error";
+    }
+  }
+  // Fallback for an armed deferred host bounce. The detached finalizer is the
+  // normal applier; it can be missing when the box rebooted, the worker was
+  // killed, or the spawn failed. One attempt per tick is enough: the applier is
+  // idempotent and only fires once the host is idle.
+  if (pendingHostBounce(deps) && !finalizeHostRunning(deps)) {
+    try {
+      const applied = applyDeferredHostBounce(deps, { source: GUARD_DAEMON_SOURCE });
+      if (applied.kind === "applied") {
+        io.stderr(`openbot-guard: applied a deferred host bounce (pid ${applied.pids.join(", ")})`);
+      } else if (applied.kind === "skipped" && applied.reason !== "no-marker") {
+        io.stderr(`openbot-guard: dropped a deferred host bounce (${applied.reason})`);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      io.stderr(`openbot-guard: deferred host bounce failed: ${message}`);
     }
   }
   appendGuardLogLine(deps, { ...result, hopStatus, hopFailures });

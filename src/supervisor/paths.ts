@@ -35,6 +35,11 @@ export type BoxPaths = {
   readonly guardLog: AbsPath;
   readonly pause: AbsPath;
   readonly pauseBots: AbsPath;
+  /** Marker written when a payload upgrade defers the host bounce. */
+  readonly pendingBounce: AbsPath;
+  /** Hop-side turn lease used as the idle oracle for that deferred bounce. */
+  readonly turnLease: AbsPath;
+  readonly finalizePid: AbsPath;
 };
 
 export function parseAbsPath(raw: string): AbsPath {
@@ -88,6 +93,9 @@ export function boxPathsFrom(input: {
     guardLog: joinAbs(sandData, "openbot-guard.log"),
     pause: joinAbs(sandData, "openbot-pause.json"),
     pauseBots: joinAbs(sandData, "openbot-pause-bots.json"),
+    pendingBounce: joinAbs(sandData, "openbot-pending-bounce.json"),
+    turnLease: joinAbs(sandData, "openbot-turn-lease.json"),
+    finalizePid: joinAbs(sandData, "openbot-finalize.pid"),
   };
 }
 

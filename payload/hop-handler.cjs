@@ -15,6 +15,7 @@ var {
 } = require("./image-read.cjs");
 var { applyOpenBotVersionHeader } = require("./version.cjs");
 var requestLog = require("./request-log.cjs");
+var turnLease = require("./turn-lease.cjs");
 var botModels = require("./bot-models.cjs");
 var protocolConverters = require("./protocol-converters.cjs");
 
@@ -1202,7 +1203,35 @@ function errorMessageWithRetries(err, fallback) {
   return base;
 }
 
+/**
+ * Last OpenAI finish_reason in a hop response, or undefined when the response
+ * is not OpenAI-shaped (protocol-converted providers) or carries none. The
+ * value only steers the deferred-bounce quiet window; unknown stays
+ * conservative, so a miss is harmless.
+ */
+function finishReasonFromRaw(raw) {
+  if (!raw) return undefined;
+  var text = Buffer.isBuffer(raw) ? raw.toString("utf8") : String(raw);
+  var match;
+  var found;
+  var re = /"finish_reason"\s*:\s*"([a-zA-Z_]+)"/g;
+  while ((match = re.exec(text)) !== null) {
+    found = match[1];
+  }
+  return found;
+}
+
 async function handleCompletions(req, res) {
+  turnLease.beginTurn();
+  var finishReason;
+  try {
+    finishReason = await handleCompletionsInner(req, res);
+  } finally {
+    turnLease.endTurn(finishReason);
+  }
+}
+
+async function handleCompletionsInner(req, res) {
   var startedMs = Date.now();
   var startedAt = new Date().toISOString();
   var fields = {
@@ -1409,6 +1438,7 @@ async function handleCompletions(req, res) {
         attemptCount: out.attemptCount,
         firstTokenMs: out.firstTokenMs,
       });
+      return finishReasonFromRaw(out.raw);
     } else {
       out = await postUpstream(upstream, outboundBody, key, req, apiType);
       out = convertBufferedResponse(out, apiType);
@@ -1427,6 +1457,7 @@ async function handleCompletions(req, res) {
         headerContentType(out.headers) || "application/json",
         retryAfterForwardHeaders(out.headers),
       );
+      return finishReasonFromRaw(out.raw);
     }
   } catch (err) {
     var failed = { error: { message: "hop failed" } };
@@ -1477,6 +1508,7 @@ async function handleHopRequest(req, res) {
 }
 
 exports.handleHopRequest = handleHopRequest;
+exports.finishReasonFromRaw = finishReasonFromRaw;
 exports.sendJson = sendJson;
 exports.readPauseState = readPauseState;
 exports.pausePath = pausePath;

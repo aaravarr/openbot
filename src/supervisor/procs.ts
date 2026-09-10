@@ -32,6 +32,13 @@ export type ProcDeps = {
   }): OwnedPid;
   stop(pid: OwnedPid): void;
   hostPids(hostMain: AbsPath): OwnedPid[];
+  /**
+   * Re-proves that a recorded pid still runs the host entrypoint before a
+   * deferred SIGTERM, so a recycled pid is never signalled.
+   */
+  hostPidMatches?(pid: OwnedPid, hostMain: AbsPath): boolean;
+  /** Wall-clock start of a live pid, or undefined when the platform cannot say. */
+  pidStartMs?(pid: OwnedPid): number | undefined;
   /** Finds a known OpenBot hop-server process even when its pidfile is missing. */
   hopServerPids?(hopServer: AbsPath): OwnedPid[];
   opengrokHopPids(): OwnedPid[];
@@ -196,6 +203,21 @@ function eachPsLine(visit: (pid: number, args: string) => void): void {
   }
 }
 
+/** Full argv of one process, or "" when it is gone. Linux reads /proc directly. */
+export function readPidArgs(pid: number): string {
+  try {
+    return fs
+      .readFileSync(`/proc/${String(pid)}/cmdline`, "utf8")
+      .split("\0")
+      .join(" ")
+      .trim();
+  } catch {
+    /* no /proc (macOS, Windows): fall back to ps */
+  }
+  const result = spawnSync("ps", ["-p", String(pid), "-o", "args="], { encoding: "utf8" });
+  return (result.stdout || "").trim();
+}
+
 export function nodeProcs(): ProcDeps {
   return {
     port: portOpen,
@@ -263,6 +285,24 @@ export function nodeProcs(): ProcDeps {
       });
       return pids;
     },
+    hostPidMatches(pid, hostMain) {
+      const args = readPidArgs(pid);
+      if (args === "") {
+        return false;
+      }
+      return isHostMainArgv(args, hostMain, process.pid, pid);
+    },
+    pidStartMs(pid) {
+      // "etimes" is elapsed seconds (procps and BusyBox). A platform without
+      // it fails the spawn and reports "unknown", which only disables the
+      // already-restarted shortcut.
+      const result = spawnSync("ps", ["-p", String(pid), "-o", "etimes="], { encoding: "utf8" });
+      const seconds = Number((result.stdout || "").trim());
+      if (result.status !== 0 || !Number.isFinite(seconds) || seconds < 0) {
+        return undefined;
+      }
+      return Date.now() - Math.round(seconds * 1000);
+    },
     hopServerPids(hopServer) {
       const pids: OwnedPid[] = [];
       eachPsLine((pid, args) => {
@@ -282,7 +322,14 @@ export function nodeProcs(): ProcDeps {
       return pids;
     },
     term(pid) {
-      process.kill(pid, "SIGTERM");
+      // Best-effort like stop(): a pid that exited between the argv check and
+      // this call must not throw, or a finalizer would die before clearing the
+      // marker and retry the same kill on every tick.
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        /* already gone */
+      }
     },
     syntaxCheck(file) {
       const result = spawnSync(process.execPath, ["--check", file], { encoding: "utf8" });

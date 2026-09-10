@@ -12,16 +12,27 @@ import { createHash } from "node:crypto";
  * on the new payload).
  */
 
-/** Payload files whose bytes execute inside the host process. */
+/**
+ * Payload files whose bytes execute inside the host process.
+ *
+ * This must name every module reachable from the wrap header and from
+ * hop-handler: a module missing here can be redeployed without moving the
+ * stamp, and the stale host keeps running the old copy forever. The list is
+ * covered by a test that walks payload/*.cjs, so a new module cannot be added
+ * without landing here too.
+ */
 export const PAYLOAD_FINGERPRINT_FILES = [
+  "bot-models.cjs",
   "hop-handler.cjs",
   "hop-server.cjs",
   "image-read.cjs",
   "openai-messages.cjs",
   "openai-stream.cjs",
+  "protocol-converters.cjs",
   "provider-maps.cjs",
   "request-log.cjs",
   "runtime.cjs",
+  "turn-lease.cjs",
   "version.cjs",
 ] as const;
 

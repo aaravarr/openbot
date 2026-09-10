@@ -45,7 +45,7 @@ Uninstall: run `uninstall.sh` (or `uninstall.sh --bot-mode` from a Bot turn); it
 | Switch Official (`kind: official`) or back to custom when wrap is missing | **Must** reconcile | Same; reconcile always stops the guard daemon and clears its pidfile, so Official takes effect immediately and sticks |
 | Tunnel on/off (`openbot-expose` plus cloudflared) | **Must** `set-expose` / `openbot tunnel on` or `off` | Same |
 | Official host tap (logging on while mode is official) | Prefer `PUT /api/logs/settings` so prune plus wrap/reconcile run | Same |
-| Wrap bytes change (host bounce) | Reconcile only. SIGTERM sand-host; **never** `kill -9`. Do not start `node host-main.cjs` without gateway tokens | Same |
+| Wrap bytes change (host bounce) | Reconcile only. SIGTERM sand-host; **never** `kill -9`. Do not start `node host-main.cjs` without gateway tokens. A bot-mode install defers this SIGTERM to `openbot-pending-bounce.json` so it never ends the calling turn | Same (next new message) |
 
 Do **not** write `openbot-mode` or `openbot-expose` by hand to change wrap or tunnel. File edit alone will not wrap/unwrap the host or start/stop cloudflared. (Only exception: repairing a corrupted `openbot-mode` token to `custom`, followed by a reconcile — see Official / custom below.)
 
@@ -76,6 +76,12 @@ If `openbot` is on `PATH`, `openbot status` is the same.
 ### Bot-mode install and status
 
 The stdout of `install.sh --bot-mode` / `--bot-status` includes bot-facing operating guidance in `OPENBOT_BOT_INSTRUCTION`; follow that guidance.
+
+`--bot-status` also prints `OPENBOT_HOST_BOUNCE`:
+
+- `pending`: `openbot-pending-bounce.json` exists. The host file already has the new payload, but the sand-host restart is deferred until the host is idle, so the current turn (and its report) is not interrupted. Do **not** rerun the installer for this, and do not report a failure: a detached finalizer (`src/cli.ts finalize-host`) applies it after a quiet window. `install.sh --bot-finalize` asks for it immediately and returns at once.
+- `done`: the bounce was applied; the next message runs on the new payload.
+- `disabled`: nothing was deferred (no wrap change), or the run is a CLI-direct install.
 
 ### Official / custom
 

@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { OPENBOT_MARKER } from "./domain/types.ts";
+import { payloadFingerprint } from "./host/payload-fingerprint.ts";
 import { skipOnWindows } from "./test-platform.ts";
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -377,3 +378,284 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     killPidFile(path.join(sandData, "openbot-hop.pid"));
   }
 });
+
+test("bot-mode defers the host bounce and ends the caller's turn only when idle", async (t) => {
+  if (skipOnWindows(t)) return;
+  const box = mkdtempSync(path.join(os.tmpdir(), "openbot-bounce-box-"));
+  const sandHost = path.join(box, "sand-host");
+  const sandData = path.join(box, "sand-data");
+  const deployed = path.join(sandData, "openbot");
+  const hostMain = path.join(sandHost, "host-main.cjs");
+  const sentinel = path.join(box, "sigterm.sentinel");
+  const marker = path.join(sandData, "openbot-pending-bounce.json");
+  const result = path.join(sandData, "result.json");
+  const log = path.join(sandData, "install.log");
+  mkdirSync(sandHost, { recursive: true });
+  mkdirSync(sandData);
+  writeFileSync(hostMain, STOCK);
+  writeFakeCloudflared(sandData, "https://deferred-bounce.trycloudflare.com");
+  const hostPid = startFakeHost(sandHost, sentinel);
+  const installEnv = {
+    ...process.env,
+    OPENBOT_HOST_MAIN: hostMain,
+    OPENBOT_SAND_DATA: sandData,
+    OPENBOT_BOT_RESULT: result,
+    OPENBOT_BOT_LOG: log,
+    OPENBOT_BOT_PID: path.join(sandData, "install.pid"),
+    OPENBOT_SRC: repoRoot,
+    OPENBOT_DEST: deployed,
+    OPENBOT_COMMIT: "cafed00d",
+    OPENBOT_TUNNEL: "off",
+    OPENBOT_SKIP_NPM_INSTALL: "1",
+  };
+  t.after(() => {
+    killPidFiles([
+      path.join(sandData, "openbot-ui.pid"),
+      path.join(sandData, "openbot-hop.pid"),
+      path.join(sandData, "openbot-guard.pid"),
+      path.join(sandData, "openbot-finalize.pid"),
+      path.join(sandData, "openbot-tunnel.pid"),
+    ]);
+    try {
+      process.kill(hostPid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    rmSync(box, { recursive: true, force: true });
+  });
+
+  const started = await runInstall(["--bot-mode"], installEnv);
+  assert.equal(started.status, 0, started.stderr);
+  assert.match(started.stdout, /OPENBOT_STATUS=started/);
+  const state = await waitForStatus(result, "success");
+  assert.equal(state.hostBounce, "pending");
+
+  // G1: the host that runs the caller's turn is still alive and was never
+  // signalled while the install reported success.
+  assert.equal(pidAlive(hostPid), true, "the calling host must survive the install");
+  assert.equal(existsSync(sentinel), false, "the calling host must never receive SIGTERM during the install");
+  assert.equal(existsSync(marker), true, "the deferred bounce must be armed");
+  assert.match(readFileSync(log, "utf8"), /OPENBOT_HOST_BOUNCE=pending/);
+
+  const status = spawnSync("bash", [installSh, "--bot-status"], {
+    encoding: "utf8",
+    env: { ...installEnv, OPENBOT_SAND_DATA: sandData, OPENBOT_BOT_RESULT: result },
+  });
+  assert.match(status.stdout, /OPENBOT_HOST_BOUNCE=pending/);
+  assert.match(status.stdout, /restart itself once it is idle/);
+
+  // G4: a second reconcile inside the window (the worker's own tunnel step,
+  // replayed by hand) must not bounce the host or clear the marker.
+  const before = readFileSync(marker, "utf8");
+  const tunnel = runCli(deployed, ["tunnel", "on", "--json"], {
+    ...process.env,
+    OPENBOT_HOST_MAIN: hostMain,
+    OPENBOT_SAND_DATA: sandData,
+    OPENBOT_TUNNEL: "cloudflare",
+  });
+  assert.equal(tunnel.status, 0, tunnel.stderr || tunnel.stdout);
+  assert.equal(existsSync(sentinel), false, "a second reconcile must not bounce the caller");
+  assert.equal(readFileSync(marker, "utf8"), before, "the marker must survive a second reconcile");
+
+  // The worker detached a finalizer at install time. Stop it so this test
+  // decides exactly when the bounce lands; the spawn itself is asserted above
+  // through the pidfile.
+  killPidFile(path.join(sandData, "openbot-finalize.pid"));
+  rmSync(path.join(sandData, "openbot-finalize.pid"), { force: true });
+
+  const fingerprint = deployedFingerprint(deployed);
+  const cliEnv = { ...process.env, OPENBOT_HOST_MAIN: hostMain, OPENBOT_SAND_DATA: sandData };
+
+  // G2: a fresh in-flight turn is never interrupted, not even by --force.
+  const now = Date.now();
+  writeFileSync(
+    path.join(sandData, "openbot-turn-lease.json"),
+    `${JSON.stringify({ active: 1, lastStartAt: now, lastEndAt: now, lastFinishReason: "tool_calls", updatedAt: now })}\n`,
+  );
+  const armed = JSON.parse(readFileSync(marker, "utf8")) as { armedAtMs: number };
+  writeFileSync(marker, `${JSON.stringify({ ...armed, fingerprint }, null, 2)}\n`);
+  const forced = runCli(deployed, ["finalize-host", "--once", "--force", "--max-wait-ms", "1"], cliEnv);
+  assert.equal(forced.status, 0, forced.stderr);
+  assert.match(forced.stdout, /still waiting/);
+  assert.equal(existsSync(sentinel), false, "force must never end a request that is in flight");
+  assert.equal(existsSync(marker), true);
+
+  // G3: once the turn is over and the quiet window passed, the finalizer
+  // applies the bounce: the host receives SIGTERM, the sentinel appears, the
+  // marker is cleared and the status reports done.
+  writeFileSync(
+    path.join(sandData, "openbot-turn-lease.json"),
+    `${JSON.stringify({ active: 0, lastStartAt: now - 3_600_000, lastEndAt: now - 3_600_000, lastFinishReason: "stop", updatedAt: now - 3_600_000 })}\n`,
+  );
+  writeFileSync(marker, `${JSON.stringify({ ...armed, armedAtMs: armed.armedAtMs - 3_600_000, fingerprint }, null, 2)}\n`);
+  const applied = runCli(deployed, ["finalize-host", "--once", "--wait-idle-ms", "1000", "--busy-wait-ms", "1000", "--max-wait-ms", "600000"], cliEnv);
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.match(applied.stdout, /bounce applied/);
+  for (let i = 0; i < 40 && !existsSync(sentinel); i++) {
+    await sleep(100);
+  }
+  assert.equal(existsSync(sentinel), true, "the idle finalizer must SIGTERM the stale host");
+  assert.equal(existsSync(marker), false, "the applied marker must be cleared");
+  const done = spawnSync("bash", [installSh, "--bot-status"], {
+    encoding: "utf8",
+    env: { ...installEnv, OPENBOT_SAND_DATA: sandData, OPENBOT_BOT_RESULT: result },
+  });
+  assert.match(done.stdout, /OPENBOT_HOST_BOUNCE=done/);
+});
+
+test("a bot-mode install that never reaches success still leaves the host alive", async (t) => {
+  if (skipOnWindows(t)) return;
+  const box = mkdtempSync(path.join(os.tmpdir(), "openbot-bounce-fail-"));
+  const sandHost = path.join(box, "sand-host");
+  const sandData = path.join(box, "sand-data");
+  const hostMain = path.join(sandHost, "host-main.cjs");
+  const sentinel = path.join(box, "sigterm.sentinel");
+  const result = path.join(sandData, "result.json");
+  mkdirSync(sandHost, { recursive: true });
+  mkdirSync(sandData);
+  writeFileSync(hostMain, STOCK);
+  // A tunnel that never yields a usable URL: the worker must fail after the
+  // reconcile already armed the deferred bounce.
+  writeFakeCloudflared(sandData, "https://not-a-tunnel.example.com");
+  const hostPid = startFakeHost(sandHost, sentinel);
+  const installEnv = {
+    ...process.env,
+    OPENBOT_HOST_MAIN: hostMain,
+    OPENBOT_SAND_DATA: sandData,
+    OPENBOT_BOT_RESULT: result,
+    OPENBOT_BOT_LOG: path.join(sandData, "install.log"),
+    OPENBOT_BOT_PID: path.join(sandData, "install.pid"),
+    OPENBOT_SRC: repoRoot,
+    OPENBOT_DEST: path.join(sandData, "openbot"),
+    OPENBOT_COMMIT: "cafed00d",
+    OPENBOT_TUNNEL: "off",
+    OPENBOT_SKIP_NPM_INSTALL: "1",
+  };
+  t.after(() => {
+    killPidFiles([
+      path.join(sandData, "openbot-ui.pid"),
+      path.join(sandData, "openbot-hop.pid"),
+      path.join(sandData, "openbot-guard.pid"),
+      path.join(sandData, "openbot-finalize.pid"),
+      path.join(sandData, "openbot-tunnel.pid"),
+    ]);
+    try {
+      process.kill(hostPid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    rmSync(box, { recursive: true, force: true });
+  });
+
+  const started = await runInstall(["--bot-mode"], installEnv);
+  assert.equal(started.status, 0, started.stderr);
+  const state = await waitForStatus(result, "failed");
+  assert.equal(state.status, "failed");
+  assert.equal(existsSync(sentinel), false, "a failed install must not bounce the caller either");
+  assert.equal(pidAlive(hostPid), true);
+  // The host file was rewritten before the tunnel failed, so the bounce stays
+  // armed: the box must not be stranded on the previous payload.
+  assert.equal(existsSync(path.join(sandData, "openbot-pending-bounce.json")), true);
+  assert.equal(existsSync(path.join(sandData, "openbot-finalize.pid")), true);
+});
+
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Poll the bot result file until it reaches a terminal status. */
+async function waitForStatus(file: string, want: "success" | "failed", timeoutMs = 120_000): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs;
+  let last: Record<string, unknown> = {};
+  while (Date.now() < deadline) {
+    try {
+      last = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+      if (last.status === want) return last;
+      if (last.status === "failed" && want === "success") {
+        throw new Error(`install failed: ${String(last.error)} (${readFileSync(file, "utf8")})`);
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith("install failed")) throw err;
+    }
+    await sleep(250);
+  }
+  throw new Error(`install never reached ${want}: ${JSON.stringify(last)}`);
+}
+
+/** A fake cloudflared: ensureCloudflared only checks that the file exists. */
+function writeFakeCloudflared(data: string, url: string): void {
+  const bin = path.join(data, "bin", "cloudflared");
+  mkdirSync(path.dirname(bin), { recursive: true });
+  writeFileSync(bin, `#!/usr/bin/env bash\nprintf '%s\\n' '${url}'\nsleep 600\n`);
+  chmodSync(bin, 0o755);
+}
+
+/**
+ * A fake host with a real host-main.cjs argv: the preload keeps the process
+ * alive and writes a sentinel on SIGTERM, so "the caller was never signalled"
+ * is proven by the sentinel's absence rather than by the process still running
+ * (the app relaunches a killed host, which would hide the failure).
+ */
+function startFakeHost(sandHost: string, sentinel: string): number {
+  const preload = path.join(sandHost, "sigterm-sentinel.cjs");
+  writeFileSync(
+    preload,
+    [
+      "const fs = require('fs');",
+      "const file = process.env.OPENBOT_TEST_SIG_FILE;",
+      "process.on('SIGTERM', () => {",
+      "  try { if (file) fs.writeFileSync(file, 'sigterm\\n'); } catch (err) {}",
+      "  process.exit(0);",
+      "});",
+      "setInterval(() => {}, 1000);",
+      "",
+    ].join("\n"),
+  );
+  const child = spawn(process.execPath, ["--require", preload, path.join(sandHost, "host-main.cjs")], {
+    env: { ...process.env, OPENBOT_TEST_SIG_FILE: sentinel },
+    stdio: "ignore",
+    detached: true,
+  });
+  child.unref();
+  assert.ok(child.pid !== undefined, "fake host must start");
+  return child.pid ?? 0;
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function deployedFingerprint(deployed: string): string {
+  return payloadFingerprint({
+    payloadDir: path.join(deployed, "payload"),
+    read: (file) => {
+      try {
+        return readFileSync(file, "utf8");
+      } catch {
+        return undefined;
+      }
+    },
+  });
+}
+
+function runCli(deployed: string, args: string[], env: NodeJS.ProcessEnv, timeout = 60_000) {
+  return spawnSync("node", ["--experimental-strip-types", path.join(deployed, "src", "cli.ts"), ...args], {
+    encoding: "utf8",
+    timeout,
+    env,
+  });
+}
+
+function killPidFiles(files: string[]): void {
+  for (const file of files) {
+    killPidFile(file);
+  }
+}
+
+

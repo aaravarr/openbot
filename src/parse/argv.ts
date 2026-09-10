@@ -17,6 +17,11 @@ import { parseModelId, parseModelSlug } from "../supervisor/plan.ts";
 import { boxPathsFrom, parseAbsPath, type BoxPaths } from "../supervisor/paths.ts";
 import { parseProviderId, parseSecretBytes } from "../supervisor/secrets.ts";
 import { clampIntervalMinutes, DEFAULT_GUARD_INTERVAL_MINUTES } from "../supervisor/guard-daemon.ts";
+import {
+  DEFERRED_BOUNCE_BUSY_QUIET_MS,
+  DEFERRED_BOUNCE_MAX_WAIT_MS,
+  DEFERRED_BOUNCE_STOP_QUIET_MS,
+} from "../supervisor/reconcile.ts";
 
 export type CliCommand =
   | { readonly kind: "qrcode"; readonly text: string; readonly out: string }
@@ -26,6 +31,16 @@ export type CliCommand =
   | { readonly kind: "official" }
   | { readonly kind: "guard"; readonly action: "once" | "daemon" | "stop"; readonly intervalMinutes: number }
   | { readonly kind: "tunnel"; readonly action: "on" | "off" | "status" }
+  | {
+      readonly kind: "finalize-host";
+      /** One attempt, then exit (the alias --bot-finalize implies this). */
+      readonly once: boolean;
+      readonly force: boolean;
+      readonly stopQuietMs: number;
+      readonly busyQuietMs: number;
+      readonly maxWaitMs: number;
+      readonly pollMs: number;
+    }
   | {
       readonly kind: "install";
       readonly custom?: {
@@ -37,6 +52,8 @@ export type CliCommand =
       readonly expose: Expose;
       readonly exposeSpecified: boolean;
       readonly json: boolean;
+      /** Bot self-upgrade: arm the host bounce instead of killing the caller. */
+      readonly deferHostBounce: boolean;
     };
 
 export type ParsedCli = {
@@ -95,6 +112,20 @@ export function clampGuardInterval(raw: string | undefined): number {
   return clampIntervalMinutes(value);
 }
 
+/** Milliseconds flag with a default; junk is rejected instead of guessed. */
+export function parseMsFlag(argv: readonly string[], name: string, fallback: number): number {
+  const at = argv.indexOf(name);
+  if (at < 0) {
+    return fallback;
+  }
+  const raw = argv[at + 1];
+  const value = Number(raw);
+  if (raw === undefined || raw.trim() === "" || !Number.isFinite(value) || value < 0) {
+    throw new Error(`OpenBot: ${name} needs a number of milliseconds`);
+  }
+  return Math.floor(value);
+}
+
 export function parseInstallCommand(input: {
   argv: readonly string[];
   env: NodeJS.ProcessEnv;
@@ -141,6 +172,25 @@ export function parseInstallCommand(input: {
   if (argv.includes("status")) {
     return { command: { kind: "status" }, paths, json };
   }
+  // Applies an armed deferred host bounce (the marker a bot-mode upgrade
+  // writes instead of SIGTERMing the caller's host). --bot-finalize is the
+  // single-attempt alias the bot can run by hand.
+  if (argv.includes("finalize-host") || hasFlag(argv, "--bot-finalize")) {
+    const botAlias = hasFlag(argv, "--bot-finalize");
+    return {
+      command: {
+        kind: "finalize-host",
+        once: hasFlag(argv, "--once") || botAlias,
+        force: hasFlag(argv, "--force"),
+        stopQuietMs: parseMsFlag(argv, "--wait-idle-ms", DEFERRED_BOUNCE_STOP_QUIET_MS),
+        busyQuietMs: parseMsFlag(argv, "--busy-wait-ms", DEFERRED_BOUNCE_BUSY_QUIET_MS),
+        maxWaitMs: parseMsFlag(argv, "--max-wait-ms", DEFERRED_BOUNCE_MAX_WAIT_MS),
+        pollMs: parseMsFlag(argv, "--poll-ms", 5000),
+      },
+      paths,
+      json,
+    };
+  }
   if (argv.includes("guard")) {
     const intervalMinutes = clampGuardInterval(takeFlag(argv, "--interval"));
     if (hasFlag(argv, "--stop")) {
@@ -164,6 +214,7 @@ export function parseInstallCommand(input: {
   const model = takeFlag(argv, "--model");
   const name = takeFlag(argv, "--name") ?? "default";
   const tunnelFlag = takeFlag(argv, "--tunnel");
+  const deferHostBounce = hasFlag(argv, "--defer-host-bounce") || input.env.OPENBOT_DEFER_HOST_BOUNCE === "1";
   const exposeSpecified = Boolean(tunnelFlag || input.env.OPENBOT_TUNNEL);
   const expose =
     parseExposeToken(tunnelFlag) ?? parseExposeToken(input.env.OPENBOT_TUNNEL) ?? loopbackExpose();
@@ -187,13 +238,14 @@ export function parseInstallCommand(input: {
         expose,
         exposeSpecified,
         json,
+        deferHostBounce,
       },
       paths,
       json,
     };
   }
 
-  return { command: { kind: "install", expose, exposeSpecified, json }, paths, json };
+  return { command: { kind: "install", expose, exposeSpecified, json, deferHostBounce }, paths, json };
 }
 
 export function parseUpstreamOrigin(raw: string): UpstreamOrigin {

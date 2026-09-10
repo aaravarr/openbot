@@ -1,16 +1,33 @@
 import assert from "node:assert/strict";
+import { readdirSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { OPENBOT_MARKER } from "../domain/types.ts";
-import { payloadFingerprint } from "../host/payload-fingerprint.ts";
+import { PAYLOAD_FINGERPRINT_FILES, payloadFingerprint } from "../host/payload-fingerprint.ts";
 import { extractPayloadFingerprint, refreshPayloadStamp, stripWrap, wrapHostSource } from "../host/wrap.ts";
 import { customBoxFromProvider, officialBox, parseUpstreamOrigin } from "../parse/argv.ts";
 import { boxPathsFrom } from "./paths.ts";
 import { type FsDeps, type ProcDeps, parseOwnedPid } from "./procs.ts";
 import { reconcile } from "./reconcile.ts";
 
+const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+
 const STOCK = `function createProtoSessionProvider(client) {\n  return { getSession: function () { return 1; } };\n}\n`;
 
 const FP = "0123456789abcdef";
+
+test("the payload fingerprint covers every payload CJS module", () => {
+  // turn-lease.cjs runs inside the host (required by hop-handler), so a change
+  // to it must move the stamp and bounce the stale host like any other module.
+  assert.equal(PAYLOAD_FINGERPRINT_FILES.includes("turn-lease.cjs"), true);
+  const listed: readonly string[] = PAYLOAD_FINGERPRINT_FILES;
+  const dir = path.join(repoRoot, "payload");
+  const modules = readdirSync(dir).filter((name) => name.endsWith(".cjs"));
+  for (const name of modules) {
+    assert.equal(listed.includes(name), true, `${name} must be fingerprinted`);
+  }
+});
 
 test("payloadFingerprint is stable and content-sensitive", () => {
   const read = (files: Record<string, string>) => (path: string) => files[path];

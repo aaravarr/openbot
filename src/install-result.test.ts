@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -359,3 +359,85 @@ test("bot-mode does not roll back when the destination is occupied externally", 
     rmSync(data, { recursive: true, force: true });
   }
 });
+
+test("bot-status reports a deferred host bounce dynamically, never a stale value", (t) => {
+  if (!requireBash(t) || skipOnWindows(t)) return;
+
+  const data = mkdtempSync(path.join(os.tmpdir(), "openbot-bounce-status-"));
+  const result = path.join(data, "result.json");
+  const marker = path.join(data, "openbot-pending-bounce.json");
+  try {
+    // success was written while the bounce was still pending.
+    writeFileSync(result, JSON.stringify({
+      status: "success",
+      startedAt: "2026-09-09T10:00:00Z",
+      finishedAt: "2026-09-09T10:01:00Z",
+      url: "https://openbot.trycloudflare.com",
+      qrPath: "/tmp/openbot.png",
+      commit: "cafed00d",
+      hostBounce: "pending",
+    }));
+    // No marker any more: the bounce was applied, so the status must move on
+    // even though the result file still says pending.
+    const done = runStatus(data);
+    assert.match(done, /OPENBOT_HOST_BOUNCE=done/);
+    assert.equal(/restart itself once it is idle/.test(done), false);
+
+    writeFileSync(marker, JSON.stringify({ armedAt: "2026-09-09T10:00:00Z", hostPids: [1] }));
+    const pending = runStatus(data);
+    assert.match(pending, /OPENBOT_HOST_BOUNCE=pending/);
+    assert.match(pending, /OPENBOT_BOT_INSTRUCTION=.*restart itself once it is idle.*not be rerun/);
+
+    // The bot's main polling path is --brief, so it must report the same thing.
+    const brief = runStatusBrief(data);
+    assert.match(brief, /OPENBOT_HOST_BOUNCE=pending/);
+    assert.match(brief, /OPENBOT_BOT_INSTRUCTION=.*restarts itself once it is idle.*do not rerun/);
+
+    // A half-written marker still means a bounce is pending, never "done".
+    writeFileSync(marker, "{broken");
+    assert.match(runStatus(data), /OPENBOT_HOST_BOUNCE=pending/);
+
+    // A legacy result without the field and without a marker prints no line.
+    writeFileSync(result, JSON.stringify({ status: "success", startedAt: "2026-09-09T10:00:00Z", commit: "cafed00d" }));
+    rmSync(marker, { force: true });
+    assert.equal(runStatus(data).includes("OPENBOT_HOST_BOUNCE="), false);
+  } finally {
+    rmSync(data, { recursive: true, force: true });
+  }
+});
+
+test("bot-finalize is an immediate no-op when nothing is pending", (t) => {
+  if (!requireBash(t) || skipOnWindows(t)) return;
+
+  const data = mkdtempSync(path.join(os.tmpdir(), "openbot-bot-finalize-"));
+  try {
+    const out = execFileSync("bash", [install, "--bot-finalize"], {
+      encoding: "utf8",
+      timeout: 10000,
+      env: botModeEnv(data, path.join(data, "result.json"), path.join(data, "install.log"), path.join(data, "install.pid")),
+    });
+    assert.match(out, /OPENBOT_STATUS=not-installed/);
+    assert.match(out, /OPENBOT_HOST_BOUNCE=disabled/);
+    assert.match(out, /nothing to do/);
+    assert.equal(existsSync(path.join(data, "openbot-finalize.pid")), false);
+
+    // With a marker it detaches a finalizer and returns immediately.
+    writeFileSync(path.join(data, "openbot-pending-bounce.json"), JSON.stringify({ hostPids: [1] }));
+    const started = execFileSync("bash", [install, "--bot-finalize"], {
+      encoding: "utf8",
+      timeout: 10000,
+      env: botModeEnv(data, path.join(data, "result.json"), path.join(data, "install.log"), path.join(data, "install.pid")),
+    });
+    assert.match(started, /OPENBOT_STATUS=started/);
+    assert.match(started, /OPENBOT_HOST_BOUNCE=pending/);
+  } finally {
+    try {
+      const pid = Number(readFileSync(path.join(data, "openbot-finalize.pid"), "utf8").trim());
+      if (Number.isInteger(pid) && pid > 0) process.kill(pid, "SIGKILL");
+    } catch {
+      /* no finalizer was started */
+    }
+    rmSync(data, { recursive: true, force: true });
+  }
+});
+

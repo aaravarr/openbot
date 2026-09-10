@@ -36,6 +36,8 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 1. Run the command and immediately follow the started instruction.
 2. In the next turn, run the printed `--bot-status` command as instructed until a terminal status is reported.
 
+The script usually finishes in about 15-60 seconds. Bots should reply immediately after starting, poll no more than twice, send the URL and QR on success, and if it is still stuck after 3 minutes, send the log tail and stop.
+
 </details>
 
 Run the command **in the Computer terminal**, not on your Mac. Grok Bot routes chat on the Computer. A proxy on your laptop never sees a turn.

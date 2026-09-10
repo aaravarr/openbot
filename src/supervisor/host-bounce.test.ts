@@ -36,11 +36,36 @@ type FakeProcs = ProcDeps & {
   portUp: boolean;
 };
 
-function memoryFs(init: Record<string, string>): FsDeps & { files: Record<string, string> } {
+type MemoryFs = FsDeps & {
+  files: Record<string, string>;
+  renames: { from: string; to: string }[];
+  /**
+   * Scripted reads: after `skip` reads of a path, the next one returns
+   * `value` instead of the file. Used to simulate a writer replacing the file
+   * between two reads.
+   */
+  scriptedRead: Map<string, { skip: number; value: string | undefined }>;
+  readCounts: Map<string, number>;
+};
+
+function memoryFs(init: Record<string, string>): MemoryFs {
   const files: Record<string, string> = { ...init };
+  const renames: { from: string; to: string }[] = [];
+  const scriptedRead = new Map<string, { skip: number; value: string | undefined }>();
+  const readCounts = new Map<string, number>();
   return {
     files,
+    renames,
+    scriptedRead,
+    readCounts,
     read(path) {
+      const seen = readCounts.get(path) ?? 0;
+      readCounts.set(path, seen + 1);
+      const scripted = scriptedRead.get(path);
+      if (scripted !== undefined && seen >= scripted.skip) {
+        scriptedRead.delete(path);
+        return scripted.value;
+      }
       return Object.prototype.hasOwnProperty.call(files, path) ? files[path] : undefined;
     },
     write(path, body) {
@@ -57,6 +82,15 @@ function memoryFs(init: Record<string, string>): FsDeps & { files: Record<string
       return Object.prototype.hasOwnProperty.call(files, path);
     },
     mkdirp() {},
+    rename(from, to) {
+      renames.push({ from, to });
+      const src = files[from];
+      if (src === undefined) {
+        throw new Error(`rename: missing ${from}`);
+      }
+      files[to] = src;
+      delete files[from];
+    },
   };
 }
 
@@ -493,4 +527,66 @@ test("C8: a corrupt marker is retired loudly, never re-read forever", async () =
   if (outcome.kind === "skipped") assert.equal(outcome.reason, "corrupt-marker");
   assert.equal(pendingHostBounce(ctx.deps), false);
   assert.equal(auditRows(ctx).some((row) => row.to === "bounce:corrupt"), true);
+});
+
+test("C9: arming writes the marker with tmp + rename, never in place", async () => {
+  const ctx = setup();
+  await reconcile(zhipu(ctx.paths), ctx.deps, DEFER);
+  assert.equal(ctx.fs.renames.length, 1);
+  const [swap] = ctx.fs.renames;
+  assert.equal(swap?.to, ctx.paths.pendingBounce);
+  assert.match(swap?.from ?? "", /openbot-pending-bounce\.json\.\d+\.tmp$/);
+  // The temp file is gone and the target holds the complete marker.
+  assert.equal(ctx.fs.exists(swap?.from as never), false);
+  assert.equal(
+    Object.keys(ctx.fs.files).some((path) => path.endsWith(".tmp")),
+    false,
+  );
+  assert.ok(readPendingBounce(ctx.deps));
+});
+
+test("C10: a marker that changes between reads is never retired as corrupt", async () => {
+  const ctx = setup();
+  ctx.fs.write(ctx.paths.pendingBounce, "{half-written");
+  // The re-read returns different bytes: a concurrent arm replaced the file.
+  ctx.fs.scriptedRead.set(ctx.paths.pendingBounce, {
+    skip: 1,
+    value: `${JSON.stringify({
+      armedAt: new Date().toISOString(),
+      armedAtMs: Date.now(),
+      fingerprint: "aaaaaaaaaaaaaaaa",
+      hostPids: [99],
+      source: "test:concurrent",
+    })}\n`,
+  });
+  const outcome = applyDeferredHostBounce(ctx.deps, {}, { nowMs: Date.now() });
+  assert.equal(outcome.kind, "idle-pending");
+  if (outcome.kind === "idle-pending") assert.equal(outcome.reason, "marker-changing");
+  assert.equal(pendingHostBounce(ctx.deps), true, "a racing writer's marker must survive");
+  assert.equal(auditRows(ctx).some((row) => row.to === "bounce:corrupt"), false);
+});
+
+test("C11: constant corrupt bytes are still retired with an audit line", async () => {
+  const ctx = setup();
+  ctx.fs.write(ctx.paths.pendingBounce, "{half-written");
+  const outcome = applyDeferredHostBounce(ctx.deps, {}, { nowMs: Date.now() });
+  assert.equal(outcome.kind, "skipped");
+  if (outcome.kind === "skipped") assert.equal(outcome.reason, "corrupt-marker");
+  assert.equal(pendingHostBounce(ctx.deps), false);
+  assert.equal(auditRows(ctx).some((row) => row.to === "bounce:corrupt"), true);
+});
+
+test("A5b: a deferring official restore with logging off arms instead of bouncing", async () => {
+  // A5 covers the logging-on tap. With logging off, official peels the wrap
+  // back to the known backup, the other wrap-changing path.
+  const ctx = setup();
+  ctx.fs.write(ctx.paths.knownBackup, STOCK);
+  const result = await reconcile(officialBox(ctx.paths), ctx.deps, DEFER);
+  assert.equal(result.kind, "ok");
+  if (result.kind !== "ok") return;
+  assert.equal(result.wrapBytesChanged, true);
+  assert.equal(result.hostBounce, "deferred");
+  assert.deepEqual(ctx.procs.termed, []);
+  assert.equal(ctx.fs.read(ctx.paths.hostMain), STOCK);
+  assert.equal(pendingHostBounce(ctx.deps), true);
 });

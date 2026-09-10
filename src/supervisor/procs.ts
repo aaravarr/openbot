@@ -17,6 +17,12 @@ export type FsDeps = {
   remove(path: AbsPath): void;
   exists(path: AbsPath): boolean;
   mkdirp(path: AbsPath): void;
+  /**
+   * Atomic replace. Optional only for test doubles: the real implementation
+   * always provides it, and callers that need it (see the pending-bounce
+   * marker) fall back to a plain write when it is absent.
+   */
+  rename?(from: AbsPath, to: AbsPath): void;
 };
 
 export type ProcDeps = {
@@ -92,6 +98,9 @@ export function nodeFs(): FsDeps {
     },
     mkdirp(path) {
       fs.mkdirSync(path, { recursive: true });
+    },
+    rename(from, to) {
+      fs.renameSync(from, to);
     },
   };
 }

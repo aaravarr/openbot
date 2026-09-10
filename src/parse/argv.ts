@@ -21,6 +21,7 @@ import {
   DEFERRED_BOUNCE_BUSY_QUIET_MS,
   DEFERRED_BOUNCE_GRACE_MS,
   DEFERRED_BOUNCE_MAX_WAIT_MS,
+  DEFERRED_BOUNCE_MIN_WAIT_MS,
   DEFERRED_BOUNCE_STOP_QUIET_MS,
 } from "../supervisor/reconcile.ts";
 
@@ -115,8 +116,20 @@ export function clampGuardInterval(raw: string | undefined): number {
   return clampIntervalMinutes(value);
 }
 
-/** Milliseconds flag with a default; junk is rejected instead of guessed. */
-export function parseMsFlag(argv: readonly string[], name: string, fallback: number): number {
+/**
+ * Milliseconds flag with a default; junk is rejected instead of guessed.
+ *
+ * `min` is a floor, not a clamp: a caller asking for a window below it is
+ * answered with an error. Silently raising the value would let a wrapper claim
+ * one thing and get another, and the floors here exist precisely because those
+ * values are the protection (see DEFERRED_BOUNCE_MIN_WAIT_MS).
+ */
+export function parseMsFlag(
+  argv: readonly string[],
+  name: string,
+  fallback: number,
+  min = 0,
+): number {
   const at = argv.indexOf(name);
   if (at < 0) {
     return fallback;
@@ -126,7 +139,11 @@ export function parseMsFlag(argv: readonly string[], name: string, fallback: num
   if (raw === undefined || raw.trim() === "" || !Number.isFinite(value) || value < 0) {
     throw new Error(`OpenBot: ${name} needs a number of milliseconds`);
   }
-  return Math.floor(value);
+  const floored = Math.floor(value);
+  if (floored < min) {
+    throw new Error(`OpenBot: ${name} must be at least ${String(min)} milliseconds`);
+  }
+  return floored;
 }
 
 export function parseInstallCommand(input: {
@@ -185,10 +202,10 @@ export function parseInstallCommand(input: {
         kind: "finalize-host",
         once: hasFlag(argv, "--once") || botAlias,
         force: hasFlag(argv, "--force"),
-        stopQuietMs: parseMsFlag(argv, "--wait-idle-ms", DEFERRED_BOUNCE_STOP_QUIET_MS),
-        busyQuietMs: parseMsFlag(argv, "--busy-wait-ms", DEFERRED_BOUNCE_BUSY_QUIET_MS),
+        stopQuietMs: parseMsFlag(argv, "--wait-idle-ms", DEFERRED_BOUNCE_STOP_QUIET_MS, DEFERRED_BOUNCE_MIN_WAIT_MS),
+        busyQuietMs: parseMsFlag(argv, "--busy-wait-ms", DEFERRED_BOUNCE_BUSY_QUIET_MS, DEFERRED_BOUNCE_MIN_WAIT_MS),
         maxWaitMs: parseMsFlag(argv, "--max-wait-ms", DEFERRED_BOUNCE_MAX_WAIT_MS),
-        graceMs: parseMsFlag(argv, "--grace-ms", DEFERRED_BOUNCE_GRACE_MS),
+        graceMs: parseMsFlag(argv, "--grace-ms", DEFERRED_BOUNCE_GRACE_MS, DEFERRED_BOUNCE_MIN_WAIT_MS),
         pollMs: parseMsFlag(argv, "--poll-ms", 5000),
       },
       paths,

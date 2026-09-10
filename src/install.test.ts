@@ -478,9 +478,13 @@ test("bot-mode defers the host bounce and ends the caller's turn only when idle"
     path.join(sandData, "openbot-turn-lease.json"),
     `${JSON.stringify({ active: 1, lastStartAt: now, lastEndAt: now, lastFinishReason: "tool_calls", updatedAt: now })}\n`,
   );
+  // --grace-ms has a 1000 ms floor (a smaller value could delete the idle
+  // protection), so the grace window is waited out here to isolate the
+  // in-flight request as the only thing holding the bounce.
+  await sleep(1200);
   const forced = runCli({
     deployed,
-    args: ["finalize-host", "--once", "--force", "--grace-ms", "1", "--max-wait-ms", "1"],
+    args: ["finalize-host", "--once", "--force", "--grace-ms", "1000", "--max-wait-ms", "1"],
     hostMain,
     sandData,
     env: cliEnv,

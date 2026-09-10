@@ -5,7 +5,15 @@ import { payloadFingerprint } from "./host/payload-fingerprint.ts";
 import { parseInstallCommand } from "./parse/argv.ts";
 import { type FsDeps, type ProcDeps, parseOwnedPid } from "./supervisor/procs.ts";
 import { boxPathsFrom } from "./supervisor/paths.ts";
-import { DEFERRED_BOUNCE_GRACE_MS, armDeferredHostBounce, type HostBounce } from "./supervisor/reconcile.ts";
+import {
+  DEFERRED_BOUNCE_BUSY_QUIET_MS,
+  DEFERRED_BOUNCE_GRACE_MS,
+  DEFERRED_BOUNCE_MAX_WAIT_MS,
+  DEFERRED_BOUNCE_MIN_WAIT_MS,
+  DEFERRED_BOUNCE_STOP_QUIET_MS,
+  armDeferredHostBounce,
+  type HostBounce,
+} from "./supervisor/reconcile.ts";
 import { printFinalizeOutcome, runFinalizeHost } from "./cli.ts";
 import { printResult } from "./cli/print.ts";
 
@@ -319,7 +327,7 @@ test("E5: the CLI parses finalize-host and its bot alias", () => {
       "--max-wait-ms",
       "9000",
       "--grace-ms",
-      "700",
+      "1200",
       "--poll-ms",
       "50",
       "--force",
@@ -338,13 +346,44 @@ test("E5: the CLI parses finalize-host and its bot alias", () => {
       tuned.command.pollMs,
       tuned.command.force,
     ],
-    [1500, 6000, 9000, 700, 50, true],
+    [1500, 6000, 9000, 1200, 50, true],
   );
 
   assert.throws(
     () => parseInstallCommand({ argv: ["finalize-host", "--wait-idle-ms", "soon"], env: {}, repoRoot: "/repo" }),
     /milliseconds/,
   );
+
+  // The wait flags have a floor: below it a caller could delete the very
+  // protection the deferred bounce provides, so the value is refused rather
+  // than silently raised.
+  assert.equal(DEFERRED_BOUNCE_MIN_WAIT_MS, 1000);
+  for (const flag of ["--grace-ms", "--wait-idle-ms", "--busy-wait-ms"]) {
+    assert.throws(
+      () =>
+        parseInstallCommand({
+          argv: ["finalize-host", flag, String(DEFERRED_BOUNCE_MIN_WAIT_MS - 1)],
+          env: {},
+          repoRoot: "/repo",
+        }),
+      /at least 1000 milliseconds/,
+      `${flag} below the floor must be rejected`,
+    );
+    assert.doesNotThrow(() =>
+      parseInstallCommand({
+        argv: ["finalize-host", flag, String(DEFERRED_BOUNCE_MIN_WAIT_MS)],
+        env: {},
+        repoRoot: "/repo",
+      }),
+    );
+  }
+  // The floor governs the flags only; the designed defaults are unchanged.
+  const defaults = parseInstallCommand({ argv: ["finalize-host"], env: {}, repoRoot: "/repo" });
+  assert.equal(defaults.command.kind, "finalize-host");
+  if (defaults.command.kind !== "finalize-host") return;
+  assert.equal(defaults.command.stopQuietMs, DEFERRED_BOUNCE_STOP_QUIET_MS);
+  assert.equal(defaults.command.busyQuietMs, DEFERRED_BOUNCE_BUSY_QUIET_MS);
+  assert.equal(defaults.command.maxWaitMs, DEFERRED_BOUNCE_MAX_WAIT_MS);
 });
 
 test("E6: the install command only defers when it is asked to", () => {

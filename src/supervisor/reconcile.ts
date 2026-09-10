@@ -171,6 +171,12 @@ export const DEFERRED_BOUNCE_GRACE_MS = 120_000;
 export const DEFERRED_BOUNCE_MAX_WAIT_MS = 600_000;
 /** An `active` count quieter than this is a leak (killed hop, dropped client). */
 export const DEFERRED_BOUNCE_STALE_ACTIVE_MS = 900_000;
+/**
+ * Floor for the CLI wait flags. Below this a `finalize-host` invocation could
+ * delete the protection it exists to provide (grace, idle window), so the
+ * flags refuse the value instead of clamping it silently.
+ */
+export const DEFERRED_BOUNCE_MIN_WAIT_MS = 1_000;
 
 /** Marker written when a payload upgrade defers the host bounce. */
 export type PendingHostBounce = {
@@ -206,7 +212,13 @@ export type DeferredBounceTuning = {
 };
 
 /** Why an armed bounce was left alone; every one of these is a no-kill path. */
-export type DeferredBounceHoldReason = "grace" | "no-lease" | "turn-active" | "quiet-window";
+export type DeferredBounceHoldReason =
+  | "grace"
+  | "no-lease"
+  | "turn-active"
+  | "quiet-window"
+  /** The marker changed under us between two reads: a concurrent arm, not corruption. */
+  | "marker-changing";
 
 export type DeferredBounceOutcome =
   | { readonly kind: "applied"; readonly pids: readonly number[]; readonly forced: boolean }
@@ -380,8 +392,41 @@ export function armDeferredHostBounce(
     hostPids: deps.procs.hostPids(deps.paths.hostMain),
     source: opts.source ?? "unknown",
   };
-  deps.fs.write(deps.paths.pendingBounce, `${JSON.stringify(marker, null, 2)}\n`, 0o644);
+  writePendingBounce(deps, `${JSON.stringify(marker, null, 2)}\n`);
   return marker;
+}
+
+/**
+ * Write the marker atomically: temp file, then rename over the target.
+ *
+ * A finalizer polls every few seconds, so a plain overwrite gives it a window
+ * where it reads a half-written file. That read parses as corrupt, and the
+ * corrupt path retires the marker — after which no reconcile ever sees a wrap
+ * change again and the host is stranded on the previous payload forever. The
+ * rename makes the target flip between two complete versions instead.
+ *
+ * Test doubles without `rename` keep the legacy direct write; the real
+ * `nodeFs` always provides it.
+ */
+function writePendingBounce(deps: SupervisorDeps, body: string): void {
+  const rename = deps.fs.rename;
+  if (rename === undefined) {
+    deps.fs.write(deps.paths.pendingBounce, body, 0o644);
+    return;
+  }
+  const tmp = joinAbs(deps.paths.sandData, `openbot-pending-bounce.json.${String(process.pid)}.tmp`);
+  deps.fs.write(tmp, body, 0o644);
+  try {
+    rename.call(deps.fs, tmp, deps.paths.pendingBounce);
+  } catch (err) {
+    // Never leave a stray temp file behind for the next install to trip over.
+    try {
+      deps.fs.remove(tmp);
+    } catch {
+      /* best-effort cleanup */
+    }
+    throw err;
+  }
 }
 
 /**
@@ -444,8 +489,15 @@ export function applyDeferredHostBounce(
   }
   // An unreadable marker is retired loudly instead of being re-read forever:
   // a silent exit here is what leaves a stale host running with a new payload.
+  // Retiring it is only safe once the bytes are known to be stable, though: a
+  // marker that changes between two reads is a concurrent arm (or a writer
+  // that is not us), and deleting it there is exactly how a box gets stranded
+  // on the previous payload.
   const marker = parsePendingBounce(raw);
   if (marker === undefined) {
+    if (deps.fs.read(deps.paths.pendingBounce) !== raw) {
+      return { kind: "idle-pending", reason: "marker-changing" };
+    }
     clearPendingBounce(deps, raw);
     appendAudit(deps, opts, "wrap", "bounce:deferred", "bounce:corrupt");
     return { kind: "skipped", reason: "corrupt-marker" };

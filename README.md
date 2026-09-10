@@ -30,9 +30,9 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 A pre-flight health check cannot change what happens next, so it only spends the user's time:
 
 - The installer already runs that check: it detects the host, Node, an existing install, wrap/mode drift, leftover processes, and the tunnel, and repairs the drift during the same run; a second run while one is already going only reports progress.
-- There is no “already current” check to reproduce by hand: every run fetches current `main` and reinstalls, so comparing versions first cannot change the command that follows. If both download sources fail while OpenBot is already installed, it keeps the existing copy and reports that instead of upgrading.
-- A bot turn costs tens of seconds while the install takes 15–60, so two “let me look first” turns can cost more than the install they were checking — and the user spends that time watching a spinner.
-- A hand-rolled check can misread wrap, routing, or tunnel state and trigger a repair the box never needed.
+- There is no “already current” branch to reproduce by hand: every run fetches current `main` and reinstalls, so checking versions first cannot change the command that follows. If both download sources fail while OpenBot is already installed, it keeps the existing copy and reports that instead of upgrading.
+- Every turn waits on the model and on its tool calls, so an extra round of looking is an extra wait for the user — who is watching a spinner while nothing is installed yet.
+- A hand-rolled check can also misread wrap, routing, or tunnel state and trigger a repair the box never needed.
 
 So the turn has two jobs: run that one command, then follow the `OPENBOT_BOT_INSTRUCTION` it prints — that output is the authority for every state, failures included. Installation usually takes 15–60 seconds, and longer when the installer has to add Node 22 or download cloudflared for the first time; `--bot-status` warns once it passes 3 minutes. Poll at most twice; if it is still stuck, send the log tail to the user and stop. If a run really fails, the output names the cause and the recovery step: report that error and the log path honestly instead of claiming success.
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -51,6 +51,29 @@ test("normalizes and rejects unsafe sand-data paths", (t) => {
     }
     const spaced = path.join(root, "sand-data", "path with spaces");
     run(["--yes"], spaced, host);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("non-interactive confirmation without a tty fails before deleting files", (t) => {
+  if (!requireBash(t)) return;
+  const root = mkdtempSync(path.join(os.tmpdir(), "openbot-uninstall-no-tty-"));
+  const data = path.join(root, "sand-data");
+  const host = path.join(root, "sand-host", "host-main.cjs");
+  try {
+    mkdirSync(data, { recursive: true }); mkdirSync(path.dirname(host), { recursive: true });
+    writeFileSync(host, "current host\n"); writeFileSync(path.join(data, "host-main.cjs.pre-openbot"), "stock host\n");
+    mkdirSync(path.join(data, "openbot")); writeFileSync(path.join(data, "openbot-mode"), "official\n");
+    const result = spawnSync("bash", [script], {
+      input: "",
+      encoding: "utf8",
+      env: { ...process.env, OPENBOT_SAND_DATA: data, OPENBOT_HOST_MAIN: host },
+      timeout: 10000,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}${result.stderr}`, /Non-interactive shell detected: re-run with --yes to confirm, or run from a terminal\./);
+    assert.equal(readFileSync(host, "utf8"), "current host\n");
+    assert.equal(existsSync(path.join(data, "openbot")), true);
+    assert.equal(existsSync(path.join(data, "openbot-mode")), true);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

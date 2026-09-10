@@ -33,6 +33,8 @@ Follow the `OPENBOT_BOT_INSTRUCTION` printed by each command; that output is the
 
 ## Uninstall
 
+When run through curl | bash, the script reads the confirmation from the terminal.
+
 On the Grok Bot Computer, run:
 
 ```bash

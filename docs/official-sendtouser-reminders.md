@@ -1,6 +1,6 @@
-# Official Grok Bot 0.30 SendToUser reminders
+# Official Grok Bot SendToUser reminders
 
-When stock Grok Bot 0.30 on the **Computer** reminds the model to **deliver** via SendToUser / SendMessage. This is the when-it-fires view of that family only. The complete injector dump is [official Grok Bot 0.30 harness injection](official-harness-injection.md).
+When stock Grok Bot on the **Computer** reminds the model to **deliver** via SendToUser / SendMessage. This is the when-it-fires view of that family only. The complete injector dump is [official Grok Bot harness injection](official-harness-injection.md).
 
 Official host only. Do not mix this with OpenBot hop leftover-assistant mapping, `wrapSession`, or GenericHop.
 
@@ -12,7 +12,7 @@ Same dump as [the harness catalog §1](official-harness-injection.md#1-scope-and
 
 | Item | Value |
 | --- | --- |
-| Product | Grok Bot 0.30 Computer host |
+| Product | Grok Bot on the Computer |
 | Host `version` file | `eed587b` |
 | Official host analyzed | `/home/box/sand-data/host-main.cjs.pre-openbot` (SHA-256 prefix `99d263f61322a77a`) |
 | Prompt strings | Copied from the catalog (PR #39). This pass did not re-dump the binary. |

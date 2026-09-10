@@ -5,7 +5,7 @@ description: Configures OpenBot on the Computer from Grok Bot — providers, mod
 
 # OpenBot config (Grok Bot on the Computer)
 
-Audience: **Grok Bot 0.30 on the Computer** — the same box as `node /home/box/sand-host/host-main.cjs`. Not the Mac. Do not patch Mac asar. Do not write `~/Library/Application Support/Grok Bot` or `~/.grokbot`.
+Audience: **Grok Bot on the Computer** — the same box as `node /home/box/sand-host/host-main.cjs`. Not the Mac. Do not patch Mac asar. Do not write `~/Library/Application Support/Grok Bot` or `~/.grokbot`.
 
 OpenBot is a box supervisor. Mutations that wrap or unwrap the host or start or stop tunnel go through `DesiredState` plus `reconcile()`. Loopback `127.0.0.1:9280` is the control UI, `/api/*`, and hop `POST /v1/chat/completions`. `openbot-mode` is the source of truth for official vs custom, **not** plan-file existence. Official **keeps** the plan. Bindings are `{ conversation, modelId }` only — **no keys on Binding**.
 

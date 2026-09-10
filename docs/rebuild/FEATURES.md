@@ -9,7 +9,7 @@
 ## 1. Product summary
 
 OpenBot is a **single-user, localhost control tool** that runs on the "Computer" (a Linux box)
-where the desktop app **Grok Bot 0.30** executes its chat turns. It lets the owner reroute Grok
+where the desktop app **Grok Bot** executes its chat turns. It lets the owner reroute Grok
 Bot's chat from the stock xAI model ("Official Grok") to **any OpenAI-compatible Chat Completions
 provider** (OpenAI, DeepSeek, Zhipu GLM, Kimi/Moonshot, Qwen, OpenRouter, Groq, xAI, or a custom
 endpoint) without leaving the Grok Bot app. It works by wrapping one factory function in the

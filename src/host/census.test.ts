@@ -10,8 +10,8 @@ function createProtoSessionProvider(client, requestedModel, modelConfig, inferen
 }
 `;
 
-/** Reconstructed Grok Bot 0.30 call site. The factory is Provider, not Session. */
-const STOCK_0_30_CALLSITE = `function createProtoSessionProvider(client, requestedModel, modelConfig, inferenceReason) {
+/** Reconstructed stock Grok Bot call site. The factory is Provider, not Session. */
+const STOCK_CALLSITE = `function createProtoSessionProvider(client, requestedModel, modelConfig, inferenceReason) {
   return new ProtoSessionProvider(client, requestedModel, modelConfig, inferenceReason);
 }
 function outer(options2) {
@@ -32,11 +32,11 @@ test("stock census requires the unique Provider factory and ignores the createPr
   assert.equal(countLiteral(STOCK, "createProtoSession") > 0, true);
 });
 
-test("stock 0.30 callsite is a unique createProtoSessionProvider factory", () => {
-  const census = censusHost(STOCK_0_30_CALLSITE);
+test("stock callsite is a unique createProtoSessionProvider factory", () => {
+  const census = censusHost(STOCK_CALLSITE);
   assert.equal(census.kind, "stock");
-  assert.equal(countLiteral(STOCK_0_30_CALLSITE, "function createProtoSession("), 0);
-  assert.equal(countLiteral(STOCK_0_30_CALLSITE, "function createProtoSessionProvider("), 1);
+  assert.equal(countLiteral(STOCK_CALLSITE, "function createProtoSession("), 0);
+  assert.equal(countLiteral(STOCK_CALLSITE, "function createProtoSessionProvider("), 1);
 });
 
 test("createProtoSession2 is not the wrap target", () => {

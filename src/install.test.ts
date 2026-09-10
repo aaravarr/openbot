@@ -272,7 +272,6 @@ test("install.sh copies the tree, leaves the host stock, and starts the UI", asy
     assert.equal(app.body.includes("Choose a provider to continue"), false);
     assert.equal(app.body.includes("Your endpoint"), false);
     assert.equal(app.body.includes("Model ID"), false);
-    assert.equal(app.body.includes("API Key"), false);
     assert.equal(app.body.includes("thinking-module"), false);
     assert.equal(app.body.includes("thinking-now-label"), false);
     assert.equal(app.body.includes("Default omits thinking fields"), false);

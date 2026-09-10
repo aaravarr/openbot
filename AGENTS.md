@@ -4,7 +4,7 @@ Instructions for coding agents working in this repository.
 
 ## Product
 
-OpenBot attaches to stock Grok Bot 0.30 on the **Computer**, not the Mac. Chat routing is `node /home/box/sand-host/host-main.cjs`. Do not patch the Mac asar. Do not write bindings under `~/Library/Application Support/Grok Bot` or `~/.grokbot`.
+OpenBot attaches to stock Grok Bot on the **Computer**, not the Mac. Chat routing is `node /home/box/sand-host/host-main.cjs`. Do not patch the Mac asar. Do not write bindings under `~/Library/Application Support/Grok Bot` or `~/.grokbot`.
 
 ## Language
 

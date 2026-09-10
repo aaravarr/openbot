@@ -535,11 +535,11 @@ test("hop copies inbound User-Agent and does not invent one", async () => {
     const out = await post(
       hop.port,
       { model: "deepseek-v4-flash", messages: [] },
-      { Authorization: "Bearer openbot-runtime", "User-Agent": "GrokBot/0.30" },
+      { Authorization: "Bearer openbot-runtime", "User-Agent": "GrokBot/test-client" },
     );
     assert.equal(out.status, 200);
     assert.equal(upstream.getVersion(), "cafed00d");
-    assert.equal(upstream.getUserAgent(), "GrokBot/0.30");
+    assert.equal(upstream.getUserAgent(), "GrokBot/test-client");
   } finally {
     hop.child.kill("SIGTERM");
     upstream.server.close();

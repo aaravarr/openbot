@@ -1,6 +1,6 @@
-# Official Grok Bot 0.30 harness injection
+# Official Grok Bot harness injection
 
-Complete catalog of every official injector that mutates the **model-visible** message stream (and related user-hidden chrome) on stock Grok Bot 0.30 on the Computer. Source of truth is the installed official host, not OpenBot wrap/hop.
+Complete catalog of every official injector that mutates the **model-visible** message stream (and related user-hidden chrome) on the stock Grok Bot running on the Computer. Source of truth is the installed official host, not OpenBot wrap/hop.
 
 This document is a dump for injection tuning. Completeness beats narrative.
 
@@ -12,7 +12,7 @@ This document is a dump for injection tuning. Completeness beats narrative.
 | --- | --- |
 | Product | Grok Bot (`SAND_PRODUCT_DISPLAY_NAME = "Grok Bot"`) |
 | Computer host `version` file | `eed587b` |
-| Binary client fallback stamp | `0.33.0-pre.2` (`SAND_CLIENT_APP_VERSION` env overrides; OpenBot docs call this surface **0.30**) |
+| Binary client fallback stamp | `0.33.0-pre.2` (`SAND_CLIENT_APP_VERSION` env overrides) |
 | Official host analyzed | `/home/box/sand-data/host-main.cjs.pre-openbot` (27,607,506 bytes; SHA-256 prefix `99d263f61322a77a`) |
 | Live `/home/box/sand-host/host-main.cjs` | Same SAND identifiers; prefixed with `/* openbot-stock-wrap */` only. **Not used as source of truth.** |
 | Dump | Read-only. First pass 2026-09-02T17:52Z; string-recovery pass 2026-09-02T18:07Z; injector-gap pass 2026-09-02T18:30Z. Host not patched. `sand-host` not killed. `node host-main.cjs` not started. |
@@ -231,7 +231,7 @@ The model therefore sees real user text **inside** `<user_query>`, after any add
 | --- | --- |
 | Full text | `<system_reminder>\nIMPORTANT: It is bad to be over-eager with making edits vs just answering the question when that is not what the user wants. Think carefully before deciding to edit.\n</system_reminder>\n` |
 | Fires | `config2.isEagerEditingModel === true` |
-| Does not fire | Grok Bot `createSandPromptModelInfo` sets `isComposer*`, `isGpt*`, `isSonnet*` all **false**. Treat as **ABSENT on 0.30 Computer Grok Bot** unless a live model id flips that flag (not observed in this binary’s static model-info). |
+| Does not fire | Grok Bot `createSandPromptModelInfo` sets `isComposer*`, `isGpt*`, `isSonnet*` all **false**. Treat as **ABSENT on the Computer-hosted Grok Bot** unless a live model id flips that flag (not observed in this binary’s static model-info). |
 
 ### 3.10 Recently-added plugin reminder — `buildRecentlyAddedPluginReminder`
 
@@ -1030,7 +1030,7 @@ System-prompt `## Voice calls` / `## Nudging your voice side` (`MainLoopVoicePro
 | Fires (if installed) | Last executor message is a non-empty `assistant` message (`needsContinuationMessage`). |
 | Does not fire | Empty messages; last role is not assistant; empty assistant content. |
 
-**Grok Bot `getExecutor` does not wrap this middleware.** The singleton `continuationInjectorMiddleware` is created in the binary and never passed into the stack in §2. Treat as **ABSENT from the 0.30 Computer Grok Bot turn path.** Cursor chat-inference may still use it elsewhere.
+**Grok Bot `getExecutor` does not wrap this middleware.** The singleton `continuationInjectorMiddleware` is created in the binary and never passed into the stack in §2. Treat as **ABSENT from the Computer-hosted Grok Bot turn path.** Cursor chat-inference may still use it elsewhere.
 
 ### 3.46 Output-token-limit reminder
 

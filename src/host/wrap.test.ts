@@ -12,7 +12,7 @@ const STOCK = `function createProtoSessionProvider(client) {
 }
 `;
 
-const STOCK_0_30_CALLSITE = `function createProtoSessionProvider(client, requestedModel, modelConfig, inferenceReason) {
+const STOCK_CALLSITE = `function createProtoSessionProvider(client, requestedModel, modelConfig, inferenceReason) {
   return new ProtoSessionProvider(client, requestedModel, modelConfig, inferenceReason);
 }
 function outer(options2) {
@@ -143,15 +143,15 @@ test("wrapped source passes node --check when the temp file ends in .cjs", () =>
   assert.equal(result.status, 0, result.stderr);
 });
 
-test("stock 0.30 callsite wraps and still parses as CommonJS", () => {
-  const proof = wrapHostSource({ source: STOCK_0_30_CALLSITE, runtimePath: "/tmp/runtime.cjs" });
+test("stock callsite wraps and still parses as CommonJS", () => {
+  const proof = wrapHostSource({ source: STOCK_CALLSITE, runtimePath: "/tmp/runtime.cjs" });
   assert.equal(proof.kind, "wrapped");
   if (proof.kind !== "wrapped") {
     return;
   }
   assert.equal(proof.source.includes("function createProtoSessionProvider_stock("), true);
   assert.equal(proof.source.includes(".getSession(imageResizingMiddleware)"), true);
-  const dir = mkdtempSync(path.join(os.tmpdir(), "openbot-0.30-"));
+  const dir = mkdtempSync(path.join(os.tmpdir(), "openbot-stock-check-"));
   const file = path.join(dir, "host-main.openbot-check.cjs");
   writeFileSync(file, proof.source);
   const result = spawnSync(process.execPath, ["--check", file], { encoding: "utf8" });

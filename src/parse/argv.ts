@@ -19,6 +19,7 @@ import { parseProviderId, parseSecretBytes } from "../supervisor/secrets.ts";
 import { clampIntervalMinutes, DEFAULT_GUARD_INTERVAL_MINUTES } from "../supervisor/guard-daemon.ts";
 import {
   DEFERRED_BOUNCE_BUSY_QUIET_MS,
+  DEFERRED_BOUNCE_GRACE_MS,
   DEFERRED_BOUNCE_MAX_WAIT_MS,
   DEFERRED_BOUNCE_STOP_QUIET_MS,
 } from "../supervisor/reconcile.ts";
@@ -39,6 +40,8 @@ export type CliCommand =
       readonly stopQuietMs: number;
       readonly busyQuietMs: number;
       readonly maxWaitMs: number;
+      /** Nothing is applied while the marker is younger than this. */
+      readonly graceMs: number;
       readonly pollMs: number;
     }
   | {
@@ -185,6 +188,7 @@ export function parseInstallCommand(input: {
         stopQuietMs: parseMsFlag(argv, "--wait-idle-ms", DEFERRED_BOUNCE_STOP_QUIET_MS),
         busyQuietMs: parseMsFlag(argv, "--busy-wait-ms", DEFERRED_BOUNCE_BUSY_QUIET_MS),
         maxWaitMs: parseMsFlag(argv, "--max-wait-ms", DEFERRED_BOUNCE_MAX_WAIT_MS),
+        graceMs: parseMsFlag(argv, "--grace-ms", DEFERRED_BOUNCE_GRACE_MS),
         pollMs: parseMsFlag(argv, "--poll-ms", 5000),
       },
       paths,

@@ -357,7 +357,7 @@ node --experimental-strip-types src/cli.ts finalize-host
 
 Install / update (reconcile from disk or new provider): `--origin` and `--model` together require `OPENBOT_API_KEY`. `--tunnel cloudflare|off`. `--host-main`, `--sand-data`, `--json`. `--census-only` is not wrap proof. `--dry-run` is. `--defer-host-bounce` (or `OPENBOT_DEFER_HOST_BOUNCE=1`) arms `openbot-pending-bounce.json` instead of SIGTERMing the host — that is what the bot-mode worker uses.
 
-`finalize-host` applies an armed bounce once the host is idle: `--once` (single attempt), `--force` (skip the quiet wait, never an in-flight request), `--wait-idle-ms`, `--busy-wait-ms`, `--max-wait-ms`, `--poll-ms`. `--bot-finalize` is the install.sh alias that detaches it and returns at once.
+`finalize-host` applies an armed bounce once the host is idle: `--once` (single attempt), `--force` (skip the quiet wait; never the 120 s grace window and never an in-flight request), `--grace-ms`, `--wait-idle-ms`, `--busy-wait-ms`, `--max-wait-ms`, `--poll-ms`. `--bot-finalize` is the install.sh alias that detaches it and returns at once.
 
 ## Presets (origins only)
 

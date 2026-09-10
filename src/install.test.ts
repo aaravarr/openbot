@@ -393,6 +393,7 @@ test("bot-mode defers the host bounce and ends the caller's turn only when idle"
   mkdirSync(sandHost, { recursive: true });
   mkdirSync(sandData);
   writeFileSync(hostMain, STOCK);
+  seedCustomBox(sandData);
   writeFakeCloudflared(sandData, "https://deferred-bounce.trycloudflare.com");
   const hostPid = startFakeHost(sandHost, sentinel);
   const installEnv = {
@@ -447,11 +448,12 @@ test("bot-mode defers the host bounce and ends the caller's turn only when idle"
   // G4: a second reconcile inside the window (the worker's own tunnel step,
   // replayed by hand) must not bounce the host or clear the marker.
   const before = readFileSync(marker, "utf8");
-  const tunnel = runCli(deployed, ["tunnel", "on", "--json"], {
-    ...process.env,
-    OPENBOT_HOST_MAIN: hostMain,
-    OPENBOT_SAND_DATA: sandData,
-    OPENBOT_TUNNEL: "cloudflare",
+  const tunnel = runCli({
+    deployed,
+    args: ["tunnel", "on", "--json"],
+    hostMain,
+    sandData,
+    env: { ...process.env, OPENBOT_TUNNEL: "cloudflare" },
   });
   assert.equal(tunnel.status, 0, tunnel.stderr || tunnel.stdout);
   assert.equal(existsSync(sentinel), false, "a second reconcile must not bounce the caller");
@@ -463,8 +465,12 @@ test("bot-mode defers the host bounce and ends the caller's turn only when idle"
   killPidFile(path.join(sandData, "openbot-finalize.pid"));
   rmSync(path.join(sandData, "openbot-finalize.pid"), { force: true });
 
+  // The armed marker must describe the payload that is now on disk; a mismatch
+  // would make the finalizer retire it silently instead of bouncing.
   const fingerprint = deployedFingerprint(deployed);
-  const cliEnv = { ...process.env, OPENBOT_HOST_MAIN: hostMain, OPENBOT_SAND_DATA: sandData };
+  const armed = JSON.parse(readFileSync(marker, "utf8")) as { armedAtMs: number; fingerprint: string };
+  assert.equal(armed.fingerprint, fingerprint, "the marker must name the deployed payload");
+  const cliEnv = { ...process.env };
 
   // G2: a fresh in-flight turn is never interrupted, not even by --force.
   const now = Date.now();
@@ -472,23 +478,46 @@ test("bot-mode defers the host bounce and ends the caller's turn only when idle"
     path.join(sandData, "openbot-turn-lease.json"),
     `${JSON.stringify({ active: 1, lastStartAt: now, lastEndAt: now, lastFinishReason: "tool_calls", updatedAt: now })}\n`,
   );
-  const armed = JSON.parse(readFileSync(marker, "utf8")) as { armedAtMs: number };
-  writeFileSync(marker, `${JSON.stringify({ ...armed, fingerprint }, null, 2)}\n`);
-  const forced = runCli(deployed, ["finalize-host", "--once", "--force", "--max-wait-ms", "1"], cliEnv);
+  const forced = runCli({
+    deployed,
+    args: ["finalize-host", "--once", "--force", "--grace-ms", "1", "--max-wait-ms", "1"],
+    hostMain,
+    sandData,
+    env: cliEnv,
+  });
   assert.equal(forced.status, 0, forced.stderr);
-  assert.match(forced.stdout, /still waiting/);
+  assert.match(forced.stdout, /still waiting \(turn-active\)/);
   assert.equal(existsSync(sentinel), false, "force must never end a request that is in flight");
   assert.equal(existsSync(marker), true);
 
   // G3: once the turn is over and the quiet window passed, the finalizer
   // applies the bounce: the host receives SIGTERM, the sentinel appears, the
-  // marker is cleared and the status reports done.
+  // marker is cleared and the status reports done. The grace window is a
+  // product flag (default 120 s), so G3 shortens it instead of rewriting the
+  // marker: rewriting armedAt would also mask the stamp-mismatch path.
   writeFileSync(
     path.join(sandData, "openbot-turn-lease.json"),
     `${JSON.stringify({ active: 0, lastStartAt: now - 3_600_000, lastEndAt: now - 3_600_000, lastFinishReason: "stop", updatedAt: now - 3_600_000 })}\n`,
   );
-  writeFileSync(marker, `${JSON.stringify({ ...armed, armedAtMs: armed.armedAtMs - 3_600_000, fingerprint }, null, 2)}\n`);
-  const applied = runCli(deployed, ["finalize-host", "--once", "--wait-idle-ms", "1000", "--busy-wait-ms", "1000", "--max-wait-ms", "600000"], cliEnv);
+  await sleep(1200);
+  const applied = runCli({
+    deployed,
+    args: [
+      "finalize-host",
+      "--once",
+      "--grace-ms",
+      "1000",
+      "--wait-idle-ms",
+      "1000",
+      "--busy-wait-ms",
+      "1000",
+      "--max-wait-ms",
+      "600000",
+    ],
+    hostMain,
+    sandData,
+    env: cliEnv,
+  });
   assert.equal(applied.status, 0, applied.stderr);
   assert.match(applied.stdout, /bounce applied/);
   for (let i = 0; i < 40 && !existsSync(sentinel); i++) {
@@ -514,6 +543,7 @@ test("a bot-mode install that never reaches success still leaves the host alive"
   mkdirSync(sandHost, { recursive: true });
   mkdirSync(sandData);
   writeFileSync(hostMain, STOCK);
+  seedCustomBox(sandData);
   // A tunnel that never yields a usable URL: the worker must fail after the
   // reconcile already armed the deferred bounce.
   writeFakeCloudflared(sandData, "https://not-a-tunnel.example.com");
@@ -644,12 +674,60 @@ function deployedFingerprint(deployed: string): string {
   });
 }
 
-function runCli(deployed: string, args: string[], env: NodeJS.ProcessEnv, timeout = 60_000) {
-  return spawnSync("node", ["--experimental-strip-types", path.join(deployed, "src", "cli.ts"), ...args], {
-    encoding: "utf8",
-    timeout,
-    env,
-  });
+/**
+ * Every cli.ts call takes --host-main/--sand-data explicitly: the CLI falls
+ * back to /home/box/... and would refuse with host-missing on a box installed
+ * anywhere else.
+ */
+/**
+ * A box that is already OpenBot-custom. The deferred-bounce path only exists
+ * for a custom desired state: an official reconcile never rewrites the host
+ * file, so there would be no wrap change to defer (verified on Linux).
+ */
+function seedCustomBox(sandData: string): void {
+  writeFileSync(path.join(sandData, "openbot-mode"), "custom\n");
+  writeFileSync(
+    path.join(sandData, "openbot-plan.json"),
+    `${JSON.stringify({
+      kind: "custom",
+      catalog: {
+        providers: [
+          {
+            id: "fixture",
+            name: "Fixture",
+            origin: "https://example.invalid/v1",
+            maxTokensDefault: 65536,
+            mapFile: "provider-maps.cjs",
+          },
+        ],
+        models: [{ id: "fixture:m", providerId: "fixture", slug: "m", parameters: [] }],
+        bindings: [{ conversation: { kind: "wildcard" }, modelId: "fixture:m" }],
+      },
+    })}\n`,
+  );
+}
+
+function runCli(input: {
+  deployed: string;
+  args: string[];
+  hostMain: string;
+  sandData: string;
+  env?: NodeJS.ProcessEnv;
+  timeout?: number;
+}) {
+  return spawnSync(
+    "node",
+    [
+      "--experimental-strip-types",
+      path.join(input.deployed, "src", "cli.ts"),
+      ...input.args,
+      "--host-main",
+      input.hostMain,
+      "--sand-data",
+      input.sandData,
+    ],
+    { encoding: "utf8", timeout: input.timeout ?? 60_000, env: input.env ?? process.env },
+  );
 }
 
 function killPidFiles(files: string[]): void {

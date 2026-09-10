@@ -128,6 +128,8 @@ export type FinalizeHostOpts = {
   readonly stopQuietMs: number;
   readonly busyQuietMs: number;
   readonly maxWaitMs: number;
+  /** Nothing is applied while the marker is younger than this. */
+  readonly graceMs: number;
   readonly pollMs: number;
   readonly source?: string | undefined;
   /** Injected clock and sleeper for tests. */
@@ -157,6 +159,7 @@ export async function runFinalizeHost(
       stopQuietMs: opts.stopQuietMs,
       busyQuietMs: opts.busyQuietMs,
       maxWaitMs: opts.maxWaitMs,
+      graceMs: opts.graceMs,
       force: opts.force,
     });
     if (outcome.kind !== "idle-pending" || opts.once || now() - startedMs >= opts.maxWaitMs) {
@@ -225,6 +228,7 @@ async function main(argv: string[]): Promise<number> {
       stopQuietMs: parsed.command.stopQuietMs,
       busyQuietMs: parsed.command.busyQuietMs,
       maxWaitMs: parsed.command.maxWaitMs,
+      graceMs: parsed.command.graceMs,
       pollMs: parsed.command.pollMs,
       source: "cli:finalize-host",
     });

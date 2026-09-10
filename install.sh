@@ -563,7 +563,11 @@ if [[ "${1:-}" == "--bot-mode-worker" ]]; then
   BOT_TUNNEL_ERROR=""
   for BOT_ATTEMPT in 1 2 3; do
     bot_write_progress tunnel "Tunnel attempt ${BOT_ATTEMPT}/3."
-    if OPENBOT_TUNNEL=cloudflare node --experimental-strip-types src/cli.ts tunnel on --json >"$BOT_RESULT"; then
+    # --host-main/--sand-data are explicit like every other cli call in this
+    # file: the CLI defaults to /home/box/..., so a box installed anywhere
+    # else would have its tunnel reconcile refuse with host-missing.
+    if OPENBOT_TUNNEL=cloudflare node --experimental-strip-types src/cli.ts tunnel on --json \
+      --host-main "$HOST" --sand-data "$DATA" >"$BOT_RESULT"; then
       BOT_URL="$(node -e '
         const fs = require("fs");
         try {
@@ -621,6 +625,20 @@ if [[ "${1:-}" == "--bot-mode-worker" ]]; then
   BOT_PROGRESS_STAGE=qr BOT_PROGRESS_SUMMARY='Tunnel is ready; QR code generated.' bot_write_state success "$BOT_STARTED_AT" "$(bot_now)" "$BOT_URL" "$BOT_QR_PATH" "" "" qr 'Tunnel is ready; QR code generated.'
   BOT_WORKER_DONE=1
 
+  # Only promise a host restart when one is actually scheduled: with no wrap
+  # change (first install, official box, or an unchanged payload) the host file
+  # was not touched at all and saying otherwise would be wrong. "done" cannot
+  # come from this path (reconcile reports deferred or none here); it is kept
+  # for the same wording used by --bot-status.
+  BOT_BOUNCE_NOTE=""
+  case "${OPENBOT_HOST_BOUNCE:-disabled}" in
+    pending|done)
+      BOT_BOUNCE_NOTE=" The Grok Bot host restarts itself once it is idle; that restart is scheduled for after your turn, so your report is not interrupted and no rerun is needed."
+      ;;
+    *)
+      BOT_BOUNCE_NOTE=" This upgrade did not change the host file, so nothing restarts and no action is needed."
+      ;;
+  esac
   cat <<EOF
 
 ===== OPENBOT BOT RESULT =====
@@ -628,7 +646,7 @@ OPENBOT_URL=$BOT_URL
 OPENBOT_QR_PATH=$BOT_QR_PATH
 OPENBOT_COMMIT=$COMMIT
 OPENBOT_HOST_BOUNCE=${OPENBOT_HOST_BOUNCE:-disabled}
-OPENBOT_BOT_INSTRUCTION=OpenBot is installed (commit $COMMIT). Send OPENBOT_URL=$BOT_URL to the user and attach OPENBOT_QR_PATH=$BOT_QR_PATH as an image using the installed SendToUser tool; do not expose secrets. The Grok Bot host restarts itself once it is idle; that restart is scheduled for after your turn, so your report is not interrupted and no rerun is needed.
+OPENBOT_BOT_INSTRUCTION=OpenBot is installed (commit $COMMIT). Send OPENBOT_URL=$BOT_URL to the user and attach OPENBOT_QR_PATH=$BOT_QR_PATH as an image using the installed SendToUser tool; do not expose secrets.$BOT_BOUNCE_NOTE
 ===== END OPENBOT BOT RESULT =====
 EOF
 fi

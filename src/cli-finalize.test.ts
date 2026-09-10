@@ -5,7 +5,7 @@ import { payloadFingerprint } from "./host/payload-fingerprint.ts";
 import { parseInstallCommand } from "./parse/argv.ts";
 import { type FsDeps, type ProcDeps, parseOwnedPid } from "./supervisor/procs.ts";
 import { boxPathsFrom } from "./supervisor/paths.ts";
-import { armDeferredHostBounce, type HostBounce } from "./supervisor/reconcile.ts";
+import { DEFERRED_BOUNCE_GRACE_MS, armDeferredHostBounce, type HostBounce } from "./supervisor/reconcile.ts";
 import { printFinalizeOutcome, runFinalizeHost } from "./cli.ts";
 import { printResult } from "./cli/print.ts";
 
@@ -92,6 +92,7 @@ test("E1: finalize-host with no marker does nothing and says so", async () => {
     force: false,
     stopQuietMs: 1000,
     busyQuietMs: 1000,
+    graceMs: 1000,
     maxWaitMs: 5000,
     pollMs: 10,
   });
@@ -127,6 +128,7 @@ test("E2: finalize-host applies an idle bounce exactly once", async () => {
     force: false,
     stopQuietMs: 1000,
     busyQuietMs: 1000,
+    graceMs: 1000,
     maxWaitMs: 5000,
     pollMs: 10,
   });
@@ -145,6 +147,7 @@ test("E2b: a marker whose payload moved on is retired without a kill", async () 
     force: false,
     stopQuietMs: 1000,
     busyQuietMs: 1000,
+    graceMs: 1000,
     maxWaitMs: 5000,
     pollMs: 10,
   });
@@ -168,6 +171,7 @@ test("E3: finalize-host waits for the poll until the host is idle", async () => 
     force: false,
     stopQuietMs: 1000,
     busyQuietMs: 1000,
+    graceMs: 1000,
     maxWaitMs: 60_000,
     pollMs: 250,
     now: () => clock,
@@ -208,6 +212,7 @@ test("E3b: the loop polls until the lease goes quiet", async () => {
     force: false,
     stopQuietMs: 1000,
     busyQuietMs: 1000,
+    graceMs: 1000,
     maxWaitMs: 600_000,
     pollMs: 250,
     now: () => clock,
@@ -249,6 +254,7 @@ test("E3c: the loop gives up at max wait while a request is still in flight", as
     force: false,
     stopQuietMs: 1000,
     busyQuietMs: 1000,
+    graceMs: 1000,
     maxWaitMs: 3000,
     pollMs: 1000,
     now: () => clock,
@@ -274,6 +280,7 @@ test("E4: --once returns the held verdict without sleeping", async () => {
     force: false,
     stopQuietMs: 1000,
     busyQuietMs: 1000,
+    graceMs: 1000,
     maxWaitMs: 60_000,
     pollMs: 250,
     now: () => markerAt,
@@ -297,16 +304,41 @@ test("E5: the CLI parses finalize-host and its bot alias", () => {
   if (alias.command.kind !== "finalize-host") return;
   assert.equal(alias.command.once, true);
 
+  // The grace window defaults to 120 s and must stay there: it is what keeps
+  // the first guard tick after an install from applying on a stale lease.
+  assert.equal(plain.command.graceMs, DEFERRED_BOUNCE_GRACE_MS);
+  assert.equal(DEFERRED_BOUNCE_GRACE_MS, 120_000);
+
   const tuned = parseInstallCommand({
-    argv: ["finalize-host", "--wait-idle-ms", "1500", "--busy-wait-ms", "6000", "--max-wait-ms", "9000", "--poll-ms", "50", "--force"],
+    argv: [
+      "finalize-host",
+      "--wait-idle-ms",
+      "1500",
+      "--busy-wait-ms",
+      "6000",
+      "--max-wait-ms",
+      "9000",
+      "--grace-ms",
+      "700",
+      "--poll-ms",
+      "50",
+      "--force",
+    ],
     env: {},
     repoRoot: "/repo",
   });
   assert.equal(tuned.command.kind, "finalize-host");
   if (tuned.command.kind !== "finalize-host") return;
   assert.deepEqual(
-    [tuned.command.stopQuietMs, tuned.command.busyQuietMs, tuned.command.maxWaitMs, tuned.command.pollMs, tuned.command.force],
-    [1500, 6000, 9000, 50, true],
+    [
+      tuned.command.stopQuietMs,
+      tuned.command.busyQuietMs,
+      tuned.command.maxWaitMs,
+      tuned.command.graceMs,
+      tuned.command.pollMs,
+      tuned.command.force,
+    ],
+    [1500, 6000, 9000, 700, 50, true],
   );
 
   assert.throws(

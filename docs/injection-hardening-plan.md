@@ -11,7 +11,7 @@ OpenBot can successfully receive a POST /v1/chat/completions response and still 
 This plan adds a named, opt-in InjectionHardeningStrategy at the OpenBot hop boundary:
 
 - **L1 — before generation:** append the official reply-first/start-of-turn/silence/early-result reminders when the reconstructed ledger reaches the official thresholds.
-- **L2 — after generation:** the key patch for this incident. When a person-opened upstream run stops with no delivery tool call and the trusted host ledger says delivery is owed, append the exact §3.27 nudge and run the upstream once more in the same host request. Return the second response when it is valid; never manufacture a tool call.
+- **L2 — after generation:** the key patch for this incident. When a trusted person-opened upstream run ends with `finish_reason="stop"`, the first response contains **zero assistant `tool_calls` of any kind**, and the trusted host ledger says delivery is owed, append the exact §3.27 nudge and run the upstream once more in the same host request. This plan defines no provider-continuation protocol: a first response containing even a non-delivery tool call is ineligible. Return the second response when it is valid; never manufacture a tool call.
 - **L3 — between host requests (limited):** if the next request's history and a trusted host ledger prove that the preceding person-opened epoch is still owed, append a §3.27 or §3.28 nudge before sending the next upstream request. §3.29 idle/boot ack-redrive is explicitly out of scope; L3 must not claim to implement it.
 
 The strategy is deliberately outside toOpenAIMessages. That function remains a pure structural conversion. The strategy records an upstream assistant delivery call as **call-emitted**; it records **delivery-observed** only when a trusted host success event confirms delivery. It never maps leftover text to SendToUser, never forces finish_reason, and never claims delivery from plain text or a call alone.
@@ -94,7 +94,7 @@ OpenBot must preserve the same semantic split, while declaring which values the 
 
 ### 3.2 Seven injectors and order
 
-A person-opened turn is hidden !== true && isGroupMemberTurn !== true (official reminders, §4). The order is:
+A person-opened turn is positively established only by trusted host/transport metadata: hidden=false, requestSource="person" (or an explicitly allow-listed equivalent), isSubagent=false, isSilenceAllowed=false, routine/automation=false, and an explicit non-group chat type/flag. A trusted `chatType="group"` or group flag always excludes the request, even when `isGroupMemberTurn` is absent or false; missing or ambiguous required values fail closed. A visible-prompt/transcript regex is never an identity source (see §5.2 and §9.1). The order is:
 
 ~~~text
 opening assembly / first upstream run
@@ -258,8 +258,8 @@ The strategy may append a new model-visible canonical role: "user" suffix or app
 All layers require every gate below:
 
 1. Configuration mode is enforce (or dry-run for observation only).
-2. The request is positively identified as a person-opened turn: not hidden, not a subagent, not isSilenceAllowed, not a routine/automation wake, and not a group-member turn. Every identity/turn flag must be explicit and trusted; if any required flag is missing or ambiguous, fail closed and skip rather than inferring a person turn.
-3. botId is required and non-empty. An empty or missing botId, including the 17:45:50 memory call, is unconditionally ineligible; a trusted conversation record or other inferred flag may not override this. The ledger key must contain a trusted conversationId + botId + host-supplied epoch when the selected layer needs epoch state.
+2. The request must carry an authenticated host/transport context with explicit hidden, requestSource, isSubagent, isSilenceAllowed, routine/automation, chatType, and group-state fields. A person-opened turn requires hidden=false, requestSource="person" (or an explicitly allow-listed equivalent), isSubagent=false, isSilenceAllowed=false, routine/automation=false, and a trusted non-group chat type/flag. `chatType="group"` or any trusted group flag is always excluded, even if `isGroupMemberTurn` is omitted or false; missing or ambiguous required values fail closed and skip rather than inferring a person turn. No value may be extracted from visible prompt/transcript text with a regex.
+3. botId and conversationId are required non-empty opaque values from that same trusted host/transport context. An empty or missing botId, including the 17:45:50 memory call, is unconditionally ineligible; a prompt-derived or otherwise inferred identity may not override this. The ledger key must contain trusted conversationId + botId + host-supplied epoch when the selected layer needs epoch state.
 4. For predicates that use delivery or completion state, the required host ledger fields must be explicitly observed under the contract in §9.1. Unknown is not zero/false: missing or ambiguous state fails closed and skips that layer.
 5. The client response has not received headers/body bytes before a possible L2 decision.
 6. A per-conversation/epoch turn lease prevents two concurrent requests from injecting the same epoch.
@@ -291,7 +291,7 @@ In dry-run, L1 computes the same family, body, position, and fingerprint, but do
 
 ## 7. L2 — post-generation same-request remediation
 
-L2 is the key patch for the incident and is a **bounded gateway-side analogue** of §3.27, with the explicit no-call/host-error tightening documented in §7.1 rather than a claim of full official equivalence. It is deliberately a second model run, not response post-processing.
+L2 is the key patch for the incident and is a **bounded gateway-side analogue** of §3.27, with a strict zero-tool-call first-response guard rather than a claim of full official equivalence. This plan deliberately defines no provider-continuation protocol: L2 never retries a first response that contains any `tool_calls`, including non-delivery calls. It is a second model run, not response post-processing.
 
 ### 7.1 Eligibility
 
@@ -299,9 +299,10 @@ After the first upstream response is fully classified, L2 is eligible only when 
 
 1. The request passed the common person-opened gate.
 2. The upstream transport response is successful and every relevant choice terminates with finish_reason="stop" (for a non-stream JSON response, the choice has that value; for SSE, the terminal chunk is buffered and classified). “Successful” here describes transport/status, not delivery.
-3. Either (a) the incident path has **no assistant delivery tool call emitted** in any choice/chunk (no SendToUser, SendMessage, or ReactToMessage), or (b) the explicit failed-delivery path has delivery calls whose outcome is `delivery-error-observed` for every emitted call. An unknown or merely presumed-failed call is not silently treated as no-call. Path (a) is an explicit tightening of the gateway incident guard relative to official §3.27; path (b) covers the official owed semantics only when the trusted host contract supplies the failure evidence, otherwise it skips.
+3. The normalized first response has **zero assistant `tool_calls` in every choice/chunk**—delivery and non-delivery alike. Any tool-call entry disqualifies L2, even if it is a non-delivery call or a later event suggests it failed. No provider-continuation protocol is defined here; a future relaxation must specify who executes each first-run tool, how its result is authenticated and paired back into the second request, and how duplicate/non-idempotent side effects are prevented. Until that protocol exists, this is fail-closed.
 4. The current epoch has an explicit trusted ledger state `deliveryOwed=true`, meaning `sentMessageCount === 0 && reacted === false` was observed from the host contract. Lack of a tool call alone is not proof of either counter; unknown state fails closed.
-5. No L2 attempt has been used for this epoch/request, the client is still connected, the remaining retry budget is positive, and the first-run context can be reconstructed completely (including every observed tool result for any first-run tool call).
+5. The provider protocol is supported for same-request L2: this plan enables L2 only for chat-completions with a host-boundary response capture; Responses and Anthropic requests skip L2 (see §7.3).
+6. No L2 attempt has been used for this epoch/request, the client is still connected, the remaining retry budget is positive, and the first-run context can be reconstructed completely.
 
 A plain response body is evidence of an owed turn, not a deliverable. Do not inspect its text and do not convert it into a tool call.
 
@@ -312,34 +313,38 @@ baseMessages = canonical messages after L1/L3, before provider conversion
 first = upstream(providerPayload(baseMessages))
 classify first without sending bytes to host
 if eligible(first) and mode == enforce:
-    firstContext = canonicalize the selected first assistant output
-    if any first-run tool call lacks its observed tool result:
-        return first unchanged and mark classification-skipped
+    # eligible(first) proves the normalized first response has zero tool_calls
+    firstAssistant = canonicalize the selected plain assistant output
     secondMessages = baseMessages
-        + firstContext.assistantMessages       # text and/or tool_calls, in order
-        + firstContext.observedToolResultMessages
+        + firstAssistant                         # text only; no tool_calls
         + [{ role: "user",
              content: "[SAND_HIDDEN_PROMPT]" + exact §3.27 body }]
     preflight token/cost quotas and derive a bounded provider request
     second = upstream(providerPayload(secondMessages, bounded L2 parameters))
     if second is a valid response:
         return second to host
-    return first using its captured raw response metadata/bytes  # failure fallback
+    return first from the captured host-boundary response snapshot  # failure fallback
 else:
     return first unchanged
 ~~~
 
-The second request is built from a **complete canonical conversation**, not from `clone(body)` plus a reminder. It keeps the original model, tools, tool definitions, stream flag, and provider options unless an explicit L2 token/cost cap below lowers the output limit. It appends the first response's assistant message exactly (including plain text and any emitted tool_calls) and, when tool calls occurred, every corresponding tool-result message/event observed in this turn in their original order. If a required result is unavailable, L2 skips rather than inventing a result. Only after that context is complete does it append one new canonical `role: "user"` message whose content is the official hidden form **`[SAND_HIDDEN_PROMPT]` immediately concatenated with the exact §3.27 body**; no extra newline is inserted between marker and body. This is the `hidden: true → [SAND_HIDDEN_PROMPT] prepended` semantics from the read-only official catalog. The request must not remove earlier assistant text, invent a tool_calls array or tool result, set finish_reason, or change sentMessageCount locally. The second upstream response is the only candidate returned to the host in the success path, so the host never sees both responses as two assistant turns.
+The second request is built from a **complete canonical conversation**, not from `clone(body)` plus a reminder. It keeps the original model, tools, tool definitions, stream flag, and provider options unless an explicit L2 token/cost cap below lowers the output limit. The base context already contains the prior transcript and any paired historical tool results; the selected first response is appended exactly as a plain assistant message because the zero-tool-call gate has passed. If a tool call appears in any first-response choice/chunk during classification, return the first response unchanged, set `l2Eligible=false`, and record `skipReason=first_tool_call`—do not attempt to reconstruct or replay that run. Only after the complete context is assembled does the gateway append one new canonical `role: "user"` message whose content is the official hidden form **`[SAND_HIDDEN_PROMPT]` immediately concatenated with the exact §3.27 body**; no extra newline is inserted between marker and body. This is the `hidden: true → [SAND_HIDDEN_PROMPT] prepended` semantics from the read-only official catalog. The request must not remove earlier assistant text, invent a tool_calls array or tool result, set finish_reason, or change sentMessageCount locally. The second upstream response is the only candidate returned to the host in the success path, so the host never sees both responses as two assistant turns.
 
-For dry-run, classify and log the same eligibility but never send the second request. For off, preserve today's single request exactly.
+For dry-run, classify only through the non-blocking tee described in §7.3 and log the same eligible/skip result when available; never send the second request or use the enforce full-response buffer. If non-blocking classification is unavailable, record `classificationSkippedReason` and continue unchanged. For off, preserve today's single request exactly.
 
-### 7.3 Streaming handling
+### 7.3 Streaming, protocol scope, and host-boundary fallback
 
-A streamed first response is intercepted before any client write. The upstream client must disable automatic decompression; capture its **raw body bytes** (without JSON/SSE re-serialization), status code, and response headers while waiting for the terminal chunk. The in-memory buffer has a configured hard ceiling (maxBufferedResponseBytes, default 4 MiB). If parsing, the client, or the first-run deadline prevents classification while the complete captured response is available, replay that first response's captured metadata and bytes and log classificationSkipped; if the client is already closed, cancel and return the existing transport error.
+The L2 fallback snapshot is a **host-boundary artifact**, never provider-original bytes. For an L2-supported request, capture the exact bytes that the host would receive **after** provider-response normalization/conversion and host serialization, together with the host-visible status and end-to-end headers, immediately before the first byte is written. The snapshot is `{ hostBodyBytes, status, headers }`; it must not be reconstructed by parsing and re-serializing a provider body. If an adapter cannot expose this post-conversion host boundary, L2 is unsupported for that adapter and is skipped before buffering.
 
-If the byte ceiling is reached, this is not a recoverable buffered fallback: immediately switch to raw pass-through, flush the already buffered bytes, pipe the remaining upstream bytes unchanged, set l2Suppressed=buffer_overflow for this response/epoch, and **permanently skip L2 for it**. Never send a partial first stream and then append a second stream. The pass-through/replay response must use the first upstream status and its end-to-end headers; preserve Content-Type, Content-Encoding, and a valid original Content-Length only when the body bytes are unmodified and the length is known. Transfer-Encoding and other hop-by-hop framing headers are proxy-owned: remove the incoming Transfer-Encoding (and Connection/Keep-Alive/TE/Upgrade family) and let the server choose framing, never sending both Content-Length and Transfer-Encoding. Do not recalculate or reuse second-response headers for a first-response fallback.
+This plan enables same-request L2 only for the `chat-completions` protocol. Requests using `Responses` or `Anthropic` adapters skip L2 before a response buffer is allocated, with `l2Eligible=false`, `skipReason=protocol_unsupported`, no second upstream request, and ordinary pass-through of the host contract. L1/L3 canonical-message behavior may still be evaluated independently for those protocols; this L2 restriction prevents a `chatToResponses`/`chatToAnthropic` conversion from being mistaken for a host response byte contract.
 
-If the first stream is eligible, send no first-stream bytes to the host and run the second upstream request. On a valid second response, forward only that second response with its own status/headers and the original stream contract. On a second-run failure, replay the captured first response byte-for-byte at the body level with its captured status/header policy. This preserves the host's one-response expectation at the cost of first-token latency only for L2 candidates.
+For `chat-completions` JSON, classify the normalized first response while the host-boundary serializer produces the response snapshot. For `chat-completions` SSE, the adapter must expose the **converted host-visible SSE bytes/events** to the capture layer; do not capture provider SSE and later replay it as if it were host SSE. In enforce mode, hold those host-boundary bytes until the terminal event is classified, subject to `maxBufferedResponseBytes` (default 4 MiB). If parsing, conversion, the client, or the first-run deadline prevents classification while a complete host snapshot is available, replay that snapshot with its captured status/headers and log `classificationSkippedReason`; if the client is already closed, cancel and return the existing transport error.
+
+If the host-boundary byte ceiling is reached, this is not a recoverable buffered fallback: immediately switch to host-boundary pass-through, flush the buffered host-visible prefix, pipe the remaining **converted host-visible** bytes unchanged, set `l2Suppressed=buffer_overflow` and `skipReason=buffer_overflow` for this response/epoch, and **permanently skip L2 for it**. Never send a partial first stream and then append a second stream. The pass-through/replay response uses the first host-boundary status and end-to-end headers; preserve Content-Type and Content-Encoding, and preserve Content-Length only when the unmodified host bytes and length are known. Transfer-Encoding and other hop-by-hop framing headers are proxy-owned: remove Transfer-Encoding and the Connection/Keep-Alive/TE/Upgrade family and let the server choose framing, never sending both Content-Length and Transfer-Encoding. Do not recalculate or reuse second-response headers for a first-response fallback.
+
+If the first `chat-completions` response is eligible, send no first-response bytes to the host and run the second upstream request. On a valid second response, forward only its host-boundary bytes with its own valid status/headers and the original stream contract. On a second-run failure, replay the captured **first host-boundary** bytes, status, and headers. This preserves the host's one-response expectation at the cost of first-token latency only for eligible chat-completions L2 candidates.
+
+Dry-run never enters the enforce full-response buffer. It tees the host-boundary stream to the host immediately and performs only incremental, best-effort classification (bounded parser state/counters, at most 64 KiB; `bufferedBytes=0`), so it does not block, mutate the request, issue a second call, or change first-token/stream latency; its overhead is O(1) CPU per chunk and at most 64 KiB of classification state. If a provider adapter cannot expose a non-blocking normalized event stream, dry-run records `classificationSkippedReason=non_blocking_adapter`, performs no buffering, and leaves L2 observation for that adapter disabled by default. The first-response hash, when available, is computed from the host-boundary bytes rather than provider-original bytes.
 
 ### 7.4 Bounds, timeout, and failure
 
@@ -348,13 +353,13 @@ If the first stream is eligible, send no first-stream bytes to the host and run 
 - Before dispatch, estimate the complete second prompt (including the first assistant output, tool results, and nudge). If it exceeds maxAdditionalPromptTokens, abandon L2 and replay the first response. Set the provider's max_tokens/max_completion_tokens to no more than maxAdditionalCompletionTokens; if the adapter cannot enforce an output cap, skip L2 rather than issue an unbounded run.
 - Reserve a worst-case cost for the second run from maxAdditionalCostUsd using configured model rates and the prompt/output caps. If the rate or reservation is unavailable, fail closed; actual usage/cost is recorded after the run, and any over-quota result disables further remediation for the epoch. These token and cost limits are independent of maxAdditionalRuns.
 - One in-flight L2 attempt per conversation/epoch. Client close cancels the active second request.
-- A non-2xx response, timeout, network error, parse/conversion error, or exhausted deadline/quota is a remediation failure: replay the first response with its captured raw metadata/bytes and mark the epoch unresolved. Buffer overflow follows the immediate pass-through rule above, suppresses L2 permanently for this response/epoch, and is not retried.
+- A non-2xx response, timeout, network error, parse/conversion error, or exhausted deadline/quota is a remediation failure: replay the first response with its captured **host-boundary** status/headers/bytes and mark the epoch unresolved. Buffer overflow follows the immediate host-boundary pass-through rule above, suppresses L2 permanently for this response/epoch, and is not retried.
 - A valid second response that still has no delivery tool call is final. Do not run a third call from L2 or select an L3 nudge for this same epoch/tail; set finalNoTool=true and retryExhausted=true. The gateway still must not forge delivery. A later real user message starts a new epoch but does not resurrect this final-no-tool obligation.
 - Transport retries (existing 429/5xx policy) remain separate and are included in the total deadline. They must not multiply the L2 limit.
 
 ### 7.5 Exact body and outcome observability
 
-The request record must distinguish l2Eligible, l2Attempted, l2Outcome (call-emitted, delivery-observed, valid-no-tool, failed-first-fallback, classification-skipped), l2AdditionalRuns, l2AddedLatencyMs, token/cost reservation and actual usage, and l2BodyHash. **call-emitted** means the normalized second upstream response contains a delivery tool call; it does not prove that the host invoked or delivered it. **delivery-observed** is allowed only after the trusted host event contract confirms a successful delivery, and may arrive as a later ledger update. Missing host confirmation remains unknown/fail-closed, not delivered. The body hash is a diagnostic fingerprint; it is not a provider message and must not contain secrets or full prompt text.
+The request record must distinguish l2Eligible, l2Attempted, l2Outcome (call-emitted, delivery-observed, valid-no-tool, failed-first-fallback, classification-skipped), l2AdditionalRuns, l2AddedLatencyMs, token/cost reservation and actual usage, and `l2BodyHash`. **call-emitted** means the normalized second upstream response contains a delivery tool call; it does not prove that the host invoked or delivered it. **delivery-observed** is allowed only after the trusted host event contract confirms a successful delivery, and may arrive as a later ledger update. Missing host confirmation remains unknown/fail-closed, not delivered. `l2BodyHash` is a diagnostic hash of the host-boundary body selected/returned by the L2 path (never provider-original bytes, a prompt, or a secret); it is omitted when no such body exists.
 
 ## 8. L3 — between-turn safety net
 
@@ -366,7 +371,7 @@ L3 covers the case where the gateway cannot keep a same-request L2 run alive, bu
 
 On the next eligible host request, at the fixed canonical-message stage (after structural conversion and before provider payload conversion), inspect the historical tail for the immediately preceding **trusted** person-opened epoch:
 
-- **Plain/stop owed tail:** the previous epoch ended with finish_reason="stop" and no delivery tool call emitted, and the trusted host ledger explicitly states deliveryOwed=true (`sentMessageCount === 0 && reacted === false`). Append one new canonical `role: "user"` message whose content is **`[SAND_HIDDEN_PROMPT]` immediately followed by** the exact §3.27 body; do not insert a newline. A missing ledger snapshot is unknown and skips L3. A tail with an emitted delivery call is not this no-call form; it is eligible only when every such call has an explicit delivery-error-observed event, under the same tightened failed-delivery rule as L2.
+- **Plain/stop owed tail:** the previous epoch ended with finish_reason="stop" and no delivery tool call emitted, and the trusted host ledger explicitly states deliveryOwed=true (`sentMessageCount === 0 && reacted === false`). Append one new canonical `role: "user"` message whose content is **`[SAND_HIDDEN_PROMPT]` immediately followed by** the exact §3.27 body; do not insert a newline. A missing ledger snapshot is unknown and skips L3. A tail with an emitted delivery call is not this no-call form; L3 may consider that separate historical failed-delivery shape only when every such call has an explicit `delivery-error-observed` event. This L3 rule does not relax L2's zero-tool-call first-response gate.
 - **Ack + silent-tools tail:** select this family only when the trusted host contract supplies the official §3.28 facts: the first assistant tool-call message had a text delivery acknowledgement, later non-delivery tools ran, every later delivery call is explicitly reported as errored, the tail ended on non-delivery tools, and `awaitingUserSelection` is false/absent and `completionReason` is not `"send_to_user_end_turn"`. Append the same canonical user message with `[SAND_HIDDEN_PROMPT]` directly concatenated to the exact §3.28 body. Any missing/ambiguous fact skips; a call-emitted signal alone is insufficient.
 
 The selector uses normalized chat/Responses/Anthropic events, not provider-specific raw shapes. If the tail is only a memory/summary lane, botId is empty/missing, any identity flag is untrusted, the turn is hidden/routine/subagent/group, the host epoch is unavailable, or a newer real user message supersedes the old obligation, skip L3. A tail marked `finalNoTool=true` by an exhausted L2 valid-no-tool response is also ineligible: this is the final-no-tool suppression rule and prevents L3 from selecting §3.27 again for the same epoch.
@@ -379,25 +384,38 @@ The selector uses normalized chat/Responses/Anthropic events, not provider-speci
 - Default maxRedrivesPerEpoch=1, hard maximum 3, and default obligation TTL 300,000 ms (5 minutes). Once the cap is reached or TTL expires, mark unresolved and wait for a new trusted real-user epoch; do not nag every request forever.
 - Only an explicit host `delivery-observed` event (successful send-message or react-to-message) clears the obligation and fingerprint. A gateway-visible `call-emitted` signal is not success. If the host event is absent or ambiguous, keep the state unknown and fail closed rather than redrive or claim owed/cleared.
 - A new trusted real-user epoch clears the old L3 budget. It does not resurrect a `finalNoTool` tail from the prior epoch; that suppression lasts for that exact epoch/tail.
-- In dry-run, record the selected family and would-be suffix only. In off mode, the next request is byte-for-byte unchanged.
+- In dry-run, record the selected family and would-be suffix only through the non-blocking observation path in §7.3; never use the enforce full SSE buffer or change first-token latency. In off mode, the next request is byte-for-byte unchanged.
 ## 9. Ledger implementation
 
 ### 9.1 Canonical per-request observation
 
+**Identity trust root.** The only trusted source for identity and turn gates is an authenticated host/transport context, never visible prompt or transcript text. The implementation must provide a host-generated, request-bound `HostRequestContext v1`; one concrete wire shape is a signed/encrypted metadata envelope in `x-openbot-host-context` with a matching `x-openbot-host-context-signature` (an equivalent in-process typed context is acceptable). The gateway must reject client-controlled or unsigned copies of these headers/body fields. The envelope contains:
+
+~~~text
+HostRequestContext v1 {
+  requestId, conversationId, botId, epochId
+  hidden, requestSource, isSubagent, isSilenceAllowed, isRoutine
+  chatType, isGroupMemberTurn?, groupFlag?
+  auth: { keyId, signature } | inProcessHostBinding
+}
+~~~
+
+`conversationId`, `botId`, and the host-supplied `epochId` (when the selected layer needs epoch state) are non-empty opaque identifiers. `requestSource` is an explicit allow-listed value such as `person`, `subagent`, `memory`, `routine`, or `automation`; `chatType` must be an explicit trusted non-group value (for example `dm`) to enter a person gate. `chatType="group"` or `groupFlag=true` always skips, regardless of `isGroupMemberTurn`; absent/unknown/ambiguous identity or group fields skip. A value parsed from `messages[].content`, a visible prompt, a model response, a reminder body, or a regex over any of them is data only and can never establish `botId`, `conversationId`, epoch, person status, or non-group status.
+
 The gateway can directly observe the normalized upstream response and the assistant's emitted tool calls. It normally cannot observe the official host's successful `send-message` update, successful reaction, every errored delivery call, `awaitingUserSelection`, or `completionReason`. Those signals must never be inferred from plain text, a tool-call name, an HTTP 200, or a provider `role: tool` result.
 
-Use a versioned, request/epoch-bound host event contract for any state that the hop cannot see itself. The transport may be an authenticated hop metadata envelope or side channel, but never user/model content; the gateway accepts only events bound to the current request, non-empty botId, and trusted epoch. The host emits only after its own operation reaches the stated phase:
+Use a versioned, request/epoch-bound host event contract for any state that the hop cannot see itself. The transport must use the authenticated `HostRequestContext v1` trust root above (or an equivalent in-process binding), never user/model content; the gateway accepts only events bound to the current request, non-empty trusted conversationId/botId, and trusted epoch. Unsigned/client-supplied event fields are unknown and fail closed. The host emits only after its own operation reaches the stated phase:
 
 ~~~text
 HostDeliveryEvent v1 {
-  eventId, conversationId, botId, epochId, sequence
+  eventId, requestId, conversationId, botId, epochId, sequence, observedAt
   kind: "delivery-observed" | "delivery-error-observed" | "turn-state"
   toolCallId, toolName, deliveryType?
   sentMessageCount?, reacted?, awaitingUserSelection?, completionReason?
 }
 ~~~
 
-- `delivery-observed` is a host-confirmed successful `send-message` or `react-to-message` update. It, or an explicit corresponding field in a trusted `turn-state` snapshot, may set `sentMessageCount`/`reacted` to a known value; a `ReactToMessage` success sets `reacted=true`, while SendToUser/SendMessage success updates the count according to the official accounting. Fields not supplied by either trusted event form remain "unknown".
+- `delivery-observed` is a host-confirmed successful `send-message` or `react-to-message` update. Its required `observedAt` is the host operation-completion timestamp and is copied into `deliveryObservedAt`; gateway receipt time is diagnostic only and cannot replace it. The event, or an explicit corresponding field in a trusted `turn-state` snapshot, may set `sentMessageCount`/`reacted` to a known value; a `ReactToMessage` success sets `reacted=true`, while SendToUser/SendMessage success updates the count according to the official accounting. Fields not supplied by either trusted event form remain "unknown".
 - `delivery-error-observed` is an explicit host error tied to a particular emitted delivery call. A missing error event does not mean the call failed.
 - `turn-state` may carry a host snapshot of `sentMessageCount`, `reacted`, `awaitingUserSelection`, and `completionReason`, but each field is independently optional and unknown when absent. The event must be authenticated/paired with the request and trusted epoch; user-supplied metadata is not sufficient.
 - The gateway itself records `call-emitted` whenever normalized assistant `tool_calls` contains SendToUser, SendMessage, or ReactToMessage. `call-emitted` means only that the model asked for the call; it is distinct from `delivery-observed` and never proves host execution or success.
@@ -430,12 +448,12 @@ For a host transcript, walk assistant tool_calls and their paired role: "tool" r
 
 ### 9.2 Turn and epoch boundary
 
-Key state only by a trusted conversationId + non-empty botId + host-supplied epoch id. There is no local fallback epoch. A trusted host user-message id may serve as the epoch boundary only when the contract explicitly defines it that way; a locally generated transcript hash is a deduplication fingerprint, never an epoch. Define and reuse the epoch as follows:
+Key state only by the authenticated host/transport `conversationId` + non-empty `botId` + host-supplied epoch id. There is no local fallback epoch and no prompt/transcript-regex fallback for any of these values. A trusted host user-message id may serve as the epoch boundary only when the contract explicitly defines it that way; a locally generated transcript hash is a deduplication fingerprint, never an epoch. Define and reuse the epoch as follows:
 
 1. An explicit trusted host turn/epoch id, or a host user-message id explicitly designated as an epoch boundary, creates the new epoch.
 2. If the request has a real user message but no trusted epoch id, the gateway may recognize that a boundary is ambiguous, but it must not assign an epoch; skip L1/L2/L3 rather than create one from content.
 3. A repeated request containing the same trusted epoch and real-user tail with only additional assistant/tool rows is the same epoch.
-4. A hidden marker, exact policy body, memory/summary row, or botId-empty routine row never creates a person-opened epoch. Missing/ambiguous identity flags also never do so.
+4. A hidden marker, exact policy body, memory/summary row, botId-empty routine row, visible-prompt regex match, or model-generated identity string never creates a person-opened epoch. Missing/ambiguous identity or group fields also never do so.
 5. On process restart, rebuild state only from a trusted epoch/event in the transcript tail; do not persist raw user content solely for the ledger. If no safe trusted boundary can be proven, skip L1/L2/L3.
 
 Maintain a bounded in-memory state/lease map keyed by the trusted conversation, bot, and epoch with counts, host-event sequence, silent-streak id, fingerprints, finalNoTool flag, L2/L3 budgets, and last-seen timestamp. Rehydrate only from trusted host state; eviction must not invent an epoch or turn unknown into owed. Use an atomic per-key lease around L2 so two host requests cannot both send a remediation run.
@@ -476,12 +494,12 @@ toOpenAIMessages remains a pure role/content/tool-result conversion. It must not
 - Exact-last-message and per-epoch fingerprints make repeated HTTP retries idempotent.
 - L1 has one reminder per silent streak; L2 has at most two additional runs by hard policy; L3 has at most three redrives by hard policy.
 - Respect client disconnects, upstream deadlines, response-buffer ceilings, token/cost quotas, finalNoTool suppression, and a per-conversation/epoch lease.
-- The first response is never discarded on an L2 failure; it is replayed from captured raw body bytes with its captured status/header policy (or immediate raw pass-through on buffer overflow).
+- The first response is never discarded on an L2 failure; for the chat-completions path it is replayed from captured **host-boundary** body bytes with its captured host-visible status/header policy (or immediate host-boundary pass-through on buffer overflow). Protocols without that capture skip L2 before buffering.
 - Do not store full prompt/response bodies merely to explain an injection. Reuse existing redaction and body-capture settings; hashes and bounded counters are sufficient.
 
 ### 10.4 Cache, latency, and cost
 
-All additions are suffixes, keeping the large prefix eligible for provider caching. The incident's 82816/84530 cached-token ratio is the baseline to monitor. L2 intentionally spends one extra model call only on a proven owed stop response, but it must preflight and reserve maxAdditionalPromptTokens, maxAdditionalCompletionTokens, and maxAdditionalCostUsd; exceeding any cap abandons L2 before dispatch. Logs must report estimated/actual prompt and completion tokens, reserved/actual cost, wall-clock delta, and cache-hit changes. Roll out with dry-run before enforce to establish eligible rate and expected spend; a second run must never inherit an unbounded original max_tokens setting.
+All additions are suffixes, keeping the large prefix eligible for provider caching. The incident's 82816/84530 cached-token ratio is the baseline to monitor. L2 intentionally spends one extra model call only on a proven owed stop response, but it must preflight and reserve maxAdditionalPromptTokens, maxAdditionalCompletionTokens, and maxAdditionalCostUsd; exceeding any cap abandons L2 before dispatch. Logs must report estimated/actual prompt and completion tokens, reserved/actual cost, wall-clock delta, and cache-hit changes. Roll out with dry-run before enforce to establish eligible rate and expected spend; a second run must never inherit an unbounded original max_tokens setting. Dry-run is observation-only: it must tee and classify without blocking, mutating requests, full-buffering SSE, or changing first-token latency; when a provider cannot support that non-blocking path, classification is skipped with a reason and the adapter remains off by default.
 
 ### 10.5 Logging and control-page visibility
 
@@ -491,23 +509,33 @@ Extend the hop request metadata (not provider payload) with:
 injectionMode
 injectionFamilies[]          # l1.reply-first, l1.start-ack, l1.silence, l1.early-result,
                              # l2.reply-nudge, l3.reply-nudge, l3.closing-send
+identityGateResult            # pass | fail; source is authenticated host/transport context
+skipReason                    # stable reason enum; absent only when no gate skipped
+classificationSkippedReason   # stable reason for incomplete/non-blocking classification
 injectionEpoch                # trusted host epoch only; otherwise omitted/skip
 injectionFingerprint
 injectionWouldApply
+l2SupportedProtocol           # chat-completions | responses | anthropic | unknown
 l2Eligible / l2Attempted / l2Outcome / l2AdditionalRuns
 l2AddedLatencyMs
 l2PromptTokensEstimated / l2CompletionTokenCap
 l2CostReservedUsd / l2PromptTokensActual / l2CompletionTokensActual / l2CostActualUsd
-deliveryCallsEmitted[]       # gateway-visible call-emitted records
-deliveryObserved[]           # trusted host delivery-observed event ids
-deliveryErrorsObserved[]    # trusted host delivery-error-observed event ids
+bufferedBytes                 # host-boundary bytes held; 0 for dry-run tee/pass-through
+firstResponseHash             # hash of first host-boundary response bytes, never provider-original bytes
+l2BodyHash                    # hash of host-boundary body selected/returned by L2
+deliveryCallsEmitted[]        # gateway-visible call-emitted records
+deliveryObserved[]            # trusted host delivery-observed event ids
+deliveryObservedAt[]          # trusted host observedAt timestamps, paired by event id
+deliveryErrorsObserved[]      # trusted host delivery-error-observed event ids
 ledgerSentMessageCount / ledgerReacted   # known values or unknown
 ledgerOwedAtStart / ledgerOwedAtEnd     # true/false only from explicit host state; otherwise unknown
 awaitingUserSelection / completionReason # only when supplied by trusted host event
 finalNoTool / l2Suppressed
 ~~~
 
-Only bounded names, booleans, numbers, ids, hashes, and explicit host event ids are logged by default. The control page should show the family and outcome beside the paired custom-host/hop rows. `deliveryCallsEmitted`/`call-emitted` is gateway observation; `deliveryObserved`/`delivery-observed` is host-confirmed success. When openbot-logs.json body capture is disabled, these fields must still be available as metadata; no key or full prompt is exposed. `ledgerOwedAtStart`/`ledgerOwedAtEnd`, `awaitingUserSelection`, and `completionReason` must remain unknown/omitted unless the trusted host contract supplies them; never render an inferred boolean. Add counters/events for injection.would_apply, injection.applied, injection.suppressed_duplicate, injection.l2_fallback, injection.unresolved, delivery.call_emitted, delivery.observed, and delivery.unknown.
+Only bounded names, booleans, numbers, ids, hashes, timestamps, and explicit host event ids are logged by default. `identityGateResult` is the result of the host/transport metadata gate; `skipReason` is a stable, cardinality-bounded enum such as `no_bot_id`, `missing_conversation_id`, `missing_epoch`, `unknown_identity`, `non_person`, `group_chat`, `protocol_unsupported`, `first_tool_call`, `buffer_overflow`, `budget_prompt`, `budget_completion`, `budget_cost`, `client_closed`, or `lease_busy`. `classificationSkippedReason` is separate and covers parser/conversion/deadline cases such as `parse_error`, `parser_incomplete`, `parser_overflow`, `non_blocking_adapter`, and `classification_deadline`; it must not be collapsed into an identity skip. `bufferedBytes` is the actual host-boundary byte count held for enforce classification (zero for dry-run tee and immediate pass-through). `firstResponseHash` and `l2BodyHash` are hashes of host-boundary bytes only, never provider-original bytes, prompt text, or secrets. `deliveryObservedAt` contains the trusted host event's `observedAt` timestamp, not an inferred gateway time.
+
+The control page should show the identity result, skip/classification reason, family, and outcome beside the paired custom-host/hop rows. `deliveryCallsEmitted`/`call-emitted` is gateway observation; `deliveryObserved`/`delivery-observed` is host-confirmed success. When openbot-logs.json body capture is disabled, these fields must still be available as metadata; no key or full prompt is exposed. `ledgerOwedAtStart`/`ledgerOwedAtEnd`, `awaitingUserSelection`, and `completionReason` must remain unknown/omitted unless the trusted host contract supplies them; never render an inferred boolean. Add counters/events for `injection.would_apply`, `injection.applied`, `injection.suppressed_duplicate`, `injection.skipped{skipReason}`, `injection.classification_skipped{classificationSkippedReason}`, `injection.buffer_overflow`, `injection.budget_exceeded`, `injection.l2_fallback`, `injection.unresolved`, `delivery.call_emitted`, `delivery.observed` (including `observedAt`), and `delivery.unknown`.
 
 ### 10.6 Gray rollout and rollback
 
@@ -570,7 +598,7 @@ Effective defaults and validation limits:
 | l1.earlyResultThreshold | 0 | Integer at least 0; default matches §3.23. |
 | l2.maxAdditionalRuns | 1 | Integer 0..2; implementation hard cap is 2. |
 | l2.timeoutMs | 15000 | 1000..30000; also bounded by the existing request deadline. |
-| l2.maxBufferedResponseBytes | 4194304 | 262144..8388608; on overflow immediately pass through raw bytes and permanently suppress L2 for that response/epoch. |
+| l2.maxBufferedResponseBytes | 4194304 | 262144..8388608; chat-completions host-boundary bytes only; on overflow immediately pass through converted host bytes and permanently suppress L2 for that response/epoch. Responses/Anthropic skip L2 before buffering. |
 | l2.maxAdditionalPromptTokens | 131072 | Integer 8192..262144; total estimated prompt tokens for the additional run, including the complete first-run context and nudge. Over limit skips L2. |
 | l2.maxAdditionalCompletionTokens | 2048 | Integer 128..16384; hard cap for the additional run's max_tokens/max_completion_tokens. |
 | l2.maxAdditionalCostUsd | 0.10 | Number 0..10; reserve worst-case prompt + completion cost using configured model rates; unknown rate or over limit skips L2. |
@@ -601,26 +629,30 @@ No product code is changed in this documentation PR. The implementation PR must 
 
 1. **Ledger contract and predicates:** successful text SendToUser, widget SendToUser, SendMessage, ReactToMessage, explicit delivery errors, plain text, and missing host events; assert independent call-emitted, delivery-observed, delivery-error-observed, sentMessageCount, reacted, text-ack, and unknown states. isDeliveryOwed may be true/false only when the trusted host fields are known.
 2. **Tool normalization:** canonical names and JSON/SSE/Responses/Anthropic shapes; never count a string in assistant content as a call, and never promote a provider tool result to delivery-observed without the host event contract.
-3. **Identity and boundary detection:** trusted botId/conversationId/epoch, missing or empty botId (always skip), every missing/ambiguous identity flag (skip), hidden marker, injected reminder, routine/memory row, opening row that cannot be identified (skip rather than append), new trusted user epoch, and same-epoch tool continuation.
+3. **Identity and boundary detection:** accept only authenticated HostRequestContext/transport metadata for botId, conversationId, epoch, flags, and chatType; reject prompt/transcript regex extraction; missing or empty botId/conversationId/epoch (when required), missing/ambiguous identity, `chatType="group"` even when its group-member flag is unset/false, groupFlag=true, and unknown chatType all skip; cover hidden marker, injected reminder, routine/memory row, opening row that cannot be identified, new trusted user epoch, and same-epoch tool continuation.
 4. **L1 thresholds:** >1, >6, and >0/delivery-call presence; §3.22 precedence over §3.23; one reminder per silent streak; exact-last-message short-circuit; reset on an explicit delivery event/new trusted epoch; injection is staged before every provider payload converter.
-5. **L2 decision:** finish_reason=stop + no emitted delivery calls + explicit trusted deliveryOwed is eligible; non-stop, emitted call with unknown outcome, hidden/non-person, missing epoch, unknown ledger, and client bytes are not. An emitted call with an explicit host delivery-error-observed event is covered only by the documented tightened failed-delivery path.
-6. **L2 context and marker:** plain first assistant text is present in the second canonical context; first-run tool_calls are followed by every observed tool result in order; missing results skip; the final nudge content is exactly [SAND_HIDDEN_PROMPT] concatenated with the §3.27 body (no inserted newline), then each provider adapter converts that canonical context.
-7. **L2 bounds:** zero/one/two configured additional runs, hard cap, timeout, prompt/output token caps, cost reservation, client close, buffer overflow immediate pass-through, first-response raw fallback including status/headers, valid second no-tool final, finalNoTool suppression, and no third/L3 run.
+5. **L2 decision:** only `finish_reason=stop` plus **zero first-response `tool_calls` of any kind** plus explicit trusted deliveryOwed plus the supported chat-completions protocol is eligible. A stop response containing non-delivery `tool_calls` must assert `l2Eligible=false`, `skipReason=first_tool_call`, and no L2 dispatch; also cover non-stop, delivery calls, hidden/non-person, missing epoch, unknown ledger, unsupported Responses/Anthropic, and client bytes. No provider-continuation protocol is assumed.
+6. **L2 context and marker:** plain first assistant text is present in the second canonical context, while any first-response tool call prevents a second context; prior historical tool results remain paired and ordered; the final nudge content is exactly [SAND_HIDDEN_PROMPT] concatenated with the §3.27 body (no inserted newline), then the supported adapter converts that canonical context.
+7. **L2 bounds and host fallback:** zero/one/two configured additional runs, hard cap, timeout, prompt/output token caps, cost reservation, client close, host-boundary buffer overflow pass-through, first-response host-boundary fallback bytes with status/headers, valid second no-tool final, finalNoTool suppression, and no third/L3 run.
 8. **L3:** §3.27 versus §3.28 tail selection only with trusted host facts, unknown/fail-closed paths, direct marker concatenation, TTL, max redrives, duplicate fingerprints keyed by trusted epoch, reset on new epoch/observed delivery, final-no-tool suppression, and explicit §3.29 out-of-scope/skip behavior.
 9. **Cache prefix:** compare the serialized first request prefix before the injection suffix; assert no system/history prefix mutation and no stripping of official markers.
-10. **Config:** missing/corrupt/off/dry-run/enforce, quota range rejection, per-layer switches, hot reload, and atomic writes.
+10. **Dry-run and protocol behavior:** a streamed dry-run tees immediately with no full SSE buffer, no request mutation, and no first-token latency change; an adapter without a non-blocking classifier records `classificationSkippedReason` and remains off by default; Responses/Anthropic JSON and SSE skip L2 without a second request or buffering.
+11. **Observability:** assert identityGateResult, distinct skipReason/classificationSkippedReason values (including no_bot_id, group_chat, unknown_identity, buffer_overflow/parser_overflow, and budget_*), bufferedBytes, firstResponseHash, l2BodyHash, and trusted deliveryObservedAt are present/unknown exactly as specified.
 
 ### 12.2 Integration tests with a fake upstream
 
-- First upstream response: JSON finish_reason="stop", plain assistant text, no tool_calls, plus a trusted host ledger snapshot with deliveryOwed=true. Assert exactly two upstream requests in one host request; the second canonical context contains the first assistant text and ends with a user message whose content is [SAND_HIDDEN_PROMPT] directly followed by the exact §3.27 body; the host receives the second response when it contains a real delivery tool call, recorded initially as call-emitted and upgraded to delivery-observed only by a host success event.
-- First upstream response with non-delivery tool_calls and observed tool results. Assert the second request contains the assistant tool_calls and each paired tool result before the nudge, with no invented placeholder or duplicate history.
-- Second upstream response still has finish_reason="stop" and no tools. Assert exactly two total upstream requests (initial + one default L2 attempt), finalNoTool=true suppresses L3 for that epoch/tail, no infinite loop, and the chosen final response is returned without a fabricated tool call.
-- Second upstream fails or times out. Assert the first raw response body is returned byte-for-byte with its original status and end-to-end headers; Content-Length is preserved only when valid, Transfer-Encoding is proxy-normalized, the request is marked l2_fallback, and no gateway-created delivery call appears.
-- Stream variant: first SSE is buffered and has terminal stop with no tool; second SSE has a tool call. Assert no first bytes reached the host, only the second stream is returned with its own valid content type/status/finish mapping, and the call is not labeled delivery-observed without a host event.
-- Stream overflow variant: first SSE exceeds maxBufferedResponseBytes. Assert the gateway immediately flushes the buffered prefix and pipes the remainder unchanged with first-response status/header semantics, permanently suppresses L2 for that response/epoch, and never emits a second upstream request.
-- L1 dry-run versus enforce: dry-run leaves the upstream body unchanged but records wouldApply; enforce appends one exact canonical suffix before chatToResponses/chatToAnthropic conversion and does not duplicate it.
-- L3 replay: send the next host request with an owed historical tail and a trusted epoch/ledger event; assert one pre-upstream §3.27/§3.28 nudge, no repeat after the per-epoch cap, skip when any host fact is unknown, and never claim coverage of a boot/idle-only §3.29 obligation.
-- Quota fixture: make the complete second prompt exceed maxAdditionalPromptTokens, the bounded output exceed maxAdditionalCompletionTokens, or the worst-case cost exceed maxAdditionalCostUsd. Assert L2 is abandoned before dispatch and the first response is replayed unchanged.
+- **Chat-completions JSON success:** first response is `finish_reason="stop"`, plain assistant text, and zero `tool_calls`, with a trusted host ledger snapshot `deliveryOwed=true`. Assert exactly two upstream requests in one host request; the second canonical context contains the first assistant text and ends with a user message whose content is [SAND_HIDDEN_PROMPT] directly followed by the exact §3.27 body; the host receives the second response when it contains a real delivery tool call, recorded initially as call-emitted and upgraded to delivery-observed only by a host success event.
+- **A stop plus non-delivery tool call is not eligible:** first chat-completions JSON/SSE response has `finish_reason="stop"` and one non-delivery `tool_calls` entry (even if a fixture supplies a purported result). Assert exactly one upstream request, `l2Eligible=false`, `skipReason=first_tool_call`, no §3.27 second request, and no provider-continuation inference or fabricated result.
+- **Second response still has no tools:** assert exactly two total upstream requests (initial + one default L2 attempt), `finalNoTool=true` suppresses L3 for that epoch/tail, no infinite loop, and the chosen final response is returned without a fabricated tool call.
+- **Host-boundary fallback:** make the second chat-completions run fail or time out after the first response has been converted/serialized for the host. Assert the captured **host-boundary** body bytes are returned byte-for-byte with the captured host-visible status and end-to-end headers—not provider-original bytes; Content-Length is preserved only when valid, Transfer-Encoding is proxy-normalized, the request is marked `l2_fallback`, `firstResponseHash` hashes those host bytes, and no gateway-created delivery call appears.
+- **Chat-completions SSE:** first converted host-visible SSE has terminal stop and zero tools; second SSE has a tool call. Assert no first host bytes reached the host, only the second host-boundary stream is returned with its own valid content type/status/finish mapping, and the call is not labeled delivery-observed without a host event.
+- **Host-boundary SSE overflow:** make the converted host-visible first SSE exceed maxBufferedResponseBytes. Assert the gateway immediately flushes the buffered host prefix and pipes the remaining converted host bytes unchanged with first-response status/header semantics, records `bufferedBytes` and `skipReason=buffer_overflow`, permanently suppresses L2 for that response/epoch, and never emits a second upstream request.
+- **Responses/Anthropic protocol matrix:** for both JSON and SSE, exercise stop/no-tool/owed fixtures through Responses and Anthropic adapters. Assert L2 is skipped before buffering (`l2Eligible=false`, `skipReason=protocol_unsupported`), no second upstream request is sent, normal host response bytes/status/headers are passed through unchanged, and no provider-original body is used as a fallback.
+- **Dry-run SSE:** assert the first host-visible chunk reaches the host immediately, `bufferedBytes=0`, no second request or request mutation occurs, and first-token latency is unchanged; when the adapter cannot expose non-blocking normalized events, assert `classificationSkippedReason=non_blocking_adapter` and the adapter remains disabled by default.
+- **Trusted identity and group gates:** provide missing/empty botId, prompt text that falsely resembles an identity, unsigned/client-controlled identity headers, unknown chatType, `chatType="group"` with `isGroupMemberTurn` omitted or false, and trusted groupFlag=true. Assert `identityGateResult=fail`, distinct `skipReason` values (`no_bot_id`, `unknown_identity`, `group_chat`, etc.), no L1/L2/L3 injection, and no prompt-regex fallback.
+- **L1 dry-run versus enforce:** dry-run leaves the upstream body unchanged and does not full-buffer SSE but records wouldApply/classification metadata; enforce appends one exact canonical suffix before chatToResponses/chatToAnthropic conversion and does not duplicate it.
+- **L3 replay:** send the next host request with an owed historical tail and a trusted epoch/ledger event; assert one pre-upstream §3.27/§3.28 nudge, no repeat after the per-epoch cap, skip when any host fact is unknown, and never claim coverage of a boot/idle-only §3.29 obligation.
+- **Quota fixture:** make the complete second prompt exceed maxAdditionalPromptTokens, the bounded output exceed maxAdditionalCompletionTokens, or the worst-case cost exceed maxAdditionalCostUsd. Assert L2 is abandoned before dispatch, `skipReason` identifies `budget_prompt`, `budget_completion`, or `budget_cost`, and the first host-boundary response is replayed unchanged.
 ### 12.3 Reverse assertions
 
 For every test where the upstream returns no delivery tool, inspect the host response JSON/SSE and assert that the gateway did not create an assistant tool_calls item named SendToUser, SendMessage, or ReactToMessage, did not change finish_reason, and did not increment or claim delivery-observed counters without an explicit host event. The literal word SendToUser may appear in a nudge's user content; that is not a tool call and must not satisfy the reverse assertion.
@@ -630,20 +662,24 @@ For every test where the upstream returns no delivery tool, inspect the host res
 ### 13.1 Box reproduction
 
 1. On the Computer, confirm the target bot is 7a1ef5de-2f61-4344-b309-3b8eafea1b83, the wrap is custom, and 127.0.0.1:9280 is the OpenBot hop. Do not patch or restart the stock host manually.
-2. Back up the current openbot-injection.json (if any) and enable mode: dry-run for one bot. Confirm the control page shows wouldApply on a controlled plain-text stop turn, and confirm the request carries non-empty botId, trusted identity flags, and a trusted epoch.
-3. Use a deterministic fake/upstream fixture that reproduces the incident response (finish_reason=stop, no tool calls) with an explicit trusted host ledger snapshot, or reproduce the same instruction on the box if the model can be controlled. The live model smoke test is not a substitute for the deterministic fixture.
-4. Switch only this bot to mode: enforce with L2 enabled and issue one person-opened turn that otherwise ends in plain text. Observe one same-request L2 attempt and a second response containing a real delivery tool call; record this as call-emitted unless the host success event contract separately confirms delivery-observed.
-5. Open the control page logs and pair the custom-host/hop rows. The row must show an injection marker/family (l2.reply-nudge), l2AdditionalRuns=1, l2Outcome=call-emitted, and no status != 200 requirement for success. If the host emits a trusted success event, the ledger may later show delivery-observed; without it, owed/delivery state must remain unknown rather than an inferred owed-to-delivered transition. The host-visible transcript must contain an actual SendToUser/SendMessage tool event, not just the nudge text.
+2. Back up the current openbot-injection.json (if any) and enable mode: dry-run for one bot. Confirm the control page shows wouldApply on a controlled plain-text stop turn only when an authenticated HostRequestContext supplies non-empty botId, conversationId, trusted epoch, explicit person flags, and a non-group chatType; prove no visible-prompt regex is used. Confirm dry-run does not full-buffer SSE or change first-token latency.
+3. Use a deterministic chat-completions fixture that reproduces the incident response (finish_reason=stop, zero tool_calls) with an explicit trusted host ledger snapshot, or reproduce the same instruction on the box if the model can be controlled. The live model smoke test is not a substitute for the deterministic fixture.
+4. Switch only this bot to mode: enforce with L2 enabled and issue one person-opened chat-completions turn that otherwise ends in plain text. Observe one same-request L2 attempt and a second response containing a real delivery tool call; record this as call-emitted unless the host success event contract separately confirms delivery-observed.
+5. Open the control page logs and pair the custom-host/hop rows. The row must show the authenticated identity result, `injectionFamilies=[l2.reply-nudge]`, `l2AdditionalRuns=1`, `l2Outcome=call-emitted`, `firstResponseHash`, `l2BodyHash`, `bufferedBytes`, and no status != 200 requirement for success. If the host emits a trusted success event, the ledger may later show delivery-observed with its `deliveryObservedAt`; without it, owed/delivery state must remain unknown rather than an inferred owed-to-delivered transition. The host-visible transcript must contain an actual SendToUser/SendMessage tool event, not just the nudge text.
 6. Repeat with the fake upstream returning plain text twice. The log must show l2AdditionalRuns=1, valid-no-tool/retryExhausted, finalNoTool suppression of L3, no third request, no fabricated tool, and an explicit unresolved-or-unknown ledger state.
-7. Set mode: off; the next request must have no injection metadata marked as applied and must retain the current single-run behavior.
+7. Exercise Responses and Anthropic adapters with both JSON and SSE stop/no-tool fixtures. Each must skip L2 with `skipReason=protocol_unsupported`, no buffering or second request, and ordinary host pass-through.
+8. Set mode: off; the next request must have no injection metadata marked as applied and must retain the current single-run behavior.
 
 ### 13.2 Quantitative pass gates
 
-- Deterministic integration fixture: 100% of eligible first-stop/no-tool cases produce exactly one bounded remediation attempt; no case produces more than the configured hard cap.
-- Successful fixture: host sees a real delivery tool call from the upstream response; only an explicit host success event may additionally qualify it as delivery-observed.
+- Deterministic integration fixture: 100% of eligible first-stop/**zero-tool-call** chat-completions cases produce exactly one bounded remediation attempt; no case produces more than the configured hard cap. A first stop with any non-delivery `tool_calls` produces zero L2 attempts.
+- Successful fixture: host sees a real delivery tool call from the upstream response; only an explicit host success event may additionally qualify it as delivery-observed and supply `deliveryObservedAt`.
 - Double-failure fixture: zero fabricated delivery calls, zero third upstream requests, and finalNoTool suppresses L3 for the same epoch/tail.
-- Live smoke: one reproduction on the same bot creates a visible injection marker; a delivery-observed claim is counted only when the trusted host event contract supplies the success event, otherwise the outcome remains call-emitted/unknown.
-- Quota gate: no L2 request is dispatched when prompt tokens, completion-token cap, or worst-case reserved cost exceeds its configured limit.
+- Protocol gate: Responses and Anthropic JSON/SSE requests produce no L2 buffer or second request and retain normal host response bytes/status/headers.
+- Dry-run gate: first streamed bytes are forwarded immediately, `bufferedBytes=0`, no request is mutated, and first-token latency is unchanged; unavailable non-blocking classification is recorded with `classificationSkippedReason`.
+- Identity/group gate: missing or untrusted identity, prompt-only identity, unknown chatType, and `chatType="group"` with an omitted/false isGroupMemberTurn all fail closed with distinct `skipReason` values.
+- Live smoke: one reproduction on the same bot creates a visible injection marker; a delivery-observed claim is counted only when the trusted host event contract supplies the success event and `deliveryObservedAt`, otherwise the outcome remains call-emitted/unknown.
+- Quota gate: no L2 request is dispatched when prompt tokens, completion-token cap, or worst-case reserved cost exceeds its configured limit; the corresponding budget skip reason is logged.
 - Prefix/cache check: no mutation of the pre-suffix serialized prefix; monitor cached-token ratio against the incident baseline.
 - §3.29 boundary: idle/boot-only ack obligations are reported as out of scope and are never presented as L3 coverage.
 - Rollback check: switching off takes effect on the next request without a host bounce.
@@ -651,10 +687,10 @@ For every test where the upstream returns no delivery tool, inspect the host res
 ## 14. Risks and open questions
 
 1. **Model non-compliance:** a nudge is not a guarantee. If the model continues to emit text, the gateway must report unresolved rather than forge delivery.
-2. **Streaming latency/memory:** L2 buffering delays first-token delivery for eligible candidates; overflow immediately passes through raw bytes and permanently suppresses L2 for that response/epoch. Confirm the memory ceiling, header/framing behavior, and acceptable limits for the largest provider response.
-3. **Provider shape drift:** finish reasons and tool-call deltas differ across chat-completions, Responses, and Anthropic. Keep one canonical classifier and add fixtures for each adapter.
-4. **Repeated tool work:** the first run may have executed non-delivery tools before stopping. The second run receives the full transcript and could repeat a non-idempotent tool. Confirm whether the host/upstream can mark completed tool calls or whether L2 should be restricted to a safe tool policy; do not solve this by suppressing delivery calls.
-5. **Identity metadata:** confirm where custom-host requests expose botId, conversationId, hidden, requestSource, and group/silence flags. Unknown identity must fail closed; the empty-bot memory record is a known false-positive risk.
+2. **Streaming latency/memory:** enforce-mode L2 buffering delays first-token delivery only for eligible chat-completions candidates; host-boundary overflow immediately passes through converted bytes and permanently suppresses L2 for that response/epoch. Dry-run uses a non-blocking tee with zero full-response buffering and no first-token delay; if an adapter cannot provide that path it is skipped/default-off. Confirm the memory ceiling, header/framing behavior, and acceptable limits for the largest provider response.
+3. **Provider shape drift:** finish reasons and tool-call deltas differ across chat-completions, Responses, and Anthropic. Keep one canonical classifier and add fixtures for each adapter, while L2 remains explicitly unsupported for Responses/Anthropic until a host-boundary capture contract exists.
+4. **Repeated tool work:** this plan intentionally refuses L2 whenever the first response contains any tool call, so it cannot repeat an unexecuted non-delivery tool as a same-request continuation. A future provider-continuation protocol must name the executor, authenticated result pairing, and idempotency/side-effect protection before relaxing the gate.
+5. **Identity metadata:** the trust root is the authenticated HostRequestContext/transport envelope defined in §9.1, not a visible prompt or regex. The implementation must wire botId, conversationId, epoch, person/source flags, and chatType/group state from that root; absent, unsigned, or ambiguous metadata fails closed. The empty-bot memory record is a known false-positive risk.
 6. **Epoch extraction:** validate explicit trusted host message/epoch IDs on the box. A transcript hash may be used only for deduplication inside a trusted epoch; if no trusted epoch is available, skip L1/L2/L3 rather than create one locally.
 7. **Concurrency:** confirm the existing turn lease can cover the L2/L3 decision, or add a small per-conversation lease without changing host ownership.
 8. **Official disable semantics:** decide whether a future implementation should mirror SAND_DISABLE_USER_REPLY_REMINDER=1 when that signal is available to the hop. Until then, the separate mode/layer switches are the only OpenBot controls and default off.
@@ -699,7 +735,7 @@ The follow-up implementation PR should keep the changes scoped to the custom hop
 1. Add config loading/validation and named literal constants, defaulting off.
 2. Add the canonical ledger/classifier with JSON/SSE/provider fixtures.
 3. Add L1 in a post-conversion policy stage, with dry-run metadata.
-4. Add L2 buffered classification and same-request bounded retry, including complete first-run context, direct hidden-marker concatenation, token/cost preflight, raw first-response fallback, and overflow pass-through.
+4. Add L2 buffered classification and same-request bounded retry only for chat-completions first responses with zero tool_calls, including complete context, direct hidden-marker concatenation, token/cost preflight, host-boundary first-response fallback (bytes/status/headers), and converted-byte overflow pass-through; skip Responses/Anthropic and any first tool call.
 5. Add L3 history-tail detection only for §3.27/§3.28, using trusted host epoch/ledger events, fingerprinting, TTL, finalNoTool suppression, and per-epoch cap; leave §3.29 idle/boot ack-redrive out of scope.
 6. Extend request-log metadata/control-page display without logging prompt bodies by default; distinguish call-emitted from host delivery-observed and keep unavailable ledger fields unknown.
 7. Run unit/integration tests, then the deterministic box acceptance reproduction.

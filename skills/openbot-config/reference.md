@@ -135,6 +135,8 @@ Mode **0600**. Shape:
 
 Hop `loadKey(providerId)` reads this file **per request**. Missing key → hop **503** `no secret for this provider`. Never print values.
 
+For OpenAI OAuth, the stored value remains a redacted string under `providers.openai`; its JSON credential contains `kind: "openai-oauth"`, access/refresh tokens, `expiresAt`, and optional `chatgptAccountId`. OAuth is not an API key: chat uses `https://chatgpt.com/backend-api/codex/responses` with Codex headers and model discovery uses `/backend-api/codex/models?client_version=0.153.3`. API-key credentials keep the provider origin and `/v1/models`.
+
 ## `openbot-mode` and `openbot-expose`
 
 - Mode file: `official\n` or `custom\n`. Source of truth for wrap mode. Reconcile writes it (`writeMode`). Do not flip this file to wrap or unwrap. The UI reads it **strictly**: only the literal token `official` (after trimming) means official; missing, empty, or garbage resolves to **custom** — never official (users own custom state and often have zero official quota, so an unreadable mode file must never reconcile chat back to official). Repair a corrupted token by writing `custom` and reconciling from the control page (`POST /api/save`); check `openbot-audit.jsonl` to see what changed it.

@@ -6,7 +6,28 @@ export const OPENAI_OAUTH_AUTHORIZE_URL = "https://auth.openai.com/oauth/authori
 export const OPENAI_OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token";
 type Session = { state: string; verifier: string; expiresAt: number };
 const sessions = new Map<string, Session>();
-export type OpenAIOAuthCredential = { kind: "openai-oauth"; accessToken: string; refreshToken: string; expiresAt: number };
+export type OpenAIOAuthCredential = { kind: "openai-oauth"; accessToken: string; refreshToken: string; expiresAt: number; chatgptAccountId?: string };
+
+function decodeJwtClaims(token: string): Record<string, unknown> {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return {};
+    return JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+export function openAIOAuthAccountId(idToken: string, accessToken: string): string {
+  const claims = decodeJwtClaims(idToken);
+  const fallback = decodeJwtClaims(accessToken);
+  const auth = claims["https://api.openai.com/auth"] && typeof claims["https://api.openai.com/auth"] === "object"
+    ? claims["https://api.openai.com/auth"] as Record<string, unknown>
+    : fallback["https://api.openai.com/auth"] && typeof fallback["https://api.openai.com/auth"] === "object"
+      ? fallback["https://api.openai.com/auth"] as Record<string, unknown>
+      : {};
+  return typeof auth.chatgpt_account_id === "string" ? auth.chatgpt_account_id : "";
+}
 
 export function startOpenAIOAuth(): { sessionId: string; authorizationUrl: string; expiresIn: number } {
   const sessionId = randomUUID();
@@ -15,7 +36,7 @@ export function startOpenAIOAuth(): { sessionId: string; authorizationUrl: strin
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   const expiresIn = 1800;
   sessions.set(sessionId, { state, verifier, expiresAt: Date.now() + expiresIn * 1000 });
-  const params = new URLSearchParams({ response_type: "code", client_id: OPENAI_OAUTH_CLIENT_ID, redirect_uri: OPENAI_OAUTH_REDIRECT_URI, scope: "openid profile email offline_access", state, code_challenge: challenge, code_challenge_method: "S256", prompt: "login", codex_cli_simplified_flow: "true" });
+  const params = new URLSearchParams({ response_type: "code", client_id: OPENAI_OAUTH_CLIENT_ID, redirect_uri: OPENAI_OAUTH_REDIRECT_URI, scope: "openid profile email offline_access", state, code_challenge: challenge, code_challenge_method: "S256", prompt: "login", id_token_add_organizations: "true", codex_cli_simplified_flow: "true" });
   return { sessionId, authorizationUrl: OPENAI_OAUTH_AUTHORIZE_URL + "?" + params.toString(), expiresIn };
 }
 
@@ -47,6 +68,8 @@ export async function completeOpenAIOAuth(sessionId: string, callbackUrl: string
   }
   if (!response.ok || typeof payload.access_token !== "string" || typeof payload.refresh_token !== "string") throw new Error("OpenAI token exchange failed (HTTP " + response.status + ")");
   sessions.delete(sessionId);
-  return { kind: "openai-oauth", accessToken: payload.access_token, refreshToken: payload.refresh_token, expiresAt: Math.floor(Date.now() / 1000) + Math.max(1, Number(payload.expires_in) || 3600) };
+  const idToken = typeof payload.id_token === "string" ? payload.id_token : "";
+  const accountId = openAIOAuthAccountId(idToken, payload.access_token);
+  return { kind: "openai-oauth", accessToken: payload.access_token, refreshToken: payload.refresh_token, expiresAt: Math.floor(Date.now() / 1000) + Math.max(1, Number(payload.expires_in) || 3600), ...(accountId ? { chatgptAccountId: accountId } : {}) };
 }
 export function resetOpenAIOAuthForTests(): void { sessions.clear(); }

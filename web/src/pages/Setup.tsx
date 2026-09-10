@@ -32,6 +32,7 @@ export function Setup() {
   const [oauthUrl, setOauthUrl] = useState<string | null>(null);
   const [callbackUrl, setCallbackUrl] = useState("");
   const [oauthConnected, setOauthConnected] = useState(false);
+  const [credentialMode, setCredentialMode] = useState<"api-key" | "oauth">("api-key");
 
   const preset: Preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0]!;
 
@@ -39,6 +40,11 @@ export function Setup() {
     setPresetId(p.id);
     setName(p.name);
     setOrigin(p.origin);
+    setCredentialMode("api-key");
+    setOauthConnected(false);
+    setOauthSession(null);
+    setOauthUrl(null);
+    setCallbackUrl("");
     setRefusal(null);
   };
 
@@ -57,8 +63,12 @@ export function Setup() {
       setFieldError("Base URL is required.");
       return;
     }
-    if (!secret.trim() && !oauthConnected) {
+    if (credentialMode === "api-key" && !secret.trim()) {
       setFieldError("API key is required — the hop would fail with no key.");
+      return;
+    }
+    if (credentialMode === "oauth" && !oauthConnected) {
+      setFieldError("Complete OpenAI sign-in before continuing.");
       return;
     }
     setStep(3);
@@ -98,7 +108,7 @@ export function Setup() {
           name: name.trim(),
           origin: origin.trim(),
           modelSlug: preset.id === "opencode" ? OPENCODE_ZEN_FREE_MODELS[0]?.id ?? preset.model : preset.model,
-          secret: oauthConnected ? "oauth" : secret,
+          secret: credentialMode === "oauth" && oauthConnected ? "oauth" : secret,
         },
         { successTitle: "Activated", successMessage: usedMessage },
       );
@@ -191,22 +201,20 @@ export function Setup() {
             <Field label="Base URL" htmlFor="f-origin">
               <Input id="f-origin" large mono value={origin} onChange={(e) => setOrigin(e.target.value)} />
             </Field>
-            <Field
-              label="API key"
-              htmlFor="f-key"
-              helper="Stored locally (0600), never displayed again, never in a URL."
-            >
-              <PasswordInput
-                id="f-key"
-                large
-                value={secret}
-                onChange={setSecret}
-                placeholder="Paste your key"
-              />
-            </Field>
             {preset.oauth ? (
-              <div className="card card--pad" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <Button variant="secondary" onClick={() => void beginOAuth()}>Sign in with OpenAI</Button>
+              <div className="credential-tabs" role="tablist" aria-label="OpenAI credential type">
+                <button type="button" role="tab" aria-selected={credentialMode === "api-key"} className={credentialMode === "api-key" ? "is-active" : ""} onClick={() => { setCredentialMode("api-key"); setFieldError(null); }}>API Key</button>
+                <button type="button" role="tab" aria-selected={credentialMode === "oauth"} className={credentialMode === "oauth" ? "is-active" : ""} onClick={() => { setCredentialMode("oauth"); setFieldError(null); }}>Sign in with OpenAI</button>
+              </div>
+            ) : null}
+            {credentialMode === "api-key" || !preset.oauth ? (
+              <Field label="API key" htmlFor="f-key" helper="Stored locally (0600), never displayed again, never in a URL.">
+                <PasswordInput id="f-key" large value={secret} onChange={setSecret} placeholder="Paste your key" />
+              </Field>
+            ) : (
+              <div className="card card--pad oauth-panel" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <p className="card__hint">Use your OpenAI account to connect ChatGPT/Codex models.</p>
+                {!oauthConnected ? <Button variant="secondary" onClick={() => void beginOAuth()}>Start OpenAI sign-in</Button> : <Notice tone="info" icon={Check}>OpenAI account connected.</Notice>}
                 {oauthUrl ? <a href={oauthUrl} target="_blank" rel="noreferrer">Open the OpenAI authorization page</a> : null}
                 {oauthSession ? <>
                   <Field label="Authorization callback URL" htmlFor="oauth-callback" helper="Paste the complete localhost:1455 URL after authorization.">
@@ -215,7 +223,7 @@ export function Setup() {
                   <Button variant="secondary" onClick={() => void finishOAuth()}>Complete OpenAI sign-in</Button>
                 </> : null}
               </div>
-            ) : null}
+            )}
             {fieldError ? (
               <Notice tone="warn" icon={TriangleAlert}>
                 {fieldError}
@@ -245,7 +253,7 @@ export function Setup() {
               <span className="k">Model</span>
               <span className="v mono">— (none)</span>
               <span className="k">API key</span>
-              <span className="v mono">•••••••• (saved on activate)</span>
+              <span className="v mono">{credentialMode === "oauth" ? "OpenAI OAuth (saved on activate)" : "•••••••• (saved on activate)"}</span>
             </div>
             <Notice tone="info" icon={Info}>
               <span>No model yet — you can fetch models from the Models page after activation.</span>

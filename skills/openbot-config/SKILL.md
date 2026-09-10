@@ -75,17 +75,21 @@ If `openbot` is on `PATH`, `openbot status` is the same.
 
 ### Bot-mode install and status
 
-Pick the command from what is already on the box: do not run a pre-flight health check first, and do not read the repository README to decide.
+Do not run a pre-flight health check or read the repository README before installing. Use this one command for either a first install or an update; `install.sh` handles the existing tree:
 
-- Already installed: the install tree carries its own installer at `$DEST/install.sh`, where `$DEST` defaults to `$DATA/openbot` (`/home/box/sand-data/openbot`) and both are overridable with `OPENBOT_DEST` / `OPENBOT_SAND_DATA`. Run `bash "$DEST/install.sh" --bot-mode`. That skips downloading the remote installer script and avoids the `curl ... | bash` command shape the host reviews as "piping arbitrary remote scripts into a shell", so it is less likely to need an approval prompt - not guaranteed.
-- Not installed yet: there is no local tree, so the first install must use the remote command: `curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-mode`.
-- Either way, send the user one short "installation started" line and then follow the `OPENBOT_BOT_INSTRUCTION` printed by `install.sh --bot-mode` / `--bot-status`; that stdout is the authority for progress, success, and failure. A bot-mode run stages the new tree and swaps it in as one step, rolling back to the previous release if that swap fails (bot mode only); when both download sources fail while OpenBot is already installed, it keeps the existing copy and reports that instead of upgrading.
+```bash
+curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-mode
+```
 
-`--bot-status` also prints `OPENBOT_HOST_BOUNCE`:
+If the remote command is blocked by the host's security policy, use the local tree's installer as an explicit fallback: `bash "$DEST/install.sh" --bot-mode` (`$DEST` defaults to `$DATA/openbot` (`/home/box/sand-data/openbot`); `OPENBOT_DEST` / `OPENBOT_SAND_DATA` override it). This is more likely to avoid the `curl | bash` shape, but is not guaranteed to avoid an approval prompt. Use it only after the remote command is blocked, not as a pre-install choice.
 
-- `pending`: `openbot-pending-bounce.json` exists. The host file already has the new payload, but the sand-host restart is deferred until the host is idle, so the current turn (and its report) is not interrupted. Do **not** rerun the installer for this, and do not report a failure: a detached finalizer (`src/cli.ts finalize-host`) applies it after a quiet window. `install.sh --bot-finalize` asks for it immediately and returns at once.
-- `done`: the bounce was applied; the next message runs on the new payload.
-- `disabled`: nothing was deferred (no wrap change), or the run is a CLI-direct install.
+Send the user one short "installation started" line, then follow the `OPENBOT_BOT_INSTRUCTION` printed by `install.sh --bot-mode` / `--bot-status`; that output is authoritative for progress, success, and failure. Poll status at most twice. If it fails, report the error and log path exactly as printed. Bot mode stages the new tree and swaps the staging directory into place; if that staging-directory switch fails, it rolls back to the previous release (bot mode only). If both download sources fail while OpenBot is already installed, it keeps the existing copy and reports that outcome honestly.
+
+A deferred bot-mode host bounce follows `OPENBOT_HOST_BOUNCE=pending` → `OPENBOT_HOST_BOUNCE=done`:
+
+- `OPENBOT_HOST_BOUNCE=pending`: `openbot-pending-bounce.json` exists. The host file already has the new payload, but the sand-host restart is deferred until the host is idle, so the current turn (and its report) is not interrupted. **Do not** rerun the installer for this, and do not report a failure: a detached finalizer (`src/cli.ts finalize-host`) applies it after a quiet window. `install.sh --bot-finalize` asks for it immediately and returns at once.
+- `OPENBOT_HOST_BOUNCE=done`: the bounce was applied; the next message runs on the new payload.
+- `OPENBOT_HOST_BOUNCE=disabled`: nothing was deferred (no wrap change), or the run is a CLI-direct install.
 
 ### Official / custom
 

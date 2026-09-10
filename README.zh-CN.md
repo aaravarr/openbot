@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 OpenBot 需要 Node 22 或更新。如果 Computer 里只有 Node 20，安装脚本会把 Node 22 放进 `sand-data`，不替换系统 Node。第一次安装时，Cloudflare 提示出现后输入 `y` 会启用手机 URL 和二维码；直接回车则只保留本机访问。然后用 Computer 浏览器打开 [http://127.0.0.1:9280](http://127.0.0.1:9280)。
 
-同一条命令同时也是更新命令，而且它是可重入的：任何时候重复运行都安全。未安装 → 自动安装；已安装 → 拉取当前 `main` 并一次性切换目录，保留官方/自定义模式、provider、模型、Key 与已保存的 Tunnel。运行前不需要检查任何东西：宿主、Node、已有安装、wrap/模式漂移、遗留进程和 Tunnel 都由脚本自己检测。
+同一条命令同时也是更新命令，而且它是可重入的：任何时候重复运行都安全。未安装 → 自动安装；已安装 → 拉取当前 `main` 并替换代码（bot 模式会先 staging 再一次性切换目录），保留官方/自定义模式、provider、模型、Key 与已保存的 Tunnel。运行前不需要检查任何东西：宿主、Node、已有安装、wrap/模式漂移、遗留进程和 Tunnel 都由脚本自己检测。
 
 <details>
 <summary>Grok Bot：自动安装</summary>
@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 按每次命令输出的 `OPENBOT_BOT_INSTRUCTION` 操作；它是权威指引。概要就是：启动命令，再按输出的 `--bot-status` 指令继续。安装通常需要 15–60 秒；需要补装 Node 22 或首次下载 cloudflared 时会更久，超过 3 分钟后 `--bot-status` 会给出告警。最多轮询 2 次；仍卡住时把日志尾部发给用户并停止。
 
-不需要做前置体检。这条命令是可重入的：第一次运行是安装，之后每次运行都会拉取当前 `main` 并重新安装 — 脚本没有「已是最新就跳过」的判断，bot 也不需要自己复现这种判断。宿主、Node、已有安装、wrap/模式漂移、遗留进程和 Tunnel 都由脚本自查；上一次 bot 模式安装还在跑时，再运行一次只会报告进度。在用户提出安装要求的那一回合里：
+不需要做前置体检。这条命令是可重入的：第一次运行是安装，之后每次运行都会拉取当前 `main` 并重新安装 — 脚本没有「已是最新就跳过」的判断，bot 也不需要自己复现这种判断。若已安装 OpenBot 而两个下载源都失败，脚本会沿用现有副本并如实报告，而不是升级。宿主、Node、已有安装、wrap/模式漂移、遗留进程和 Tunnel 都由脚本自查；上一次 bot 模式安装还在跑时，再运行一次只会报告进度。在用户提出安装要求的那一回合里：
 
 - 不要先去读本仓库或安装脚本源码。
 - 不要检查 wrap、路由或 Tunnel，也不要拿已安装版本和 `main` 对比。
@@ -43,6 +43,8 @@ Bot 自己的回合运行在 Grok Bot 宿主进程里，因此更新不会在这
 </details>
 
 ## 卸载
+
+通过 curl | bash 运行时，脚本会从终端读取确认输入。
 
 在 Grok Bot 的 Computer 上运行：
 

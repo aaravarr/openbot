@@ -17,6 +17,8 @@ export type FetchLike = (
 ) => Promise<{ readonly status: number; readonly ok: boolean; text(): Promise<string> }>;
 
 export const PROVIDER_MODELS_TOTAL_TIMEOUT_MS = 30_000;
+export const OPENAI_CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models?client_version=0.153.3";
+const OPENAI_CODEX_USER_AGENT = "codex-tui/0.153.3 (Mac OS 26.5.1; arm64) iTerm.app/3.6.11 (codex-tui; 0.153.3)";
 
 export const defaultFetch: FetchLike = (url, init) => fetch(url, init);
 
@@ -135,12 +137,17 @@ function modelListFrom(raw: unknown): unknown[] | undefined {
   return undefined;
 }
 
+function modelIdFrom(item: Record<string, unknown>): string | null {
+  const value = item.id ?? item.slug;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 function normalizeEntry(item: Record<string, unknown>, id: string): FetchedModel {
   const architecture = nestedRecord(item, "architecture");
   const topProvider = nestedRecord(item, "top_provider");
   return {
     id,
-    name: stringOrNull(item.name),
+    name: stringOrNull(item.name ?? item.display_name),
     contextLength: firstPositiveInt(item.context_length, item.contextLength, architecture?.context_length),
     maxOutputTokens: firstSaneOutputTokens(
       topProvider?.max_completion_tokens,
@@ -172,11 +179,11 @@ export function normalizeProviderModels(
       skippedReasons.push("not-an-object");
       continue;
     }
-    if (typeof item.id !== "string" || !item.id.trim()) {
+    const id = modelIdFrom(item);
+    if (id === null) {
       skippedReasons.push("missing-id");
       continue;
     }
-    const id = item.id.trim();
     if (seen.has(id)) {
       skippedReasons.push("duplicate-id");
       continue;
@@ -216,18 +223,61 @@ function opencodeModelsSession(providerId: string): string {
   return createHash("sha256").update("openbot-opencode-models\0" + providerId, "utf8").digest("hex").slice(0, 32);
 }
 
+function openAIOAuthAccountId(secret: string): string {
+  try {
+    const credential = JSON.parse(secret) as Record<string, unknown>;
+    if (credential.kind !== "openai-oauth") return "";
+    if (typeof credential.chatgptAccountId === "string" && credential.chatgptAccountId.trim()) return credential.chatgptAccountId.trim();
+    for (const token of [credential.idToken, credential.accessToken]) {
+      if (typeof token !== "string") continue;
+      const parts = token.split(".");
+      if (parts.length < 2) continue;
+      const claims = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as Record<string, unknown>;
+      const auth = claims["https://api.openai.com/auth"];
+      if (auth && typeof auth === "object" && !Array.isArray(auth) && typeof (auth as Record<string, unknown>).chatgpt_account_id === "string") {
+        return ((auth as Record<string, unknown>).chatgpt_account_id as string).trim();
+      }
+    }
+  } catch {
+    // API-key secrets are not JSON credentials.
+  }
+  return "";
+}
+
+function isOpenAIOAuthSecret(secret: string): boolean {
+  try {
+    const credential = JSON.parse(secret) as Record<string, unknown>;
+    return credential.kind === "openai-oauth" && typeof credential.accessToken === "string";
+  } catch {
+    return false;
+  }
+}
+
 async function fetchProviderModels(input: {
   url: string;
   secret: string;
   providerId: string;
+  headers?: Record<string, string>;
   fetchFn: FetchLike;
   totalTimeoutMs: number;
 }): Promise<FetchProviderResult> {
+  let oauthAccessToken: string | null = null;
+  if (input.providerId === "openai") {
+    try {
+      const credential = JSON.parse(input.secret) as Record<string, unknown>;
+      if (credential.kind === "openai-oauth" && typeof credential.accessToken === "string") {
+        oauthAccessToken = credential.accessToken;
+      }
+    } catch {
+      // API-key secrets are intentionally opaque.
+    }
+  }
   let res: { readonly status: number; readonly ok: boolean; text(): Promise<string> };
   try {
     res = await input.fetchFn(input.url, {
       headers: {
-        ...(input.secret ? { Authorization: "Bearer " + input.secret } : {}),
+        ...(input.headers ?? {}),
+        ...((oauthAccessToken ?? input.secret) ? { Authorization: "Bearer " + (oauthAccessToken ?? input.secret) } : {}),
         Accept: "application/json",
         ...(input.providerId === "opencode" ? { "x-opencode-session": opencodeModelsSession(input.providerId) } : {}),
       },
@@ -303,10 +353,20 @@ export async function fetchModelsForProvider(input: {
   }
   let result: FetchProviderResult;
   try {
+    const isOpenAIOAuth = provider.id === "openai" && isOpenAIOAuthSecret(secret);
     result = await fetchProviderModels({
-      url: modelsUrl(provider.origin),
+      url: isOpenAIOAuth ? OPENAI_CODEX_MODELS_URL : modelsUrl(provider.origin),
       secret: secret ?? "",
       providerId: provider.id,
+      ...(isOpenAIOAuth
+        ? {
+            headers: {
+              "user-agent": OPENAI_CODEX_USER_AGENT,
+              originator: "codex-tui",
+              ...(openAIOAuthAccountId(secret) ? { "chatgpt-account-id": openAIOAuthAccountId(secret) } : {}),
+            },
+          }
+        : {}),
       fetchFn: input.fetchFn ?? defaultFetch,
       totalTimeoutMs: PROVIDER_MODELS_TOTAL_TIMEOUT_MS,
     });

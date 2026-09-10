@@ -1468,3 +1468,27 @@ table.data td.cell-actions { white-space: nowrap; width: 1%; }
   .preset-grid { grid-template-columns: minmax(0, 1fr); }
   .health-grid { grid-template-columns: minmax(0, 1fr); }
 }
+.credential-tabs {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 3px;
+  gap: 2px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.credential-tabs button {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.credential-tabs button:hover { color: var(--ink); background: var(--surface-3); }
+.credential-tabs button.is-active { color: var(--ink); background: var(--surface); }
+.oauth-panel { background: var(--surface-2); }

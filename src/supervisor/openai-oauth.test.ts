@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { completeOpenAIOAuth, parseCallbackUrl, startOpenAIOAuth, resetOpenAIOAuthForTests, OPENAI_OAUTH_TOKEN_URL } from "./openai-oauth.ts";
+import { completeOpenAIOAuth, openAIOAuthAccountId, parseCallbackUrl, startOpenAIOAuth, resetOpenAIOAuthForTests, OPENAI_OAUTH_TOKEN_URL } from "./openai-oauth.ts";
+
+function jwtWithAccountId(accountId: string): string {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${encode({ alg: "none" })}.${encode({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } })}.sig`;
+}
 
 test("OpenAI OAuth creates an S256 PKCE authorization URL", () => {
   resetOpenAIOAuthForTests();
@@ -20,12 +25,13 @@ test("OpenAI OAuth exchanges a callback code with a mock fetch", async () => {
   const calls: { url: string; init: RequestInit | undefined }[] = [];
   const credential = await completeOpenAIOAuth(started.sessionId, callback, async (url, init) => {
     calls.push({ url: String(url), init });
-    return new Response(JSON.stringify({ access_token: "at", refresh_token: "rt", expires_in: 3600 }), { status: 200 });
+    return new Response(JSON.stringify({ access_token: jwtWithAccountId("acct-test"), refresh_token: "rt", expires_in: 3600 }), { status: 200 });
   });
   assert.equal(calls[0]?.url, OPENAI_OAUTH_TOKEN_URL);
   assert.match(String(calls[0]?.init?.body), /grant_type=authorization_code/);
   assert.equal(credential.kind, "openai-oauth");
-  assert.equal(credential.accessToken, "at");
+  assert.equal(openAIOAuthAccountId("", credential.accessToken), "acct-test");
+  assert.equal(credential.chatgptAccountId, "acct-test");
   assert.equal(credential.refreshToken, "rt");
 });
 

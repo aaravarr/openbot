@@ -457,6 +457,31 @@ function loadStoredSecret(providerId) {
   return providers[providerId];
 }
 
+function openAIOAuthAccountId(credential) {
+  if (!isRecord(credential)) return "";
+  if (typeof credential.chatgptAccountId === "string" && credential.chatgptAccountId.trim()) return credential.chatgptAccountId.trim();
+  var tokens = [credential.idToken, credential.accessToken];
+  for (var i = 0; i < tokens.length; i++) {
+    try {
+      var parts = String(tokens[i] || "").split(".");
+      if (parts.length < 2) continue;
+      var claims = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+      var auth = claims && isRecord(claims["https://api.openai.com/auth"]) ? claims["https://api.openai.com/auth"] : null;
+      if (auth && typeof auth.chatgpt_account_id === "string" && auth.chatgpt_account_id.trim()) return auth.chatgpt_account_id.trim();
+    } catch (err) { /* a non-JWT token simply has no embedded account id */ }
+  }
+  return "";
+}
+
+function readOpenAIOAuthCredential(providerId) {
+  if (providerId !== "openai") return null;
+  var raw = loadStoredSecret(providerId);
+  try {
+    var parsed = JSON.parse(raw);
+    return isRecord(parsed) && parsed.kind === "openai-oauth" ? parsed : null;
+  } catch (err) { return null; }
+}
+
 function requestOAuthRefresh(refreshToken) {
   return new Promise(function (resolve, reject) {
     var payload = Buffer.from("grant_type=refresh_token&client_id=app_EMoamEEZ73f0CkXaXp7hrann&refresh_token=" + encodeURIComponent(refreshToken), "utf8");
@@ -511,6 +536,8 @@ function refreshOpenAIOAuthCredential(providerId, parsed) {
         refreshToken: refreshed.refresh_token || parsed.refreshToken,
         expiresAt: Math.floor(Date.now() / 1000) + Math.max(1, Number(refreshed.expires_in) || 3600),
       });
+      var refreshedAccountId = openAIOAuthAccountId({ idToken: refreshed.id_token, accessToken: refreshed.access_token });
+      if (refreshedAccountId) next.chatgptAccountId = refreshedAccountId;
       if (!saveStoredSecret(providerId, JSON.stringify(next))) {
         throw new Error("openbot-hop: OpenAI OAuth credential was not persisted");
       }
@@ -701,6 +728,12 @@ function openUpstream(urlStr, body, key, inbound, apiType) {
   }
   var origin = String((inbound && inbound.providerOrigin) || "");
   var providerId = String((inbound && inbound.providerId) || "");
+  var isOpenAIOAuth = inbound && inbound.openaiOAuth === true;
+  if (isOpenAIOAuth) {
+    headers["User-Agent"] = "codex-tui/0.153.3 (Mac OS 26.5.1; arm64) iTerm.app/3.6.11 (codex-tui; 0.153.3)";
+    headers.originator = "codex-tui";
+    if (inbound.chatgptAccountId) headers["chatgpt-account-id"] = inbound.chatgptAccountId;
+  }
   if (providerId === "opencode" && inbound && inbound.opencodeSession) {
     headers["x-opencode-session"] = inbound.opencodeSession;
   }
@@ -710,7 +743,7 @@ function openUpstream(urlStr, body, key, inbound, apiType) {
   }
   applyOpenBotVersionHeader(headers);
   var ua = inboundUserAgent(inbound);
-  if (ua) headers["User-Agent"] = ua;
+  if (ua && !isOpenAIOAuth) headers["User-Agent"] = ua;
   var req = lib.request({
     protocol: u.protocol,
     hostname: u.hostname,
@@ -1299,7 +1332,9 @@ async function handleCompletions(req, res) {
     fields.model = route.model.slug;
     fields.providerId = route.provider.id;
     fields.providerName = route.provider.name;
-    var apiType = route.provider.apiType === "responses" || route.provider.apiType === "anthropic" ? route.provider.apiType : "chat-completions";
+    var oauthCredential = readOpenAIOAuthCredential(route.provider.id);
+    var isOpenAIOAuth = oauthCredential !== null;
+    var apiType = isOpenAIOAuth ? "responses" : route.provider.apiType === "responses" || route.provider.apiType === "anthropic" ? route.provider.apiType : "chat-completions";
     body.model = route.model.slug;
     if (Array.isArray(body.messages)) {
       body.messages = toOpenAIMessages(body.messages);
@@ -1332,6 +1367,8 @@ async function handleCompletions(req, res) {
       headers: req.headers || {},
       providerId: route.provider.id,
       providerOrigin: route.provider.origin,
+      openaiOAuth: isOpenAIOAuth,
+      chatgptAccountId: isOpenAIOAuth ? openAIOAuthAccountId(oauthCredential) : "",
       opencodeSession: route.provider.id === "opencode"
         ? (conversationId ? opencodeSessionId(route.provider.id, conversationId) : nodeCrypto.randomUUID())
         : undefined,
@@ -1351,7 +1388,9 @@ async function handleCompletions(req, res) {
       sendJson(res, 503, noSecret);
       return;
     }
-    var upstream = upstreamUrl(route.provider.origin, apiType);
+    var upstream = isOpenAIOAuth
+      ? "https://chatgpt.com/backend-api/codex/responses"
+      : upstreamUrl(route.provider.origin, apiType);
     fields.upstreamEndpoint = upstream;
     var out;
     if (body.stream === true) {

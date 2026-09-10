@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { type Catalog, type SecretBytes } from "../domain/types.ts";
 import { type SecretStore } from "../supervisor/secrets.ts";
-import { fetchModelsForProvider, modelsUrl, normalizeProviderModels, type FetchLike } from "./provider-models.ts";
+import { fetchModelsForProvider, modelsUrl, normalizeProviderModels, OPENAI_CODEX_MODELS_URL, type FetchLike } from "./provider-models.ts";
 
 type ResponseStub = { readonly status: number; readonly ok: boolean; text(): Promise<string> };
 
@@ -175,6 +175,26 @@ test("fetch-models succeeds and forwards the stored secret server-side", async (
   assert.equal(body.models[0]?.id, "glm-5.3");
   assert.equal(body.models[0]?.contextLength, 128000);
   assert.equal(body.models[0]?.modalities.length, 0);
+});
+
+test("OpenAI OAuth fetch-models uses the Codex models endpoint and credential headers", async () => {
+  const catalog = makeCatalog([{ id: "openai", name: "OpenAI", origin: "https://api.openai.com/v1" }]);
+  const secret = JSON.stringify({ kind: "openai-oauth", accessToken: "oauth-access", refreshToken: "refresh", expiresAt: 9999999999, chatgptAccountId: "acct-123" });
+  let requestedUrl = "";
+  let requestedHeaders: Record<string, string> = {};
+  const fetchFn: FetchLike = async (url, init) => {
+    requestedUrl = url;
+    requestedHeaders = init?.headers ?? {};
+    return jsonResponse(200, { models: [{ slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol" }] });
+  };
+  const result = await fetchModelsForProvider({ providerId: "openai", catalog, secretStore: makeSecrets({ openai: secret }), fetchFn });
+  assert.equal(result.status, 200);
+  assert.equal(requestedUrl, OPENAI_CODEX_MODELS_URL);
+  assert.equal(requestedHeaders.Authorization, "Bearer oauth-access");
+  assert.equal(requestedHeaders["chatgpt-account-id"], "acct-123");
+  assert.equal(requestedHeaders.originator, "codex-tui");
+  const body = result.body as { models: { id: string; name: string | null }[] };
+  assert.deepEqual(body.models, [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", contextLength: null, maxOutputTokens: null, modalities: [], reasoningLevels: [] }]);
 });
 
 test("fetch-models reuses a stable OpenCode session across requests", async () => {

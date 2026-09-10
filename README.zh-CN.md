@@ -6,75 +6,40 @@
 
 Grok Bot 0.30 已经有一台 Computer。OpenBot 让这台 Computer 调用 OpenAI、OpenRouter、OpenCode Zen（注册一次、贴入 key 即可用 $0 模型），或通过 Custom 接入任何 OpenAI 兼容接口 —— 不用离开 Grok Bot。想用回官方 Grok 时，一键即可。
 
+## 安装
+
+请在 **Grok Bot 的 Computer** 上运行，不要在 Mac 上运行：
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
 ```
 
-然后用 **Computer 的浏览器** 打开 [http://127.0.0.1:9280](http://127.0.0.1:9280)。安装脚本会用普通句子打印这个地址。脚本需要快照时再加 `--json`。
+OpenBot 需要 Node 22 或更新。如果 Computer 里只有 Node 20，安装脚本会把 Node 22 放进 `sand-data`，不替换系统 Node。第一次安装时，Cloudflare 提示出现后输入 `y` 会启用手机 URL 和二维码；直接回车则只保留本机访问。然后用 Computer 浏览器打开 [http://127.0.0.1:9280](http://127.0.0.1:9280)。
 
-## 你能得到什么
-
-- **还是 Grok Bot，只是脑子换成你选的。** 同一个聊天窗口，同一套工具，由你的模型来回答。
-- **随时回到官方 Grok。** 切回去就是原厂聊天。已保存的服务商还在，再切回来不用重新粘贴 Key。
-- **Key 留在 Computer 上。** 不会进聊天，不会出现在命令行，也不会离开这台盒子。
-- **本机一页控制，不是再装一个 App。** 装一次，打开 `127.0.0.1` 上的页面，选服务商、选模型，回到 Grok Bot 继续聊。
-- **可选的手机入口。** Cloudflare Tunnel 会打印公网 URL 和二维码。拿到这个 URL 的人都能打开控制页。Key 仍留在 Computer 上。Hop 和控制页共用同一端口。
-
-## 安装
+再次运行同一条命令即可更新。当前的官方/自定义模式和已保存的 Tunnel 选择都会保留。
 
 <details>
-<summary>Grok Bot：一条命令完成安装</summary>
+<summary>Grok Bot：自动安装</summary>
 
-当用户要求安排 `aaravarr/openbot` 时，请在 Grok Bot 的 Computer 上运行：
+在 Computer 上的 Bot 回合中运行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-mode
 ```
 
-`--bot-mode` 全程非交互且可重复执行，并会立即返回。请按每次命令输出中的 `OPENBOT_BOT_INSTRUCTION` 操作；状态文件和日志分别位于 `/home/box/sand-data/openbot-install-result.json` 与 `/home/box/sand-data/openbot-install.log`（路径随 `OPENBOT_SAND_DATA` 变化）。
-
-请按两步操作：
-
-1. 运行命令并立即按 started 指令操作。
-2. 下一回合按输出指令运行 `--bot-status`，直到得到终态。
-
-脚本通常约 15-60 秒完成。Bot 启动后应立即回复用户，轮询不超过 2 次；成功时发送链接和二维码；超过 3 分钟仍卡住时发送日志尾部并停止。
+按每次命令输出的 `OPENBOT_BOT_INSTRUCTION` 操作；它是权威指引。概要就是：启动命令，再按输出的 `--bot-status` 指令继续。安装通常需要 15–60 秒；最多轮询 2 次；超过 3 分钟仍卡住时，把日志尾部发给用户并停止。
 
 </details>
 
 ## 卸载
 
-<details>
-<summary>移除 OpenBot</summary>
-
-在 Grok Bot 的 Computer 上，Bot 回合中运行 `curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/uninstall.sh | bash -s -- --bot-mode`；也可以去掉 `--bot-mode`，使用交互式确认。Provider secrets 默认保留；加上 `--purge-secrets` 才会删除。
-
-</details>
-
-
-在 **Computer 终端**里运行，不要在 Mac 上运行。Grok Bot 的聊天走 Computer；笔记本上的代理收不到回合。
-
-需要 Node 22 或更新。如果盒子里只有 Node 20，安装脚本会把 Node 22 放到 `sand-data`，不替换系统 Node。
+在 Grok Bot 的 Computer 上运行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/uninstall.sh | bash
 ```
 
-看到 `OpenBot is ready` 和 `This Computer` 后，用 Computer 浏览器打开 `http://127.0.0.1:9280`。
-
-用**同一条命令更新** OpenBot。Chat 保持官方或自定义，不会被切回官方 Grok。已经打开的 Cloudflare Tunnel 也会保留。
-
-Cloudflare 提问只在**第一次安装**（还没有保存过 expose）时出现。输入 `y` 再回车会打印手机 URL 和二维码；只按回车则只在本机。之后再跑安装会沿用你已经选好的方式。可用 `--tunnel off`、`--tunnel cloudflare` 或 `OPENBOT_TUNNEL=off` 覆盖。
-
-在你接入服务商之前，聊天仍是官方 Grok。这是故意的。
-
-```bash
-openbot tunnel on      # 公网 URL + 二维码；失效的 trycloudflare 链接也会换新
-openbot tunnel off     # 只在这台 Computer
-openbot tunnel status
-```
-
-trycloudflare 地址会过期。更新、`openbot tunnel on`，或 Chat 上的 **Refresh URL**，都会探测已保存的链接，失效就重新开一条隧道。
+交互式卸载默认保留 provider secrets。加上 `--purge-secrets` 才会删除。Bot 模式也可以使用 `bash -s -- --bot-mode`。
 
 ## 接入一个模型
 
@@ -86,51 +51,57 @@ trycloudflare 地址会过期。更新、`openbot tunnel on`，或 Chat 上的 *
 
 下一回合就会走你刚接上的模型。上下文、最大输出、推理等级和输入类型先用默认值；之后在对应服务商里打开该模型再改。
 
+## Tunnel
+
+Cloudflare Tunnel 是可选项。它会通过临时公网 URL 暴露控制页；拿到 URL 的人都能打开它，但 Key 仍留在 Computer 上。
+
+```bash
+openbot tunnel on      # 开启或刷新公网 URL + 二维码
+openbot tunnel off     # 只允许这台 Computer 访问
+openbot tunnel status
+```
+
+trycloudflare URL 会过期。`openbot tunnel on`、Dashboard 上的 **Refresh URL**，以及更新操作，都可以替换已经失效的链接。用 `openbot tunnel off` 或 Dashboard 可以关闭 Tunnel。
+
 ## 思考强度
 
-在 **Chat** 上，**Thinking** 模块在 Now 和模型列表之间。它显示**当前启用**的自定义模型允许列表。官方 Grok 没有这个模块。还缺 Key 的模型也没有。Grok Bot 会在下一条消息带上你选的值。
+在 **Chat** 上，**Thinking** 显示当前自定义模型的允许列表。官方 Grok 和还缺 Key 的模型没有 Thinking 模块。你选的值会在下一条消息发送。
 
-模型弹窗只配置 Chat 可以选择的等级，不选正在用的强度。
+模型弹窗只配置 Chat 可以提供哪些等级；当前使用的强度在 Chat 上选择：
 
-- **Default** —— 不带 thinking 字段，用上游自己的默认。
-- **Off** —— 明确关闭（GLM 和通用 OpenAI 发送 `thinking: { type: "disabled" }`；Grok 没有标准关闭字段）。
+- **Default** —— 不带 thinking 字段，使用上游默认值。
+- **Off** —— 在上游支持时明确关闭 thinking。
 - **Low / Medium / High / …** —— 发送对应强度。
 
-旧目录里的 `none` 表示「交给模型」。OpenBot 会把它迁成 **Default**。模型上已经有 Default 之后，**Off** 才是真正的关闭。
+旧目录里的 `none` 表示“交给模型”；OpenBot 会把它迁成 **Default**。模型上有 Default 后，**Off** 才是真正的关闭。
 
 ## 控制页怎么分层
 
-三层屏幕。限额在弹窗里改，不会再开第三页把表单平铺下去。
+控制页主要分为四个区域：
 
-- **Chat** —— 这台 Computer 上 Grok Bot 用哪个模型。官方 Grok，或一个自定义模型。**Thinking** 是独立模块，只针对当前 On 的模型。下面一行列表用来切换 `slug · 服务商`。不是按会话配置——同一时间只有一个模型。这里不填 Key，也不改限额。
-- **Provider** —— 账号。页眉始终有 **Edit**（无障碍名称 **Edit endpoint**）、**Key**，以及 Key saved 标记。**Edit** 弹出名称和 Base URL。**Key** 弹出 API Key。**Add model** 弹出 **New model**（模型 ID 加限额）。点模型行会弹出限额编辑。**Use** 把它放到 Chat。思考强度在 Chat 上选，不在这里选。
-- **Logs** —— 这台 Computer 上的 hop 与官方 host 流记录。默认关闭，不记录。
+- **Chat** —— 选择官方 Grok 或唯一的全局自定义模型，并选择 Thinking 强度。
+- **Provider / Models** —— 管理接口、Key、模型 ID、限额和启用状态。图片、视频、音频能力会记录在模型配置里，当前聊天仍只发送文本。
+- **Bots** —— 查看这台 Computer 上的 bot，逐个暂停/恢复，并为每个 bot 指定模型。没有单独覆盖时使用全局模型，也可以批量应用选择。
+- **Logs** —— 查看这台 Computer 的请求记录，默认关闭记录。
 
-在 **Dashboard** 上，**Install from the OpenBot repo** 会把 OpenBot 配置技能复制到 Grok Bot 的用户技能目录（`/home/box/agent-data/workflows`），不会写入插件目录。
-
-如果某个模型还没有 Key，Chat 会带你去对应的服务商页，而不是悄悄失败。没有 Key 也可以先打开模型弹窗改限额。
-
-图片、视频、音频会记在模型配置里，供以后使用。当前聊天仍只发送文本。
+在 **Dashboard** 上，**Install from the OpenBot repo** 会把 OpenBot 配置技能复制到 Grok Bot 的用户技能目录 `/home/box/agent-data/workflows`，不会写入插件目录。
 
 ## 请求日志
 
-**Logs** 用来排查卡住的 Grok Bot 回合。打开 **Record requests** 后才会写入记录。API Key 不会写入日志。除非你选择在出错时保留正文，或保留全部正文，否则只存元数据。
+打开 **Record requests** 后才会捕获记录。API Key 永远不会写入日志。正文默认不保存，除非你选择在出错时保留正文或保留全部正文。
 
-自定义模型会各写一行 **Hop**（`POST /v1/chat/completions`）和 **Host**（OpenBot 交给 harness 的 AI SDK 片段：`tool-call-streaming-start`、delta、`tool-call`，以及同时带文本和 tool-call 的 `response.messages`）。官方 Grok 写 **Official** 行：真实 host 流（`tool-call-streaming-start`、delta、`tool-call`、`response.messages`）。官方聊天仍走 Grok，tap 不会 hop。打开 **Keep all bodies** 才会存这些报文。在 Official 下打开记录会装上 tap，host 可能重启一次。
-
-在 Computer 上重新安装或 reload OpenBot 后，loopback 服务才会用到新代码。
+自定义聊天会记录 **Hop**（`POST /v1/chat/completions`）和 **Host** 行。官方 Grok 会记录 **Official** host 行；聊天仍走原厂 Grok，不会经过 hop。Official 开启记录时会安装 tap，host 可能重启一次。
 
 ## 回到官方 Grok
 
-在 **Chat** 里点列表中的 **Official Grok**。聊天回到原厂。服务商和 Key 仍留在 Computer 上，之后还能切回自定义模型，不用重配。正在跑的 Tunnel 会一直保留，直到你关掉它。更新 OpenBot 不会替你点 Official。
+在 **Chat** 里点击 **Official Grok**。聊天会回到原厂；服务商、模型和 Key 仍留在 Computer 上，之后可以再切回来。正在运行的 Tunnel 会一直保留，直到你关闭它。更新 OpenBot 不会替你切换模式。
 
 ## 使用前请知道
 
-- 不要把 Key 写在命令行上。如果用 CLI 带 `--origin` 和 `--model` 安装，请用环境变量 `OPENBOT_API_KEY`。
-- 同一时间只有一个模型在生效。按会话覆盖模型不在当前版本。
-- 如果 `9280` 端口已经被别的程序占用，OpenBot 不会抢过去。
-- OpenBot 面向 **Computer 上的 Grok Bot 0.30**，不会改 Mac 上的应用。
-- 这一版不含 Tailscale。
+- 不要把 Key 写在命令行上。如果用 CLI 带 `--origin` 和 `--model` 安装，请使用环境变量 `OPENBOT_API_KEY`。
+- 如果 `9280` 端口已经被其他程序占用，OpenBot 不会抢过去。
+- OpenBot 面向 **Computer 上的 Grok Bot 0.30**，不会修改 Mac 上的应用。
+- 这一版不包含 Tailscale。
 
 ## 许可
 

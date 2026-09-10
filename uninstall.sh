@@ -116,13 +116,13 @@ stop_ui() {
   pid="$(pid_from_file "$file" || true)"
   if [[ -n "$pid" ]] && alive "$pid"; then
     args="$(argv_of "$pid")"
-    if [[ "$args" == *openbot*src/ui/server.ts* ]]; then kill "$pid" 2>/dev/null || true; found=1; echo 'OpenBot UI server stopped.'; else echo "UI pidfile $pid does not match OpenBot UI; left process untouched."; fi
+    if [[ "$args" == *src/ui/server.ts* ]]; then kill "$pid" 2>/dev/null || true; found=1; echo 'OpenBot UI server stopped.'; else echo "UI pidfile $pid does not match OpenBot UI; left process untouched."; fi
   fi
   if [[ "$found" -eq 0 ]]; then
     while read -r pid; do
       [[ -n "$pid" ]] || continue
       args="$(argv_of "$pid")"
-      if [[ "$args" == *openbot*src/ui/server.ts* ]]; then kill "$pid" 2>/dev/null || true; found=1; echo 'OpenBot UI server stopped by argv fallback.'; fi
+      if [[ "$args" == *src/ui/server.ts* ]]; then kill "$pid" 2>/dev/null || true; found=1; echo 'OpenBot UI server stopped by argv fallback.'; fi
     done < <(port_pids)
   fi
   if [[ "$found" -eq 0 ]] && [[ -n "$(port_pids)" ]]; then echo '9280 is occupied by a foreign process; it was not killed.'; fi
@@ -131,22 +131,23 @@ stop_ui() {
 }
 
 restore_host() {
-  local backup="$DATA/host-main.cjs.pre-openbot" legacy="${HOST}.pre-openbot" first_line
+  local preferred="$DATA/host-main.cjs.pre-openbot" legacy="${HOST}.pre-openbot" backup="" candidate first_line invalid_found=0
   local invalid_message="$(printf '%b' '\345\244\207\344\273\275\346\227\240\346\225\210\357\274\214\344\277\235\347\225\231\345\275\223\345\211\215\345\256\277\344\270\273\346\226\207\344\273\266')"
   HOST_RESTORE_INVALID=0
   HOST_RESTORE_SUMMARY=''
-  [[ -f "$backup" ]] || backup="$legacy"
-  if [[ -e "$backup" && ( ! -s "$backup" || ! -r "$backup" ) ]]; then
-    HOST_RESTORE_INVALID=1
-    HOST_RESTORE_SUMMARY="Host backup invalid; current host file preserved ($invalid_message)"
-    echo "$invalid_message"
-  elif [[ -f "$backup" ]]; then
-    first_line="$(sed -n '1p' "$backup" 2>/dev/null || true)"
-    if [[ -z "${first_line//[[:space:]]/}" ]]; then
-      HOST_RESTORE_INVALID=1
-      HOST_RESTORE_SUMMARY="Host backup invalid; current host file preserved ($invalid_message)"
-      echo "$invalid_message"
-    elif mv -f -- "$backup" "$HOST"; then
+  for candidate in "$preferred" "$legacy"; do
+    [[ -e "$candidate" ]] || continue
+    if [[ -f "$candidate" && -s "$candidate" && -r "$candidate" ]]; then
+      first_line="$(sed -n '1p' "$candidate" 2>/dev/null || true)"
+      if [[ -n "${first_line//[[:space:]]/}" ]]; then
+        backup="$candidate"
+        break
+      fi
+    fi
+    invalid_found=1
+  done
+  if [[ -n "$backup" ]]; then
+    if mv -f -- "$backup" "$HOST"; then
       HOST_RESTORE_SUMMARY="Restored the stock host from $backup."
       echo "$HOST_RESTORE_SUMMARY"
     else
@@ -154,6 +155,10 @@ restore_host() {
       HOST_RESTORE_SUMMARY="Host backup invalid; current host file preserved ($invalid_message)"
       echo "$invalid_message"
     fi
+  elif [[ "$invalid_found" -eq 1 ]]; then
+    HOST_RESTORE_INVALID=1
+    HOST_RESTORE_SUMMARY="Host backup invalid; current host file preserved ($invalid_message)"
+    echo "$invalid_message"
   elif [[ -f "$HOST" ]]; then
     echo 'No OpenBot host backup found; host was left unchanged.'
   else
@@ -210,8 +215,10 @@ EOF
   [[ "$WORKER" -eq 1 ]] && json_write running files 'Removing OpenBot files.'
   remove_data
   verify
-  if [[ "$WORKER" -eq 1 && "$HOST_RESTORE_INVALID" -eq 1 ]]; then
-    json_write failed verify "$HOST_RESTORE_SUMMARY" 'The host backup failed validation; the current host file was preserved.' "$(now)"
+  if [[ "$HOST_RESTORE_INVALID" -eq 1 ]]; then
+    if [[ "$WORKER" -eq 1 ]]; then
+      json_write failed verify "$HOST_RESTORE_SUMMARY" 'The host backup failed validation; the current host file was preserved.' "$(now)"
+    fi
     return 1
   fi
   if [[ "$WORKER" -eq 1 ]]; then
@@ -235,7 +242,7 @@ NODE
 sanity_check
 while [[ $# -gt 0 ]]; do case "$1" in --yes) YES=1 ;; --purge-secrets) PURGE_SECRETS=1 ;; --bot-mode) WORKER=1 ;; --bot-mode-worker) WORKER=1; WORKER_ENTRY=1; YES=1 ;; --bot-status) bot_status; exit 0 ;; *) echo "OpenBot: unknown option $1" >&2; exit 2 ;; esac; shift; done
 if [[ "$WORKER" -eq 1 && "${1:-}" != '--bot-mode-worker' ]]; then :; fi
-if [[ "$WORKER" -eq 1 && -f "$PID_FILE" ]]; then
+if [[ "$WORKER_ENTRY" -eq 0 && -f "$PID_FILE" ]]; then
   old="$(pid_from_file "$PID_FILE" || true)"
   if [[ -n "$old" ]] && alive "$old" && [[ "$(argv_of "$old")" == *uninstall-worker* ]]; then printf '%s\n' '===== OPENBOT BOT RESULT =====' 'OPENBOT_STATUS=started' "OPENBOT_RESULT_FILE=$RESULT_FILE" 'OPENBOT_BOT_INSTRUCTION=SendToUser now: uninstall is already running; poll --bot-status in 30-60 seconds.' '===== END OPENBOT BOT RESULT ====='; exit 0; fi
 fi

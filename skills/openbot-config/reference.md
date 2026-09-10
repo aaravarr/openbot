@@ -13,9 +13,17 @@ Default files under `/home/box/sand-data` (override with `OPENBOT_SAND_DATA`; in
 
 Install channel for a Bot turn:
 
-- Already installed: run the install tree's own script, `bash "$DEST/install.sh" --bot-mode` (`$DEST` = `$DATA/openbot`, default `/home/box/sand-data/openbot`; `OPENBOT_DEST` / `OPENBOT_SAND_DATA` override). It still downloads the release archive into `$DATA/openbot-staging` and swaps it in; it does not need the remote one-liner.
-- Not installed: no local tree exists, so the remote one-liner is the only option (`curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-mode`).
-- The local tree avoids the "remote script piped into a shell" command shape the host reviews for approval. It does not guarantee an approval verdict.
+Use this one command for either a first install or an update; `install.sh` handles the existing tree:
+
+`curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-mode`
+
+If the remote command is blocked by the host's security policy, use the local tree's installer as an explicit fallback: `bash "$DEST/install.sh" --bot-mode` (`$DEST` = `$DATA/openbot`, default `/home/box/sand-data/openbot`; `OPENBOT_DEST` / `OPENBOT_SAND_DATA` override). This is more likely to avoid the `curl | bash` shape, but is not guaranteed to avoid an approval prompt. Use it only after the remote command is blocked; do not probe to choose it or read the repository README first.
+
+Send one short "installation started" line, then follow the `OPENBOT_BOT_INSTRUCTION` printed by `install.sh --bot-mode` / `--bot-status`; that output is authoritative for progress, success, and failure. Poll status at most twice. If it fails, report the error and log path exactly as printed.
+
+Bot mode stages the new tree in `$DATA/openbot-staging` and swaps that staging directory into place; if that staging-directory switch fails, it rolls back to the previous release (bot mode only). If both download sources fail while OpenBot is already installed, keep the existing copy and report that outcome honestly.
+
+A deferred bot-mode host bounce follows `OPENBOT_HOST_BOUNCE=pending` → `OPENBOT_HOST_BOUNCE=done`; see the status details below.
 
 Deferred host bounce (bot-mode upgrades only; see `OPENBOT_HOST_BOUNCE` in SKILL.md):
 

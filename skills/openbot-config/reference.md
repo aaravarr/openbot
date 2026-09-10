@@ -2,9 +2,7 @@
 
 Read this from [SKILL.md](SKILL.md) when you need disk shapes, HTTP/CLI contracts, presets, or hop maps. Do not put secrets in examples.
 
-## Detached bot-mode installer protocol
-
-`install.sh --bot-mode` starts a detached Linux worker with `setsid`, `nohup`, redirected output, and `/dev/null` stdin, then exits 0. The worker downloads into `/home/box/sand-data/openbot-staging`, syntax-checks the new tree, warms runtime dependencies, and cuts it over immediately before one final reconcile. The existing cloudflared process is kept; the host bounce is still unavoidable when payload bytes change, but is deferred to the final cutover and happens once. A second invocation while the pid in `openbot-install.pid` is alive reports that an install is already running.
+## Detached bot-mode installer files
 
 Default files under `/home/box/sand-data` (override with `OPENBOT_SAND_DATA`; individual overrides are `OPENBOT_BOT_RESULT`, `OPENBOT_BOT_LOG`, and `OPENBOT_BOT_PID`):
 
@@ -12,9 +10,6 @@ Default files under `/home/box/sand-data` (override with `OPENBOT_SAND_DATA`; in
 - `openbot-install.log`: detached worker stdout/stderr.
 - `openbot-install.pid`: worker pid, removed on worker exit.
 
-Bot-facing instructions are emitted by `install.sh --bot-mode` and `install.sh --bot-status` in `OPENBOT_BOT_INSTRUCTION`; follow that stdout guidance. Normal installation is budgeted to four agent turns: start once, poll `--bot-status --brief` no more than twice, then report the final result. The result block is authoritative; do not run separate source/version/HTTP/config checks. If a `running` result is older than 3 minutes, send the log tail and stop polling.
-
-A running result older than 3 minutes keeps `OPENBOT_STATUS=running` but adds the log tail and instructs the bot to stop polling. Missing result files report `not-installed`. Do not treat a stale running record as success.
 
 ## Architecture
 

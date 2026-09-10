@@ -33,10 +33,12 @@ curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | 
 
 `--bot-mode` 全程非交互且可重复执行，并会立即返回。请按每次命令输出中的 `OPENBOT_BOT_INSTRUCTION` 操作；状态文件和日志分别位于 `/home/box/sand-data/openbot-install-result.json` 与 `/home/box/sand-data/openbot-install.log`（路径随 `OPENBOT_SAND_DATA` 变化）。
 
---bot-mode 会立即返回，后台安装与宿主进程树脱离，因此宿主重启不会中断 Bot 回合。更新会先在 staging 目录下载、预热并做语法检查，最后才切换正式目录并只 reconcile/bounce 一次；已有 tunnel 进程保持存活。请按两步操作：
+请按两步操作：
 
 1. 运行命令并立即按 started 指令操作。
 2. 下一回合按输出指令运行 `--bot-status`，直到得到终态。
+
+脚本通常约 15-60 秒完成。Bot 启动后应立即回复用户，轮询不超过 2 次；成功时发送链接和二维码；超过 3 分钟仍卡住时发送日志尾部并停止。
 
 </details>
 

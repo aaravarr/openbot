@@ -193,12 +193,15 @@ uninstall_main() {
   fi
   [[ "$mode" == custom ]] && echo 'OpenBot is currently in custom mode.' || echo "OpenBot is currently in official mode or has no mode file; residual files will still be removed."
   [[ "$YES" -eq 1 ]] || {
-    cat <<EOF
-The following will be removed: OpenBot program/runtime, OpenBot state/log/pid files, tunnel files, and the OpenBot host wrap (stock backup restored when available).
-Provider secrets will be retained by default at $DATA/secrets.json.
-Do not touch /home/box/agent-data.
-EOF
-    read -r -p 'Continue with OpenBot uninstall? [y/N] ' answer
+    printf '%s\n' \
+      'The following will be removed: OpenBot program/runtime, OpenBot state/log/pid files, tunnel files, and the OpenBot host wrap (stock backup restored when available).' \
+      "Provider secrets will be retained by default at $DATA/secrets.json." \
+      'Do not touch /home/box/agent-data.' \
+      >&2
+    if [[ ! -r /dev/tty ]] || ! read -r -p 'Continue with OpenBot uninstall? [y/N] ' answer < /dev/tty; then
+      printf '%s\n' 'Non-interactive shell detected: re-run with --yes to confirm, or run from a terminal.' >&2
+      return 2
+    fi
     [[ "$answer" == y || "$answer" == Y || "$answer" == yes || "$answer" == YES ]] || { echo 'OpenBot uninstall cancelled.'; return 0; }
   }
   [[ "$WORKER" -eq 1 ]] && json_write running guard 'Stopping OpenBot workers.'

@@ -6,72 +6,40 @@
 
 Grok Bot 0.30 already has a Computer. OpenBot lets that Computer talk to OpenAI, OpenRouter, OpenCode Zen (sign up once, paste a key, use the $0 models), or any OpenAI-compatible API through Custom — without leaving the Grok Bot app. Official Grok is one click away when you want it back.
 
+## Install
+
+Run this on the **Grok Bot Computer**, not on your Mac:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
 ```
 
-Then open [http://127.0.0.1:9280](http://127.0.0.1:9280) in the **Computer** browser. The installer prints that address in plain language. Pass `--json` if a script needs the snapshot.
+OpenBot needs Node 22 or newer. If the Computer only has Node 20, the installer puts Node 22 in `sand-data` without replacing system Node. On the first install, type `y` at the Cloudflare prompt for a phone URL and QR code, or press Enter to stay local. Then open [http://127.0.0.1:9280](http://127.0.0.1:9280) in the Computer browser.
 
-## What you get
-
-- **The Grok Bot app, with a brain you choose.** Same chat. Same tools. Your model answers.
-- **Official Grok whenever you want it.** Switching back restores stock chat. Saved providers stay, so you can switch forward again without re-pasting a key.
-- **Keys stay on the Computer.** They never go in chat, never go on the command line, and never leave this box.
-- **A local control page, not another app.** One install. One page on `127.0.0.1`. Pick a provider, pick a model, go back to Grok Bot.
-- **Optional phone access.** Cloudflare Tunnel can print a public URL and a QR. Anyone with that URL can open the control page. Keys stay on this Computer. Hop is on the same port.
-
-## Install
+Run the same command again to update. It keeps the current Official/custom mode and saved tunnel choice.
 
 <details>
-<summary>Grok Bot: one-command install</summary>
+<summary>Grok Bot: automatic install</summary>
 
-If the user asks you to arrange `aaravarr/openbot`, run this on the Grok Bot Computer:
+Run this in a Bot turn on the Computer:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash -s -- --bot-mode
 ```
 
-`--bot-mode` returns immediately and runs the install detached from the host process tree. It writes `/home/box/sand-data/openbot-install-result.json` and `/home/box/sand-data/openbot-install.log` (paths follow `OPENBOT_SAND_DATA`). Follow the `OPENBOT_BOT_INSTRUCTION` text printed by each command:
-
-1. Run the command and immediately follow the started instruction.
-2. In the next turn, run the printed `--bot-status` command as instructed until a terminal status is reported.
-
-The script usually finishes in about 15-60 seconds. Bots should reply immediately after starting, poll no more than twice, send the URL and QR on success, and if it is still stuck after 3 minutes, send the log tail and stop.
+Follow the `OPENBOT_BOT_INSTRUCTION` printed by each command; that output is the authority. In short: start the command, then follow its printed `--bot-status` instruction. Installation usually takes 15–60 seconds. Poll at most twice; if it is still stuck after 3 minutes, send the log tail to the user and stop.
 
 </details>
 
 ## Uninstall
 
-<details>
-<summary>Remove OpenBot</summary>
-
-On the Grok Bot Computer, run `curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/uninstall.sh | bash -s -- --bot-mode` from a Bot turn, or run the same script without `--bot-mode` for interactive confirmation. Provider secrets are retained by default; add `--purge-secrets` to remove them.
-
-</details>
-
-Run the command **in the Computer terminal**, not on your Mac. Grok Bot routes chat on the Computer. A proxy on your laptop never sees a turn.
-
-Needs Node 22 or newer. If the box only has Node 20, the installer puts Node 22 in `sand-data` and leaves system Node alone.
+On the Grok Bot Computer, run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/aaravarr/openbot/main/uninstall.sh | bash
 ```
 
-When it prints `OpenBot is ready` and `This Computer`, open `http://127.0.0.1:9280` on the Computer.
-
-Re-run that same command to **update** OpenBot. Chat stays Official or custom. A saved Cloudflare Tunnel stays on. The installer does not switch you back to official Grok.
-
-The Cloudflare prompt is **first install only** (no saved expose yet). Type `y` then Enter for a phone URL and QR. Enter alone stays on this Computer. Later installs keep what you already chose. Override with `--tunnel off`, `--tunnel cloudflare`, or `OPENBOT_TUNNEL=off`.
-
-Chat stays on official Grok until you connect a provider. That is on purpose.
-
-```bash
-openbot tunnel on      # public URL + QR; also replaces a dead trycloudflare link
-openbot tunnel off     # this Computer only
-openbot tunnel status
-```
-
-trycloudflare URLs expire. On update, `openbot tunnel on`, or **Refresh URL** on Chat, OpenBot probes the saved link and starts a new tunnel when it is gone.
+The interactive uninstaller keeps provider secrets by default. Add `--purge-secrets` to delete them. Bot mode is also available with `bash -s -- --bot-mode`.
 
 ## Connect a model
 
@@ -83,51 +51,57 @@ trycloudflare URLs expire. On update, `openbot tunnel on`, or **Refresh URL** on
 
 The next turn uses the model you just connected. Context, max output, reasoning levels, and input types use defaults until you open that model on its provider and change them.
 
+## Tunnel
+
+Cloudflare Tunnel is optional. It exposes the control page through a temporary public URL; anyone with that URL can open it, while keys stay on the Computer.
+
+```bash
+openbot tunnel on      # start or refresh the public URL + QR code
+openbot tunnel off     # local Computer only
+openbot tunnel status
+```
+
+trycloudflare URLs expire. `openbot tunnel on`, the Dashboard’s **Refresh URL**, and an update can replace an expired saved link. Stop the tunnel with `openbot tunnel off` or from the Dashboard.
+
 ## Thinking intensity
 
-On **Chat**, a **Thinking** module sits between Now and the model list. It shows chips for the **active** custom model’s allow-list. Official Grok has no module. A model that still needs a key has no module. Grok Bot sends the selected value on the next message.
+On **Chat**, **Thinking** shows the allow-list for the active custom model. Official Grok and models that still need a key have no Thinking module. The selected value is sent on the next message.
 
-The model dialog only chooses which levels Chat may offer — it does not pick the live value.
+The model dialog configures which levels Chat may offer; Chat chooses the live value:
 
-- **Default** — omit thinking fields. The upstream model uses its own default.
-- **Off** — send an explicit disable (`thinking: { type: "disabled" }` on GLM and generic OpenAI; Grok has no standard off field).
+- **Default** — omit thinking fields and use the upstream default.
+- **Off** — explicitly disable thinking where the upstream supports it.
 - **Low / Medium / High / …** — send that effort.
 
-Older catalogs stored `none` for “leave it to the model.” OpenBot migrates that to **Default**. After Default exists on a model, **Off** is a real disable.
+Older catalogs stored `none` for “leave it to the model”; OpenBot migrates that to **Default**. Once Default exists, **Off** is a real disable.
 
 ## The control page
 
-Three panes. Limits open as dialogs, not a third page of stacked forms.
+The control page has four main areas:
 
-- **Chat** — which model Grok Bot uses on this Computer. Official Grok or one custom model. **Thinking** is its own module for the model that is On. A quiet list switches `slug · provider`. No keys, no limits. Not per-conversation — one model at a time.
-- **Provider** — the account. The header always shows **Edit** (accessible name **Edit endpoint**), **Key**, and a Key saved badge. **Edit** opens name and base URL in a dialog. **Key** opens the API key dialog. **Add model** opens a **New model** dialog (model ID plus limits). Click a model row to edit limits in a dialog. **Use** puts that model on Chat. Thinking is chosen on Chat, not here.
-- **Logs** — hop and official host-stream records for this Computer. Recording is **off by default**.
+- **Chat** — choose Official Grok or the one global custom model, and choose its Thinking value.
+- **Provider / Models** — manage endpoints, keys, model IDs, limits, and activation. Images, video, and audio capabilities are stored on the model for later; current chat still sends text.
+- **Bots** — see bot profiles from the Computer, pause or resume individual bots, and assign a model per bot. A bot without an override uses the global model; selections can also be applied in batches.
+- **Logs** — view request records for this Computer. Recording is off by default.
 
-On **Dashboard**, **Install from the OpenBot repo** copies the OpenBot config skill into Grok Bot user skills (`/home/box/agent-data/workflows`), not plugins.
-
-If a model still needs a key, Chat takes you to that provider instead of failing silently. You can still open a model dialog and set limits before a key exists.
-
-Image, video, and audio are stored on the model for later. Chat still sends text.
+On **Dashboard**, **Install from the OpenBot repo** copies the OpenBot config skill into Grok Bot user skills at `/home/box/agent-data/workflows`, not into the plugin directory.
 
 ## Logs
 
-The **Logs** pane is for stalled Grok Bot turns. Enable **Record requests** to capture records. Keys are never stored. Bodies stay off unless you keep them on errors or keep all bodies.
+Enable **Record requests** to capture records. API keys are never stored. Bodies stay off unless you choose to keep bodies on errors or keep all bodies.
 
-Custom chat writes **Hop** rows (`POST /v1/chat/completions`) and **Host** rows (the AI SDK parts OpenBot yields to the harness: `tool-call-streaming-start`, deltas, `tool-call`, and `response.messages` with text and tool-call together). Official Grok writes **Official** rows: the real host stream (`tool-call-streaming-start`, deltas, `tool-call`, `response.messages`). Official chat still uses Grok; the tap does not hop. Turn on **Keep all bodies** to store those packets. Enabling recording while Official is on installs the tap and may restart the host once.
-
-Reinstall or reload OpenBot on the Computer so the loopback service picks up the change.
+Custom chat records **Hop** (`POST /v1/chat/completions`) and **Host** rows. Official Grok records **Official** host rows; it still uses stock Grok and does not hop. Enabling recording while Official is active installs the tap and may restart the host once.
 
 ## Back to official Grok
 
-On **Chat**, click **Official Grok** in the list. Stock chat comes back. Providers and keys remain on the Computer, so you can return to a custom model without setting it up again. A running tunnel stays until you stop it. Updating OpenBot does not click Official for you.
+On **Chat**, click **Official Grok**. Stock chat comes back; providers, models, and keys remain on the Computer so you can switch back later. A running tunnel stays up until you stop it. Updating OpenBot does not switch modes for you.
 
 ## Good to know
 
-- Do not put a key on the command line. If you install from the CLI with `--origin` and `--model`, set `OPENBOT_API_KEY` in the environment.
-- One model is active at a time. Per-conversation overrides are not in this release.
-- If something else is already bound to port `9280`, OpenBot refuses to take it over.
+- Do not put a key on the command line. For CLI installs with `--origin` and `--model`, use `OPENBOT_API_KEY`.
+- If another program already owns port `9280`, OpenBot refuses to take it over.
 - OpenBot is for Grok Bot **0.30 on the Computer**. It does not patch the Mac app.
-- Tailscale is not in this release.
+- Tailscale is not included.
 
 ## License
 

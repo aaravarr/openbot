@@ -4,6 +4,10 @@ import { App } from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import "./styles.css";
 import "./log-pair.css";
+// Per-page additions from the polish round. Each page agent appends only inside
+// its own labelled section, so three parallel branches merge without touching a
+// shared file.
+import "./styles/ui-polish.css";
 
 const root = document.getElementById("root");
 if (!root) {

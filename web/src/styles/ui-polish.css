@@ -1,0 +1,18 @@
+/* ==========================================================================
+   Polish-round additions.
+   Three page agents work in parallel on this file. Append ONLY inside your own
+   section below, never above it and never in another section: the sections are
+   the merge boundary. Prefer reusing an existing token/class over a new rule.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Section: bots (owner: the Bots page change)
+   -------------------------------------------------------------------------- */
+
+/* --------------------------------------------------------------------------
+   Section: dashboard (owner: the Dashboard/Shell change)
+   -------------------------------------------------------------------------- */
+
+/* --------------------------------------------------------------------------
+   Section: models (owner: the Models page change)
+   -------------------------------------------------------------------------- */

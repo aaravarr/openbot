@@ -52,7 +52,6 @@ function LoadingScreen() {
             OpenBot
           </span>
         </div>
-        <div className="status-strip" />
       </div>
       <main id="main" className="main" tabIndex={-1} aria-busy="true">
         <div className="grid grid--12">

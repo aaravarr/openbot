@@ -97,3 +97,72 @@
 /* --------------------------------------------------------------------------
    Section: models (owner: the Models page change)
    -------------------------------------------------------------------------- */
+
+/* PROPOSED-07 (Models): one control size and one border weight for the provider
+   card head. The Listbox trigger is 32px with a --hairline-strong border while
+   the five actions beside it were 28px ghost-sm with a --hairline border — the
+   "some bigger, some smaller" report. The actions are raised to the picker's
+   32px/picker border; Remove stays ghost-danger so it is distinct by colour
+   only, never by size. Copy is unified in Models.tsx, not here. */
+.models-head-actions {
+  display: flex; align-items: center; gap: var(--sp-2);
+  flex-wrap: wrap; min-width: 0;
+}
+.models-head-actions .btn { border-color: var(--hairline-strong); }
+
+/* PROPOSED-08 (Models): the key state becomes an 8px dot inside the provider
+   selector instead of a standalone "Key saved" badge in the action cluster. The
+   words survive in the trigger's accessible name (Listbox keyState prop) and, in
+   the warning case, in the visible notice. Same --success/--surface pairing as
+   .health-dot--ok, so no new colour enters the system. */
+.listbox__status { width: 8px; height: 8px; border-radius: 50%; flex: none; margin-left: auto; }
+.listbox__status--ok { background: var(--success); }
+.listbox__status--warn { background: var(--warning); }
+.listbox__trigger--with-status { padding-right: 30px; }
+
+/* PROPOSED-08, correction pass (the owner's alignment finding). Measured at
+   1280: the dot sat at left 492.83 on the 73-character provider and at 394 on
+   the other three rows, i.e. 98.83px of spread — the failure. Cause: the row's
+   sublabel (the origin URL) is a flex item with the default min-width:auto, so a
+   long URL beside a long name set the flex line to 441px inside a 350px row. The
+   row overflowed, and `.listbox__badges { margin-left:auto }` — the alignment the
+   spec relies on — resolved against the overflowing line, not against the row.
+   Let the sublabel yield and leave the name at its natural flex settings: the
+   row then always fits, and the badges/check keep their column from row one.
+   Row height and the trailing slot are untouched, so the dot column stays a
+   single column by construction. Measured on four providers of 6-73 characters,
+   the dot lands at the same left on every row (394.00 at 1280, 448.00 at 520).
+   Dry-run against the alternative `flex: 1 1 0` on the name: it also aligns, but
+   collapses a 73-character name to 0px, so it loses the name entirely. Without
+   min-width:0 the sublabel holds its 694px max-content, overflows the 350px row
+   to 441px, and pushes that row's dot to 492.83 — the rejection being fixed. */
+.models-provider-picker .listbox__option .cell-sub {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* PROPOSED-07, correction pass (the owner's "must not wrap" finding). Measured
+   at 1280: the trigger sat at top 130 while all five actions sat at top 148.39,
+   i.e. two lines, and likewise at 1152 (130 / 148.39) and 1024 (130 / 157.08) —
+   the failure. Cause: the provider block's base size was its max-content width
+   (the origin URL rendered on three lines inside a 555.08px block), so it never
+   gave the head the ~567px the action cluster needs. The spec names this block as
+   the part that gives: drop the 360px floor to min-width:0 and the flex basis to
+   0 so it absorbs exactly the leftover width, and truncate the origin on one line
+   — the ellipsis is the intended place for the pressure to go. */
+.card__head > .models-provider-picker { flex: 1 1 0; min-width: 0; }
+.models-provider-picker .origin-line {
+  min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* The cluster itself never wraps and never shrinks while the desktop rule
+   applies; below the documented 768px mobile floor the card head already wraps
+   (`.card__head { flex-wrap: wrap }` at 768px) and the cluster must wrap with
+   it: five 32px actions are 558.92px wide, so at 520px an unwrapped cluster
+   ran Remove out to right 587.92 inside a 494px head and clipped it against the
+   card edge (the document never scrolled; the button was simply cut off).
+   Stacking is allowed below the floor. Wrapping puts
+   Fetch/Refresh/Edit/Replace on one line and Remove on the next, all inside the
+   card at every width measured (520, 640, 767, 768). */
+.models-head-actions { flex: none; flex-wrap: nowrap; max-width: 100%; }
+@media (max-width: 768px) {
+  .models-head-actions { flex-wrap: wrap; }
+}

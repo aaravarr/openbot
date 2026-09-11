@@ -80,6 +80,7 @@ Injection hardening is a separate named opt-in strategy for the **custom hop**. 
 - The hop reads and validates this file on every request. Missing, invalid JSON, an unsupported value, or an invalid field fails closed to `{ "mode": "off" }`.
 - Write valid UTF-8 JSON atomically and keep it secret-free. This file is independent of routing, credentials, logging, mode, and tunnel state.
 - Editing it takes effect on the next hop request. It does not wrap or unwrap the host, reconcile the plan, start a tunnel, or require a host/session bounce.
+- The control page has a **Settings** page (`#/settings`) that reads and writes this same file through `GET`/`PUT /api/settings/delivery`; prefer the JSON file from a Bot turn and the page for a human. `PUT` takes `{ "mode": "off" | "dry-run" | "enforce" }` plus an optional `layers: { "l1"?: bool, "l2"?: bool, "l3"?: bool }`. Sending `layers` with the mode `off` is rejected with `400 { "error": "layers cannot be set while mode is off" }` — an `off` write deliberately keeps the layer objects already in the file, so the field is refused rather than silently dropped. A non-`off` write without `layers` creates or keeps every layer object enabled — a bare `{"mode":"enforce"}` file would run nothing, because a layer only runs while its object is present. `{"mode":"off"}` leaves the layer objects in place so switching back on restores the previous tuning. `GET` returns the effective `mode`, `source` (`env`/`file`/`default`), `path`, `exists`, `envOverride`, `layers`, and `maxAdditionalRuns`.
 
 ### JSON shape
 
@@ -150,7 +151,7 @@ There is deliberately no response-size or capture-admission setting. `heldTermin
 }
 ```
 
-- The rollback takes effect on the next request without a host bounce, reconcile, plan rewrite, or new session. A future UI/API save kind may expose the same fields, but it must not silently turn the mode on.
+- The rollback takes effect on the next request without a host bounce, reconcile, plan rewrite, or new session. The Settings page switch and `PUT /api/settings/delivery` write the same fields; turning the switch off writes `{"mode":"off"}` and never deletes the file or the layer objects.
 
 ## Env overrides
 
@@ -161,7 +162,9 @@ There is deliberately no response-size or capture-admission setting. `heldTermin
 | `OPENBOT_MODE` | Mode file path (runtime) |
 | `OPENBOT_SECRETS` | Secrets JSON path |
 | `OPENBOT_LOGS` | Log settings path |
-| `OPENBOT_INJECTION` | Injection policy path (default `<OPENBOT_SAND_DATA>/openbot-injection.json`) |
+| `OPENBOT_INJECTION` | Injection policy path (default `<OPENBOT_SAND_DATA>/openbot-injection.json`); highest-priority injection path, above `OPENBOT_SAND_DATA` / `OPENBOT_PLAN` |
+| `OPENBOT_INJECTION_MODE` | Pins the process-wide injection mode (`off`/`dry-run`/`enforce`); invalid values are ignored. The Settings page still writes the file but reports `source: "env"` and `envOverride: true` |
+| `OPENBOT_INJECTION_L1_ENABLED` / `_L2_` / `_L3_` | Per-layer boolean overrides (`1/true/yes/on`, `0/false/no/off`); applied after the file is read |
 | `OPENBOT_PAUSE` | Pause file path (highest priority on the payload side, above `OPENBOT_SAND_DATA` / `OPENBOT_PLAN` inference) |
 | `OPENBOT_BOT_MODELS` | Per-bot model assignment JSON path |
 | `OPENBOT_MAPS` | Maps module path (default `payload/provider-maps.cjs` next to hop) |

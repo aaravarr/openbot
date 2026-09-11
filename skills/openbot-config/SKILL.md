@@ -58,7 +58,7 @@ JSON-enough requires **all** of: `openbot-mode` is `custom`, `/home/box/sand-hos
 
 The custom hop's injection hardening is a named, opt-in strategy outside the structural conversion. It runs after the pure `toOpenAIMessages` conversion and before provider payload adapters such as `chatToResponses` and `chatToAnthropic`; the converter itself remains unchanged. Official mode and the official tap are untouched.
 
-Configure it in `/home/box/sand-data/openbot-injection.json` (override with `OPENBOT_INJECTION`). The compact shape is `{ "mode": "off|dry-run|enforce", "layers": { "l1": {...}, "l2": {...}, "l3": {...} } }`; the complete schema and validation table are in [reference.md](reference.md#openbot-injectionjson). The file is validated and hot-read on every hop request:
+Configure it in `/home/box/sand-data/openbot-injection.json` (override with `OPENBOT_INJECTION`). The compact shape is `{ "mode": "off|dry-run|enforce", "layers": { "l1": {...}, "l2": {...}, "l3": {...} } }`; the complete schema and validation table are in [reference.md](reference.md#openbot-injectionjson). The file is validated and hot-read on every hop request. The control page's **Settings** page (`#/settings`) carries the same switch through `GET`/`PUT /api/settings/delivery` — the page is for a human, the JSON file stays the source of truth for a Bot turn:
 
 - `mode` defaults to `off`; invalid or unsupported values, a missing file, and invalid JSON fail closed to `off`. `off` preserves today's single-request behavior exactly.
 - `dry-run` records eligibility, selected family, suffix fingerprint/body hash, and would-apply metadata only. It never mutates messages, holds a terminal, dispatches a second run, or changes first-token latency.

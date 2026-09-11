@@ -38,6 +38,8 @@ things: static UI files, the JSON control API, and the hop. All API responses ar
 | POST | `/api/save` | **The single mutation endpoint.** Parses a UI command into `DesiredState`, runs `reconcile()` (wrap/unwrap host, write plan/mode files, restart services, tunnel), writes secrets if present. Saves are serialized server-side through a promise chain | One of 8 command objects (§2.2) | `200 { ok:true, wrapBytesChanged, snapshot, providers, models, keyedProviders, activeModelId, logSettings }`; `409 { kind:"refused", error }` on reconcile refusal; `500 { error }` on validation/parse errors (note: **validation errors are 500, not 400**) |
 | GET | `/api/logs/settings` | Read hop request-logging settings | — | `LogSettings` (defaults filled) |
 | PUT | `/api/logs/settings` | Save log settings (validated, normalized; triggers a prune) | partial `LogSettings` JSON | `200` normalized `LogSettings`; `400 { error }` on invalid JSON or out-of-range value |
+| GET | `/api/settings/delivery` | Read the delivery follow-up ("injection hardening") config: effective mode, where that mode came from, layer flags, extra-run cap | — | `{ mode, source, path, exists, envOverride, layers:{l1,l2,l3}, maxAdditionalRuns }` |
+| PUT | `/api/settings/delivery` | Write the sand-data config file the hop hot-reads per request (atomic tmp+rename, unrelated keys kept). A non-`off` mode also creates/keeps every layer object enabled — a layer only runs while its object is present; `off` leaves them for next time | `{ mode: "off"\|"dry-run"\|"enforce", layers?: { l1?: bool, l2?: bool, l3?: bool } }` | `200 { ok:true, …same fields as GET }`; `400 { error }` on invalid JSON, mode, a non-boolean layer flag, or `layers` sent while the mode is `off` (an `off` write keeps the file's layer blocks, so the field is refused rather than silently dropped); `405` for other methods |
 | GET | `/api/logs` | List hop request records, newest first | Query: `q` (substring over id/model/error/provider/endpoint), `model` (exact), `from`,`to` (ISO date range on `startedAt`), `ok=true|false`, `page` (≥1), `pageSize` (1–100, default 50) | `{ items: LogRecord[], total, page, pageSize }` |
 | GET | `/api/logs/{id}` | One record incl. captured request/response bodies (redacted, possibly truncated) | id is URL-encoded path segment, `[A-Za-z0-9._-]+` | `200 LogRecord & { request?, response? }`; `404 { error }` |
 | POST | `/api/logs/clear` | Delete all log records and body files | — | `{ ok: true }` |
@@ -186,6 +188,7 @@ Snapshot = { wrap, hopListen, uiListen, host, alignment, tunnel }
 | `secrets.json` | provider secrets (0600) | save commands with a secret |
 | `openbot-expose` | `loopback` or `cloudflare-quick` | `reconcileExpose` |
 | `openbot-logs.json` | log settings | PUT `/api/logs/settings` |
+| `openbot-injection.json` | delivery follow-up (injection hardening) config; absent or invalid = `{ "mode": "off" }` | PUT `/api/settings/delivery`, or edited by hand; the hop validates and hot-reads it every request |
 | `openbot-requests.jsonl` + `openbot-request-bodies/` | request log | hop handler |
 | `openbot-ui.pid` / `openbot-hop.pid` | owned process pids | service start / legacy hop |
 | `openbot-ui.log` / `openbot-hop.log` | service stdout/stderr | service |
@@ -324,17 +327,26 @@ current UI exposure.
 
 ### 4.8 Frontend platform
 
-- **FR-47** [UI] Hash-based client routing: chat (default), logs, add-provider, provider detail,
-  model detail (`#/`, `#/logs`, `#/add`, `#/p/:id`, `#/p/:id/m/:modelId`), with guarded fallback
-  to chat when a referenced provider/model disappears.
+- **FR-47** [UI] Hash-based client routing: dashboard (default), bots, models, setup, logs,
+  settings (`#/`, `#/bots`, `#/models`, `#/models/:providerId`, `#/setup`, `#/logs`,
+  `#/logs?id=…&page=…`, `#/settings`); any unknown hash falls back to the dashboard, and the
+  Models page falls back to its first provider selection when a referenced provider disappears.
 - **FR-48** [UI] Static-served SPA from the same origin as the API (no CORS, no separate dev
   server in production; `vite build` → `ui/`).
 - **FR-49** [UI] Accessibility basics already encoded functionally: skip link, aria-live toasts,
   labelled controls. (Keep as requirements, restyle freely.)
+- **FR-57** [UI] `#/settings` is the one home for config-type controls; the Dashboard stays a
+  status page (pause, mode, model switcher, health, recent requests) and the Logs page stays an
+  observation page (a read-only recording summary links to Settings). Cards: delivery follow-up,
+  recording settings, phone access (tunnel), Grok Bot skill install. The delivery follow-up switch
+  defaults to off, offers `dry-run` ("observe only", recommended) and `enforce`, surfaces the
+  effective mode, its source, the config path, the L1/L2/L3 flags and the extra-run cap, warns when
+  an environment variable pins the mode, and rolls the draft back to the server-confirmed state when
+  a save fails. A save takes effect on the next hop request: no restart, no reconcile, no host bounce.
 
 ### 4.9 Grok Bot user skills
 
-- **FR-56** [UI] Dashboard hairline card installs OpenBot Grok Bot skills from the OpenBot repo
+- **FR-56** [UI] Settings hairline card installs OpenBot Grok Bot skills from the OpenBot repo
   `skills/` tree into Grok Bot **user** skills (`/home/box/agent-data/workflows/<slug>/`) only —
   never managed-skills or plugins. GitHub Contents API first (`ref` = `OPENBOT_COMMIT` or
   `payload/version.json`, else `main`), local `repoRoot/skills/` fallback. Compare SHA-256 of

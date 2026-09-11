@@ -1,10 +1,11 @@
-/** Hash router: 3 pages + #/setup. Unknown/dangling routes fall back to #/. */
+/** Hash router: 4 pages + #/setup + #/settings. Unknown/dangling routes fall back to #/. */
 
 export type Route =
   | { kind: "dashboard" }
   | { kind: "bots" }
   | { kind: "models"; providerId?: string }
   | { kind: "setup" }
+  | { kind: "settings" }
   | { kind: "logs"; logId?: string; page?: number };
 
 export function parseHash(hash: string): Route {
@@ -25,6 +26,8 @@ export function parseHash(hash: string): Route {
     }
     case "setup":
       return { kind: "setup" };
+    case "settings":
+      return { kind: "settings" };
     case "logs": {
       const logId = query.get("id") ?? undefined;
       const pageRaw = query.get("page");
@@ -47,6 +50,8 @@ export function toHash(route: Route): string {
       return route.providerId ? `#/models/${encodeURIComponent(route.providerId)}` : "#/models";
     case "setup":
       return "#/setup";
+    case "settings":
+      return "#/settings";
     case "logs": {
       const params = new URLSearchParams();
       if (route.logId) params.set("id", route.logId);

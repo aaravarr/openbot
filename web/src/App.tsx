@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Bot, Boxes, LayoutDashboard, ScrollText, Unplug } from "lucide-react";
+import { Bot, Boxes, LayoutDashboard, ScrollText, Settings as SettingsIcon, Unplug } from "lucide-react";
 import { Shell } from "./components/Shell";
 import { ToastStack } from "./components/Toast";
 import { Button } from "./components/ui";
@@ -9,6 +9,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Bots } from "./pages/Bots";
 import { Logs } from "./pages/Logs";
 import { Models } from "./pages/Models";
+import { Settings } from "./pages/Settings";
 import { Setup } from "./pages/Setup";
 
 function SkipLink() {
@@ -78,6 +79,7 @@ function BottomTabs({ route, onNavigate }: { route: Route; onNavigate: (r: Route
     { route: { kind: "bots" }, label: "Bots", icon: Bot },
     { route: { kind: "models" }, label: "Models", icon: Boxes },
     { route: { kind: "logs" }, label: "Logs", icon: ScrollText },
+    { route: { kind: "settings" }, label: "Settings", icon: SettingsIcon },
   ];
   const isActive = (r: Route): boolean => {
     if (r.kind === "models") return route.kind === "models" || route.kind === "setup";
@@ -146,7 +148,9 @@ function AppInner() {
           ? "Models"
           : route.kind === "setup"
             ? "Setup"
-            : "Logs";
+            : route.kind === "settings"
+              ? "Settings"
+              : "Logs";
     document.title = `${title} · OpenBot`;
   }, [signature, route.kind]);
 
@@ -172,6 +176,8 @@ function AppInner() {
     page = <Models providerId={route.providerId} />;
   } else if (route.kind === "setup") {
     page = <Setup />;
+  } else if (route.kind === "settings") {
+    page = <Settings />;
   } else if (route.kind === "logs") {
     page = <Logs logId={route.logId} page={route.page} />;
   } else {

@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Moon,
   ScrollText,
+  Settings as SettingsIcon,
   ShieldAlert,
   Sun,
 } from "lucide-react";
@@ -44,6 +45,7 @@ export function Shell({ route, onNavigate }: { route: Route; onNavigate: (r: Rou
     { route: { kind: "bots" }, label: "Bots", icon: Bot },
     { route: { kind: "models" }, label: "Models", icon: Boxes },
     { route: { kind: "logs" }, label: "Logs", icon: ScrollText },
+    { route: { kind: "settings" }, label: "Settings", icon: SettingsIcon },
   ];
 
   const isActive = (r: Route): boolean => {

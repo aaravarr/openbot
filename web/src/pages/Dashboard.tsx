@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
-  Copy,
-  Globe,
   Info,
   OctagonX,
   Pause,
@@ -17,11 +15,8 @@ import { channelLabel, formatLatency, formatTime, labelReasoning } from "../lib/
 import { modelGroupsForState } from "../lib/model-options";
 import { deriveHealth } from "../lib/health";
 import { navigate } from "../lib/router";
-import { publicTunnelUrl } from "../lib/tunnel-url";
 import { useApp, useBoxState } from "../store";
 import { Listbox, type ListboxGroup } from "../components/Listbox";
-import { QrCode } from "../components/QrCode";
-import { GrokSkillCard } from "../components/GrokSkillCard";
 import { ConfirmDialog } from "../components/overlays";
 import {
   Badge,
@@ -29,7 +24,6 @@ import {
   EmptyState,
   HealthDot,
   ModePill,
-  Notice,
   ParamChip,
   StatusPill,
 } from "../components/ui";
@@ -46,7 +40,6 @@ export function Dashboard() {
   const state = useBoxState();
   const { save, service, refresh, pushToast } = useApp();
   const [confirmOfficial, setConfirmOfficial] = useState(false);
-  const [confirmTunnel, setConfirmTunnel] = useState<"start" | "stop" | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [recent, setRecent] = useState<LogRecord[]>([]);
   const [pause, setPauseState] = useState<GatewayPause | null>(null);
@@ -55,10 +48,8 @@ export function Dashboard() {
   const custom = state.snapshot.alignment.desired === "custom";
   const active = modelById(state, state.activeModelId);
   const activeProvider = active ? providerById(state, active.providerId) : undefined;
-  const tunnel = state.snapshot.tunnel;
   const health = deriveHealth(state, service);
   const empty = state.providers.length === 0;
-  const tunnelHref = tunnel.kind === "cloudflare-quick" ? publicTunnelUrl(tunnel.url) : "";
 
   useEffect(() => {
     let alive = true;
@@ -146,53 +137,22 @@ export function Dashboard() {
     });
   };
 
-  const tunnelAction = async () => {
-    const action = confirmTunnel;
-    setConfirmTunnel(null);
-    if (action === "start") {
-      await run("tunnel", { kind: "set-expose", expose: "cloudflare" }, {
-        title: "Tunnel starting",
-        message: "Scan the QR from your phone once the URL appears.",
-      });
-    } else if (action === "stop") {
-      await run("tunnel", { kind: "set-expose", expose: "off" }, {
-        title: "Tunnel stopped",
-        message: "The console is reachable only from this Computer.",
-      });
-    }
-  };
-
-  const copy = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      /* ignore */
-    }
-  };
-
   if (empty) {
     return (
-      <div className="stack">
-        <section className="card card--pad" aria-label="Setup">
-          <EmptyState
-            icon={Rocket}
-            title="Set up your first provider"
-            body="Connect an OpenAI-compatible provider so Grok Bot can chat through it."
-            action={
-              <Button variant="primary" onClick={() => navigate({ kind: "setup" })}>
-                Set up a provider
-              </Button>
-            }
-          />
-        </section>
-        <div className="grid grid--12">
-          <GrokSkillCard />
-        </div>
-      </div>
+      <section className="card card--pad" aria-label="Setup">
+        <EmptyState
+          icon={Rocket}
+          title="Set up your first provider"
+          body="Connect an OpenAI-compatible provider so Grok Bot can chat through it."
+          action={
+            <Button variant="primary" onClick={() => navigate({ kind: "setup" })}>
+              Set up a provider
+            </Button>
+          }
+        />
+      </section>
     );
   }
-
-  const tunnelLive = tunnel.kind === "cloudflare-quick";
 
   return (
     <>
@@ -228,7 +188,7 @@ export function Dashboard() {
 
       <div className="grid grid--12">
         {/* Mode hero */}
-        <section className="card card--pad col-8" aria-labelledby="h-mode">
+        <section className="card card--pad col-12" aria-labelledby="h-mode">
           <div className="row row--between" style={{ marginBottom: 16 }}>
             <span className="card__label" id="h-mode">
               Mode
@@ -344,59 +304,6 @@ export function Dashboard() {
           )}
         </section>
 
-        {/* Tunnel */}
-        <section className="card col-4" aria-labelledby="h-tunnel">
-          <div className="card__head">
-            <span className="card__label" id="h-tunnel">
-              Phone access
-            </span>
-            {tunnelLive ? <Badge tone="success">Live</Badge> : tunnel.kind === "error" ? <Badge tone="danger">Error</Badge> : <Badge>Off</Badge>}
-          </div>
-          <div className="card__body stack" style={{ gap: 12 }}>
-            {tunnelLive ? (
-              <>
-                <div className="tunnel-url">
-                  <Globe style={{ color: "var(--muted)", width: 15, height: 15, flex: "none" }} aria-hidden="true" />
-                  <span className="url">{tunnelHref}</span>
-                </div>
-                <Button variant="secondary-sm" icon={Copy} onClick={() => void copy(tunnelHref)}>
-                  Copy URL
-                </Button>
-                <QrCode value={tunnelHref} label="QR code for the public URL" />
-                <Notice tone="warn" icon={Info}>
-                  Anyone with this URL can open this console. Keys stay on the Computer.
-                </Notice>
-                <div className="row gap-2">
-                  <Button variant="secondary-sm" icon={RefreshCw} loading={busy === "tunnel"} onClick={() => void run("tunnel", { kind: "set-expose", expose: "cloudflare" }, { title: "Tunnel refreshed", message: "A fresh public URL was minted." })}>
-                    Refresh URL
-                  </Button>
-                  <Button variant="ghost-danger" onClick={() => setConfirmTunnel("stop")}>
-                    Stop
-                  </Button>
-                </div>
-              </>
-            ) : tunnel.kind === "error" ? (
-              <>
-                <Notice tone="danger" icon={Info}>
-                  {tunnel.message || "Tunnel failed."}
-                </Notice>
-                <Button variant="secondary" icon={RefreshCw} loading={busy === "tunnel"} onClick={() => void run("tunnel", { kind: "set-expose", expose: "cloudflare" }, { title: "Tunnel starting", message: "Scan the QR from your phone once the URL appears." })}>
-                  Retry
-                </Button>
-              </>
-            ) : (
-              <>
-                <p style={{ color: "var(--body)" }}>
-                  Expose this console to your phone over a temporary Cloudflare URL. The first start downloads cloudflared.
-                </p>
-                <Button variant="ink" loading={busy === "tunnel"} onClick={() => setConfirmTunnel("start")}>
-                  Start tunnel
-                </Button>
-              </>
-            )}
-          </div>
-        </section>
-
         {/* Health strip */}
         <section className="card col-12" aria-labelledby="h-health">
           <div className="card__head">
@@ -422,8 +329,6 @@ export function Dashboard() {
             </div>
           </div>
         </section>
-
-        <GrokSkillCard />
 
         {/* Recent requests */}
         <section className="card col-12" aria-labelledby="h-recent">
@@ -477,20 +382,6 @@ export function Dashboard() {
         ]}
         confirmLabel="Switch to Official"
         busy={busy === "official"}
-      />
-
-      <ConfirmDialog
-        open={confirmTunnel !== null}
-        onClose={() => setConfirmTunnel(null)}
-        onConfirm={tunnelAction}
-        title={confirmTunnel === "start" ? "Start the tunnel?" : "Stop the tunnel?"}
-        description={
-          confirmTunnel === "start"
-            ? "Anyone with the public URL can open this console. Keys stay on the Computer."
-            : "The public URL stops working immediately. Anyone using it loses access."
-        }
-        confirmLabel={confirmTunnel === "start" ? "Start tunnel" : "Stop tunnel"}
-        busy={busy === "tunnel"}
       />
     </>
   );

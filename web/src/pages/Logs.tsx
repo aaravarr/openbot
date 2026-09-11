@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Check,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Copy,
@@ -23,7 +22,6 @@ import {
   getBots,
   listLogs,
   listEvents,
-  saveLogSettings,
   stripLogBodies,
 } from "../api/client";
 import type {
@@ -35,7 +33,6 @@ import type {
   LogInjectionMetadata,
   LogInjectionStats,
   LogRecord,
-  LogSettings,
   LogStats,
   LogUsage,
   LogUsageRow,
@@ -65,7 +62,6 @@ import { useApp, useBoxState } from "../store";
 import { Listbox, type ListboxGroup } from "../components/Listbox";
 import { ConfirmDialog, Modal } from "../components/overlays";
 import { Button, EmptyState, IconButton, StatusPill } from "../components/ui";
-import { NumberInput } from "../components/fields";
 
 type DrawerState = { ids: string[]; details: LogDetail[]; notFound: boolean };
 
@@ -188,14 +184,6 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
   const [page, setPage] = useState(() => (routePage !== undefined && routePage >= 1 ? routePage : 1));
   const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
 
-  const [settings, setSettings] = useState<LogSettings | null>(state.logSettings ?? null);
-  const [recording, setRecording] = useState(settings?.loggingEnabled ?? false);
-  const [bodiesAll, setBodiesAll] = useState(settings?.logBodies ?? false);
-  const [retention, setRetention] = useState<number | null>(settings?.logRetentionDays ?? 7);
-  const [settingsOpen, setSettingsOpen] = useState(true);
-  const [settingsError, setSettingsError] = useState<string | null>(null);
-  const [savingSettings, setSavingSettings] = useState(false);
-
   const [records, setRecords] = useState<LogRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -223,15 +211,6 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
   const [severityFilter, setSeverityFilter] = useState("");
   const [confirmStrip, setConfirmStrip] = useState(false);
   const [cleanupBusy, setCleanupBusy] = useState(false);
-
-  useEffect(() => {
-    if (state.logSettings) {
-      setSettings(state.logSettings);
-      setRecording(state.logSettings.loggingEnabled);
-      setBodiesAll(state.logSettings.logBodies);
-      setRetention(state.logSettings.logRetentionDays);
-    }
-  }, [state.logSettings]);
 
   const modelOptions = useMemo(() => {
     if (facets && facets.model.values.length > 0) {
@@ -467,38 +446,6 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
     void openDrawer([logId]);
   }, [logId, pairs, openDrawer]);
 
-  const saveSettingsAction = async () => {
-    setSettingsError(null);
-    if (retention === null || retention < 1 || retention > 365 || !Number.isInteger(retention)) {
-      setSettingsError("Retention must be a whole number of days between 1 and 365.");
-      return;
-    }
-    setSavingSettings(true);
-    try {
-      const saved = await saveLogSettings({
-        loggingEnabled: recording,
-        logBodies: bodiesAll,
-        logBodiesOnError: !bodiesAll,
-        logRetentionDays: retention,
-      });
-      setSettings(saved);
-      if (saved.wrapError) {
-        setSettingsError(`Recording saved, but the host tap could not be applied (${saved.wrapError}).`);
-        pushToast("error", "Settings saved", `Recording is ${recording ? "on" : "off"} — the host tap could not be applied (${saved.wrapError}).`);
-      } else if (saved.wrapBytesChanged) {
-        pushToast("info", "Settings saved", recording
-          ? "Official Grok capture is on. The host restarted; send a new message to record a turn."
-          : "Official tap removed. Chat is stock Grok again.");
-      } else {
-        pushToast("success", "Settings saved", `Recording is ${recording ? "on" : "off"} — bodies kept ${bodiesAll ? "for all requests" : "on errors only"}, ${retention}-day retention.`);
-      }
-    } catch (err) {
-      setSettingsError(err instanceof Error ? err.message : "Could not save settings.");
-    } finally {
-      setSavingSettings(false);
-    }
-  };
-
   const doClear = async () => {
     setConfirmClear(false);
     try {
@@ -582,7 +529,8 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
     [],
   );
 
-  const recordingOff = !recording;
+  const logSettings = state.logSettings;
+  const recordingOff = !logSettings.loggingEnabled;
   const turnCount = pairs.length;
   const openId = drawer?.ids[0];
 
@@ -593,58 +541,35 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
         <span className="sub">One custom turn is an upstream call plus a harness stream — not two events.</span>
       </div>
 
-      {/* Settings */}
-      <section className="card" style={{ marginBottom: 16 }}>
-        <button
-          className="card__head"
-          style={{ width: "100%", background: "transparent", border: "none", cursor: "pointer", font: "inherit" }}
-          onClick={() => setSettingsOpen((s) => !s)}
-          aria-expanded={settingsOpen}
-        >
-          <span className="card__label">
-            <Settings2 style={{ width: 13, height: 13 }} aria-hidden="true" />
-            Recording settings
+      {/* Recording settings are edited on the Settings page; this page reads them. */}
+      <section className="card logs-stats" aria-label="Recording settings" style={{ marginBottom: 16 }}>
+        <div className="logs-stats__row">
+          <span className="logs-stats__item">
+            <span className="k">Recording</span>
+            <span className="v">{logSettings.loggingEnabled ? "On" : "Off"}</span>
           </span>
-          <ChevronDown
-            style={{ width: 14, height: 14, color: "var(--muted)", transform: settingsOpen ? "rotate(180deg)" : "none", transition: "transform 150ms" }}
-            aria-hidden="true"
-          />
-        </button>
-        {settingsOpen ? (
-          <div className="card__body stack" style={{ gap: 14 }}>
-            <div className="row row--between wrap gap-3">
-              <label className="switch">
-                <input type="checkbox" role="switch" checked={recording} onChange={(e) => setRecording(e.target.checked)} />
-                <span className="switch__track"><span className="switch__thumb" /></span>
-                <span className="switch__label">Recording</span>
-              </label>
-              <div className="row gap-3" style={{ fontSize: 13 }}>
-                <span style={{ color: "var(--muted)" }}>Bodies:</span>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                  <input type="radio" name="bodies" checked={!bodiesAll} onChange={() => setBodiesAll(false)} style={{ accentColor: "var(--primary)" }} />
-                  Errors only
-                </label>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                  <input type="radio" name="bodies" checked={bodiesAll} onChange={() => setBodiesAll(true)} style={{ accentColor: "var(--primary)" }} />
-                  All
-                </label>
-              </div>
-              <div className="row gap-2">
-                <span style={{ color: "var(--muted)", fontSize: 13 }}>Retention</span>
-                <NumberInput value={retention} onChange={setRetention} min={1} max={365} className="input--mono" ariaLabel="Retention days" />
-                <span style={{ color: "var(--muted)", fontSize: 13 }}>days</span>
-              </div>
-              <Button variant="primary" loading={savingSettings} onClick={saveSettingsAction}>
-                Save settings
-              </Button>
-            </div>
-            {settingsError ? <span className="field" style={{ color: "var(--danger)" }}>{settingsError}</span> : null}
-            <div className="notice notice--info">
-              <ShieldCheck aria-hidden="true" />
-              <span className="text">Keys are always redacted server-side; bodies default off.</span>
-            </div>
-          </div>
-        ) : null}
+          <span className="logs-stats__item">
+            <span className="k">Bodies</span>
+            <span className="v">{logSettings.logBodies ? "All requests" : "Errors only"}</span>
+          </span>
+          <span className="logs-stats__item">
+            <span className="k">Retention</span>
+            <span className="v">{logSettings.logRetentionDays} days</span>
+          </span>
+          <span className="logs-stats__spacer" />
+          <a
+            href="#/settings"
+            className="row gap-1"
+            style={{ fontSize: 12, fontWeight: 500 }}
+            onClick={(e) => {
+              e.preventDefault();
+              navigate({ kind: "settings" });
+            }}
+          >
+            <Settings2 style={{ width: 13, height: 13 }} aria-hidden="true" />
+            Manage in Settings
+          </a>
+        </div>
       </section>
 
       {/* Storage overview: lazy-loaded, never blocks the record list */}
@@ -942,7 +867,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
                       title="Recording is off"
                       body="Turn on recording to capture future turns. Requests made before recording was enabled are not recoverable."
                       action={
-                        <Button variant="primary" onClick={() => setSettingsOpen(true)}>
+                        <Button variant="primary" onClick={() => navigate({ kind: "settings" })}>
                           Turn on recording
                         </Button>
                       }

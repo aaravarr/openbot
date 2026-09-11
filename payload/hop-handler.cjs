@@ -6,7 +6,7 @@ var https = require("https");
 var nodeCrypto = require("crypto");
 var { URL } = require("url");
 var path = require("path");
-var { toOpenAIMessages, sanitizeToolCallIds } = require("./openai-messages.cjs");
+var { toOpenAIMessages, sanitizeToolCallIds, repairOrphanedToolCalls, TOOL_CALL_INCOMPLETE_CONTENT } = require("./openai-messages.cjs");
 var {
   enrichImageReads,
   enforceImageBudget,
@@ -1799,6 +1799,21 @@ async function handleCompletionsInner(req, res) {
     });
     body.messages = injectionPre.messages;
     injectionMetadata = injectionPre.injection;
+    // Pre-flight guard, on the wire array, AFTER injection prep: no outbound
+    // message array may carry an assistant tool_calls block that is not
+    // immediately followed by ALL of its role=tool results (incident
+    // 2026-09-11: an image enrichment pass had slotted a user message between
+    // two parallel tool results and the upstream 400'd "assistant message
+    // with 'tool_calls' must be followed by tool messages"). Runs before
+    // canonicalBody/outboundBody are captured, so every api type —
+    // chat-completions, responses, anthropic — serializes this same repaired
+    // array, and the remediation second call reuses the repaired history.
+    // Deliberately after applyPreGeneration: the debt classifier must judge
+    // the transcript as the host emitted it — a synthesized "did not
+    // complete" row (TOOL_CALL_INCOMPLETE_CONTENT, excluded from execution
+    // chronology there) is a wire-shape fix, not execution chronology.
+    // Deterministic; an already-valid array is returned untouched.
+    body.messages = repairOrphanedToolCalls(body.messages);
     var injectionRuntime = {
       config: injectionPre.config,
       context: injectionContext,

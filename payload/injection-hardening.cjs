@@ -6,6 +6,7 @@
 var fs = require("fs");
 var path = require("path");
 var crypto = require("crypto");
+var { TOOL_CALL_INCOMPLETE_CONTENT } = require("./openai-messages.cjs");
 
 var HIDDEN_MARKER = "[SAND_HIDDEN_PROMPT]";
 var TEMPLATE_VERSION = "2026-09-11";
@@ -413,9 +414,16 @@ function classifyDebt(options) {
     }
     // A paired role=tool row is an execution observation, not another call.
     // It establishes chronology only when no assistant call row was available.
+    // The hop's own repair sentinel ("tool call did not complete") is NOT an
+    // execution observation: it is a wire-shape fix the hop added because the
+    // real result never arrived. Counting it would flip a not-owed
+    // touch-no-tool tail into touch-then-tool and spawn a remediation call.
     if (row && row.role === "tool" && calls.length === 0) {
-      toolEvents.push({ sequence: ++eventSeq, name: "tool-result", id: callIdOf(row, ""), isDelivery: false });
-      nonDelivery += 1;
+      var rowText = valueText(row.content);
+      if (rowText.indexOf(TOOL_CALL_INCOMPLETE_CONTENT) !== 0) {
+        toolEvents.push({ sequence: ++eventSeq, name: "tool-result", id: callIdOf(row, ""), isDelivery: false });
+        nonDelivery += 1;
+      }
     }
   }
   for (var k = 0; k < currentResponseCalls.length; k++) {

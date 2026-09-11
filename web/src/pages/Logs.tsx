@@ -32,6 +32,8 @@ import type {
   LogDetail,
   LogEvent,
   LogFacets,
+  LogInjectionMetadata,
+  LogInjectionStats,
   LogRecord,
   LogSettings,
   LogStats,
@@ -88,6 +90,95 @@ function formatBytes(bytes: number): string {
     unit += 1;
   }
   return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
+function pairInjection(pair: LogRowPair<LogRecord>): LogInjectionMetadata | undefined {
+  if (pair.kind === "single") return pair.record.injection;
+  return pair.hop.injection ?? pair.harness.injection;
+}
+
+function injectionFacetLabel(value: string): string {
+  return value
+    .replace(/^l([123])\./, "L$1 · ")
+    .replace(/-/g, " ");
+}
+
+function injectionOutcome(metadata: LogInjectionMetadata): { label: string; tone: "success" | "warning" | "danger" | "info" | "neutral" } {
+  const outcome = metadata.l2Outcome;
+  if (outcome === "second-success" || outcome === "applied" || outcome === "success" || outcome === "retry-success") {
+    return { label: "Remediated", tone: "success" };
+  }
+  if (outcome === "fallback-original-terminal" || metadata.terminalDecision === "l2-fallback-original-terminal") {
+    return { label: "Fallback · original", tone: "danger" };
+  }
+  if (outcome === "failed") return { label: "Remediation failed", tone: "danger" };
+  if (outcome === "unresolved" || outcome === "valid-no-tool") return { label: "Unresolved", tone: "warning" };
+  if (metadata.skipReason) return { label: `Skipped · ${injectionFacetLabel(metadata.skipReason)}`, tone: "neutral" };
+  if (metadata.classificationSkippedReason) return { label: `Classification · ${injectionFacetLabel(metadata.classificationSkippedReason)}`, tone: "warning" };
+  if (metadata.injectionWouldApply === true || metadata.l2Eligible === true) return { label: "Candidate", tone: "info" };
+  return { label: "Observed", tone: "neutral" };
+}
+
+function injectionBadgeClass(tone: ReturnType<typeof injectionOutcome>["tone"]): string {
+  return tone === "success" ? "badge--success" : tone === "danger" ? "badge--danger" : tone === "warning" ? "badge--warning" : tone === "info" ? "badge--info" : "";
+}
+
+function injectionCell(pair: LogRowPair<LogRecord>): ReactNode {
+  const metadata = pairInjection(pair);
+  if (!metadata) return "—";
+  const outcome = injectionOutcome(metadata);
+  const family = metadata.injectionFamilies?.[0];
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <span className={`badge ${injectionBadgeClass(outcome.tone)}`}>{outcome.label}</span>
+      {family ? <span className="cell-sub">{injectionFacetLabel(family)}</span> : null}
+    </span>
+  );
+}
+
+function InjectionFacetList({ label, values }: { label: string; values: Array<{ value: string; count: number }> }): ReactNode {
+  if (values.length === 0) return null;
+  return (
+    <div className="drawer-section" style={{ marginTop: 0 }}>
+      <span className="section-label">{label}</span>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {values.map((item) => (
+          <span className="badge" key={item.value}>
+            <span className="mono">{item.value}</span>
+            <span aria-label={"Records: " + item.count}>×{item.count}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function InjectionStatsCard({ stats, approximate }: { stats: LogInjectionStats; approximate: boolean }): ReactNode {
+  return (
+    <section className="card logs-injection" aria-label="Injection hardening telemetry" style={{ marginTop: 12 }}>
+      <div className="card__head">
+        <span className="card__label"><ShieldCheck aria-hidden="true" /> Injection hardening</span>
+        <span className="sub">{stats.records} metadata record{stats.records === 1 ? "" : "s"}{approximate ? " · sampled" : ""}</span>
+      </div>
+      <div className="card__body stack" style={{ gap: 14 }}>
+        <div className="token-trio" style={{ flexWrap: "wrap" }}>
+          <div className="token-stat"><div className="k">Candidates</div><div className="v">{stats.candidates}</div></div>
+          <div className="token-stat"><div className="k">Remediated</div><div className="v">{stats.applied}</div></div>
+          <div className="token-stat"><div className="k">Fallbacks</div><div className="v">{stats.fallbackOriginalTerminal}</div></div>
+          <div className="token-stat"><div className="k">Extra calls</div><div className="v">{stats.extraCalls}</div></div>
+          <div className="token-stat"><div className="k">Extra latency</div><div className="v">{formatLatency(stats.extraLatencyMs)}</div></div>
+          <div className="token-stat"><div className="k">Skipped</div><div className="v">{stats.skipped}</div></div>
+          <div className="token-stat"><div className="k">Parse/classification</div><div className="v">{stats.classificationSkipped}</div></div>
+        </div>
+        <div className="stack" style={{ gap: 10 }}>
+          <InjectionFacetList label="Families" values={stats.families} />
+          <InjectionFacetList label="Skip reasons" values={stats.skipReasons} />
+          <InjectionFacetList label="Classification skips" values={stats.classificationSkippedReasons} />
+          <InjectionFacetList label="Outcomes" values={stats.outcomes} />
+        </div>
+      </div>
+    </section>
+  );
 }
 
 export function Logs({ logId, page: routePage }: { logId?: string; page?: number }) {
@@ -176,6 +267,10 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
   // The source column only appears once the backend stamps source fields; older
   // rows render without it instead of a column of dashes.
   const hasSourceColumn = useMemo(() => records.some(hasSource), [records]);
+  // Keep legacy/off-mode tables unchanged; metadata enables this column for all
+  // pages once the stats endpoint confirms that at least one row has telemetry.
+  const hasInjectionColumn = Boolean(stats?.injection);
+  const tableColumnCount = 8 + (hasSourceColumn ? 1 : 0) + (hasInjectionColumn ? 1 : 0);
 
   const routePageValue = routePage !== undefined && routePage >= 1 ? routePage : 1;
 
@@ -591,6 +686,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
           ) : null}
         </section>
       ) : null}
+      {stats?.injection ? <InjectionStatsCard stats={stats.injection} approximate={stats.approximate} /> : null}
 
       <div className="logs-tabs" role="tablist" aria-label="Log views">
         <button
@@ -788,6 +884,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
                 <th>Channel</th>
                 <th>Model</th>
                 {hasSourceColumn ? <th>Source</th> : null}
+                {hasInjectionColumn ? <th>Injection</th> : null}
                 <th>Status</th>
                 <th className="num">Latency</th>
                 <th className="num">Tokens</th>
@@ -799,7 +896,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr className="row-empty" key={i}>
-                    <td colSpan={hasSourceColumn ? 9 : 8} style={{ padding: 0 }}><div className="skel skel--row" /></td>
+                    <td colSpan={tableColumnCount} style={{ padding: 0 }}><div className="skel skel--row" /></td>
                   </tr>
                 ))
               ) : pairs.length ? (
@@ -826,6 +923,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
                           {pairSourceLabel(pair, botNames) ?? "—"}
                         </td>
                       ) : null}
+                      {hasInjectionColumn ? <td data-label="Injection">{injectionCell(pair)}</td> : null}
                       <td data-label="Status"><StatusPill status={pairStatus(pair)} /></td>
                       <td className="num mono" data-label="Latency">{formatLatency(pairLatency(pair))}</td>
                       <td className="num mono" data-label="Tokens">{pairTokens(pair) ?? "—"}</td>
@@ -838,7 +936,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
                 })
               ) : recordingOff ? (
                 <tr className="row-empty">
-                  <td colSpan={hasSourceColumn ? 9 : 8}>
+                  <td colSpan={tableColumnCount}>
                     <EmptyState
                       icon={ScrollText}
                       title="Recording is off"
@@ -853,7 +951,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
                 </tr>
               ) : (
                 <tr className="row-empty">
-                  <td colSpan={hasSourceColumn ? 9 : 8}>
+                  <td colSpan={tableColumnCount}>
                     <EmptyState
                       icon={ScrollText}
                       title="No requests yet"
@@ -1361,6 +1459,55 @@ function LogDrawer({
   );
 }
 
+function injectionDetailValue(value: string | number | boolean | undefined): string {
+  if (value === undefined) return "—";
+  return typeof value === "boolean" ? (value ? "true" : "false") : String(value);
+}
+
+function InjectionDetails({ metadata }: { metadata: LogInjectionMetadata }): ReactNode {
+  const outcome = injectionOutcome(metadata);
+  const families = metadata.injectionFamilies?.map(injectionFacetLabel).join(" · ");
+  const emitted = metadata.deliveryCallsEmitted?.length;
+  const observed = metadata.deliveryObserved?.length;
+  const deliveryErrors = metadata.deliveryErrorsObserved?.length;
+  return (
+    <div className="drawer-section">
+      <div className="drawer-section__head">
+        <span className="section-label">Injection decision</span>
+        <span className={`badge ${injectionBadgeClass(outcome.tone)}`}>{outcome.label}</span>
+      </div>
+      <div className="def-grid">
+        <span className="k">Mode</span><span className="v mono">{metadata.injectionMode ?? "—"}</span>
+        <span className="k">Family</span><span className="v">{families ?? "—"}</span>
+        <span className="k">Identity gate</span><span className="v mono">{metadata.identityGateResult ?? "—"}</span>
+        {metadata.skipReason ? <><span className="k">Skip reason</span><span className="v mono">{metadata.skipReason}</span></> : null}
+        {metadata.classificationSkippedReason ? <><span className="k">Classification skip</span><span className="v mono">{metadata.classificationSkippedReason}</span></> : null}
+        <span className="k">Would apply</span><span className="v mono">{injectionDetailValue(metadata.injectionWouldApply)}</span>
+        <span className="k">L2 eligible</span><span className="v mono">{injectionDetailValue(metadata.l2Eligible)}</span>
+        <span className="k">L2 attempted</span><span className="v mono">{injectionDetailValue(metadata.l2Attempted)}</span>
+        <span className="k">L2 outcome</span><span className="v mono">{metadata.l2Outcome ?? "—"}</span>
+        <span className="k">Nudge shape</span><span className="v mono">{metadata.l2NudgeShape ?? "—"}</span>
+        <span className="k">Extra calls</span><span className="v mono">{injectionDetailValue(metadata.l2AdditionalRuns)}</span>
+        <span className="k">Extra latency</span><span className="v mono">{formatLatency(metadata.l2AddedLatencyMs)}</span>
+        <span className="k">Current response tools</span><span className="v mono">{injectionDetailValue(metadata.currentResponseToolCallCount)}</span>
+        <span className="k">Debt</span><span className="v mono">{metadata.debtState ?? "—"}{metadata.debtShape ? ` · ${metadata.debtShape}` : ""}</span>
+        <span className="k">Touch</span><span className="v mono">{metadata.touchClassification ?? "—"}</span>
+        <span className="k">Tools after touch</span><span className="v mono">{injectionDetailValue(metadata.toolCallsAfterLastTouch)}</span>
+        <span className="k">Terminal decision</span><span className="v mono">{metadata.terminalDecision ?? "—"}</span>
+        <span className="k">Terminal hold</span><span className="v mono">{metadata.terminalHoldState ?? "—"} · {metadata.heldTerminalBytes ?? 0} bytes</span>
+        {metadata.hostDeliveryEventMode ? <><span className="k">Host events</span><span className="v mono">{metadata.hostDeliveryEventMode}</span></> : null}
+        {emitted !== undefined ? <><span className="k">Call-emitted</span><span className="v mono">{emitted}</span></> : null}
+        {observed !== undefined ? <><span className="k">Delivery observed</span><span className="v mono">{observed}</span></> : null}
+        {deliveryErrors !== undefined ? <><span className="k">Delivery errors</span><span className="v mono">{deliveryErrors}</span></> : null}
+        {metadata.latestRealUserMessageId ? <><span className="k">Latest user message</span><span className="v mono">{metadata.latestRealUserMessageId}</span></> : null}
+        {metadata.injectionFingerprint ? <><span className="k">Fingerprint</span><span className="v mono">{metadata.injectionFingerprint}</span></> : null}
+        {metadata.firstResponseHash ? <><span className="k">First response hash</span><span className="v mono">{metadata.firstResponseHash}</span></> : null}
+        {metadata.l2BodyHash ? <><span className="k">L2 body hash</span><span className="v mono">{metadata.l2BodyHash}</span></> : null}
+      </div>
+    </div>
+  );
+}
+
 function LogLayer({ detail: d, stacked, botNames }: { detail: LogDetail; stacked: boolean; botNames: ReadonlyMap<string, string> }) {
   const requestValue = d.request ?? d.requestBody;
   const responseValue = d.response ?? d.responseBody;
@@ -1428,6 +1575,8 @@ function LogLayer({ detail: d, stacked, botNames }: { detail: LogDetail; stacked
           ) : null}
         </div>
       </div>
+
+      {d.injection ? <InjectionDetails metadata={d.injection} /> : null}
 
       {d.error ? (
         <div className="drawer-section">

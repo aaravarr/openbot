@@ -38,6 +38,31 @@ type LogList = {
   approximate: boolean;
 };
 
+type LogInjectionFacet = { value: string; count: number };
+
+type LogInjectionStats = {
+  records: number;
+  candidates: number;
+  wouldApply: number;
+  l2Attempted: number;
+  l2Triggered: number;
+  applied: number;
+  remediationFailures: number;
+  fallbackOriginalTerminal: number;
+  unresolved: number;
+  terminalReleased: number;
+  skipped: number;
+  classificationSkipped: number;
+  extraCalls: number;
+  extraLatencyMs: number;
+  averageExtraLatencyMs: number | null;
+  families: LogInjectionFacet[];
+  skipReasons: LogInjectionFacet[];
+  classificationSkippedReasons: LogInjectionFacet[];
+  outcomes: LogInjectionFacet[];
+  modes: LogInjectionFacet[];
+};
+
 type LogStats = {
   records: number;
   scanned: number;
@@ -52,6 +77,8 @@ type LogStats = {
   bodyDiskBytes: number;
   bodiesApproximate: boolean;
   diskBytes: number;
+  /** Omitted for legacy/off-mode logs with no injection metadata. */
+  injection?: LogInjectionStats;
 };
 
 type LogFacetOption = { value: string; count: number };

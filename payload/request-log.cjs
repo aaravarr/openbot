@@ -1105,6 +1105,11 @@ function recordHopInner(input) {
   if (chatType) row.chatType = chatType;
   var chatName = cleanText(src.chatName, 200);
   if (chatName) row.chatName = chatName;
+  // Injection metadata is optional and intentionally independent of body
+  // capture. Keep only the bounded, allow-listed decision fields; old rows
+  // without this object retain their exact shape.
+  var injection = sanitizeInjection(src.injection);
+  if (injection) row.injection = injection;
 
   // Append under the prune lock when another process holds it: an append that
   // lands between a pruner's final read and its rename is silently dropped
@@ -1142,6 +1147,219 @@ function cleanText(value, max) {
   var text = value.trim();
   if (!text) return undefined;
   return text.length > max ? text.slice(0, max) : text;
+}
+
+var INJECTION_MODE_VALUES = ["off", "dry-run", "enforce"];
+var INJECTION_PROTOCOL_VALUES = ["chat-completions", "responses", "anthropic", "unknown"];
+
+// The injection strategy owns its decision vocabulary (family, outcome, reason,
+// shape, hold state, ...). Those fields are validated here as short, bounded
+// tokens instead of a second copy of the vocabulary: a producer-side rename must
+// not silently blank the control page, while a bounded token still keeps prompts,
+// responses and secrets out of the log.
+var INJECTION_TOKEN_CHARS = 48;
+
+function injectionOwn(record, key) {
+  return isRecord(record) && Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
+}
+
+function injectionField(root, groups, key, aliases) {
+  var keys = [key].concat(Array.isArray(aliases) ? aliases : []);
+  for (var i = 0; i < keys.length; i++) {
+    var direct = injectionOwn(root, keys[i]);
+    if (direct !== undefined) return direct;
+  }
+  var groupList = Array.isArray(groups) ? groups : [];
+  for (var g = 0; g < groupList.length; g++) {
+    var group = groupList[g];
+    if (!isRecord(group)) continue;
+    for (var j = 0; j < keys.length; j++) {
+      var nested = injectionOwn(group, keys[j]);
+      if (nested !== undefined) return nested;
+    }
+  }
+  return undefined;
+}
+
+function injectionEnum(value, allowed) {
+  if (typeof value !== "string") return undefined;
+  var text = value.trim();
+  return allowed.indexOf(text) >= 0 ? text : undefined;
+}
+
+// IDs, hashes, enum-like reasons and timestamps are intentionally token-only:
+// whitespace and arbitrary prose can never enter request metadata.
+function injectionToken(value, max) {
+  if (typeof value !== "string") return undefined;
+  var text = value.trim();
+  if (!text || text.length > max || !/^[A-Za-z0-9._:@/+,-]+$/.test(text)) return undefined;
+  return text;
+}
+
+function injectionTimestamp(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.max(0, Math.round(value));
+  return injectionToken(value, 96);
+}
+
+function injectionBool(value) {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function injectionInt(value, min, max) {
+  var number = typeof value === "number" ? value : (typeof value === "string" && value.trim() ? Number(value) : NaN);
+  if (!Number.isFinite(number) || !Number.isInteger(number) || number < min || number > max) return undefined;
+  return number;
+}
+
+function injectionNumber(value, min, max) {
+  var number = typeof value === "number" ? value : (typeof value === "string" && value.trim() ? Number(value) : NaN);
+  if (!Number.isFinite(number) || number < min || number > max) return undefined;
+  return Math.round(number * 1000000) / 1000000;
+}
+
+function injectionUnknownOrNumber(value, min, max) {
+  if (value === "unknown") return "unknown";
+  return injectionNumber(value, min, max);
+}
+
+function sanitizeInjectionList(value, kind) {
+  if (!Array.isArray(value)) return undefined;
+  var out = [];
+  var maxItems = kind === "delivery" ? 20 : 32;
+  for (var i = 0; i < value.length && out.length < maxItems; i++) {
+    var item = value[i];
+    if (typeof item === "string") {
+      var token = kind === "time" ? injectionTimestamp(item) : injectionToken(item, 160);
+      if (token !== undefined) out.push(token);
+      continue;
+    }
+    if (!isRecord(item)) continue;
+    var entry = {};
+    var idKeys = ["id", "eventId", "callId", "toolCallId", "toolName", "deliveryType", "kind"];
+    for (var k = 0; k < idKeys.length; k++) {
+      var key = idKeys[k];
+      var tokenValue = injectionToken(item[key], 160);
+      if (tokenValue !== undefined) entry[key] = tokenValue;
+    }
+    var seq = injectionInt(item.sequence, 0, 1000000000);
+    if (seq !== undefined) entry.sequence = seq;
+    var attempt = injectionInt(item.attempt, 0, 1000000);
+    if (attempt !== undefined) entry.attempt = attempt;
+    var emittedAt = injectionTimestamp(item.emittedAt);
+    if (emittedAt !== undefined) entry.emittedAt = emittedAt;
+    var observedAt = injectionTimestamp(item.observedAt);
+    if (observedAt !== undefined) entry.observedAt = observedAt;
+    var at = injectionTimestamp(item.at);
+    if (at !== undefined) entry.at = at;
+    var success = injectionBool(item.success);
+    if (success !== undefined) entry.success = success;
+    if (Object.keys(entry).length > 0) out.push(entry);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function sanitizeInjection(value) {
+  if (!isRecord(value)) return undefined;
+  var root = value;
+  var groups = [root.identity, root.identityGate, root.l2, root.l3, root.ledger, root.terminal, root.delivery, root.timing, root.decision];
+  var out = {};
+  function putEnum(key, allowed, aliases) {
+    var found = injectionEnum(injectionField(root, groups, key, aliases), allowed);
+    if (found !== undefined) out[key] = found;
+  }
+  function putToken(key, max, aliases) {
+    var found = injectionToken(injectionField(root, groups, key, aliases), max);
+    if (found !== undefined) out[key] = found;
+  }
+  function putBool(key, aliases) {
+    var found = injectionBool(injectionField(root, groups, key, aliases));
+    if (found !== undefined) out[key] = found;
+  }
+  function putInt(key, min, max, aliases) {
+    var found = injectionInt(injectionField(root, groups, key, aliases), min, max);
+    if (found !== undefined) out[key] = found;
+  }
+  function putNumber(key, min, max, aliases) {
+    var found = injectionNumber(injectionField(root, groups, key, aliases), min, max);
+    if (found !== undefined) out[key] = found;
+  }
+  function putUnknownOrNumber(key, min, max, aliases) {
+    var found = injectionUnknownOrNumber(injectionField(root, groups, key, aliases), min, max);
+    if (found !== undefined) out[key] = found;
+  }
+  function putTimestamp(key, aliases) {
+    var found = injectionTimestamp(injectionField(root, groups, key, aliases));
+    if (found !== undefined) out[key] = found;
+  }
+
+  putEnum("injectionMode", INJECTION_MODE_VALUES, ["mode"]);
+  var families = injectionField(root, groups, "injectionFamilies", ["families", "family"]);
+  if (typeof families === "string") families = [families];
+  if (Array.isArray(families)) {
+    var familyOut = [];
+    for (var f = 0; f < families.length && familyOut.length < 10; f++) {
+      var family = injectionToken(families[f], INJECTION_TOKEN_CHARS);
+      if (family !== undefined && familyOut.indexOf(family) < 0) familyOut.push(family);
+    }
+    if (familyOut.length > 0) out.injectionFamilies = familyOut;
+  }
+  putToken("identityGateResult", INJECTION_TOKEN_CHARS, ["gateResult", "identityResult"]);
+  putToken("skipReason", INJECTION_TOKEN_CHARS, ["reason"]);
+  putToken("classificationSkippedReason", INJECTION_TOKEN_CHARS, ["classificationReason"]);
+  putToken("injectionEpoch", 160, ["epoch", "epochId"]);
+  putToken("injectionFingerprint", 160, ["fingerprint"]);
+  putBool("injectionWouldApply", ["wouldApply"]);
+  putEnum("l2SupportedProtocol", INJECTION_PROTOCOL_VALUES, ["protocol", "supportedProtocol"]);
+  putBool("l2Eligible", ["eligible"]);
+  putBool("l2Attempted", ["attempted"]);
+  putToken("l2Outcome", INJECTION_TOKEN_CHARS, ["outcome"]);
+  putInt("l2AdditionalRuns", 0, 8, ["additionalRuns", "extraCalls"]);
+  putToken("l2NudgeShape", INJECTION_TOKEN_CHARS, ["nudgeShape", "shape"]);
+  putNumber("l2AddedLatencyMs", 0, 86400000, ["addedLatencyMs", "extraLatencyMs"]);
+  putInt("l2PromptTokensEstimated", 0, 1000000000, ["promptTokensEstimated"]);
+  putInt("l2CompletionTokenCap", 0, 1000000000, ["completionTokenCap"]);
+  putUnknownOrNumber("l2CostReservedUsd", 0, 1000000000, ["costReservedUsd"]);
+  putInt("l2PromptTokensActual", 0, 1000000000, ["promptTokensActual"]);
+  putInt("l2CompletionTokensActual", 0, 1000000000, ["completionTokensActual"]);
+  putUnknownOrNumber("l2CostActualUsd", 0, 1000000000, ["costActualUsd"]);
+  putTimestamp("firstByteForwardedAt", ["firstByteAt"]);
+  putTimestamp("firstContentAt", ["contentAt"]);
+  putInt("currentResponseToolCallCount", 0, 1000000000, ["responseToolCallCount", "toolCallCount"]);
+  putToken("latestRealUserMessageId", 160, ["latestUserMessageId", "userMessageId"]);
+  putInt("latestRealUserMessageSequence", 0, 1000000000, ["latestUserMessageSequence", "userMessageSequence"]);
+  putInt("lastTouchSequence", 0, 1000000000, ["touchSequence"]);
+  putInt("toolCallsAfterLastTouch", 0, 1000000000, ["toolsAfterLastTouch"]);
+  putToken("touchClassification", INJECTION_TOKEN_CHARS, ["touchState"]);
+  putToken("hostDeliveryEventMode", INJECTION_TOKEN_CHARS, ["deliveryEventMode", "eventMode"]);
+  putToken("debtState", INJECTION_TOKEN_CHARS, ["state"]);
+  putToken("debtShape", INJECTION_TOKEN_CHARS, ["shape"]);
+  putToken("terminalFinishReason", 80, ["finishReason"]);
+  putToken("terminalHoldState", INJECTION_TOKEN_CHARS, ["holdState"]);
+  putInt("heldTerminalBytes", 0, 1000000, ["terminalBytes"]);
+  putToken("terminalDecision", INJECTION_TOKEN_CHARS, ["decision"]);
+  putToken("terminalReleaseReason", 120, ["releaseReason"]);
+  putTimestamp("terminalReleaseAt", ["releaseAt"]);
+  putToken("firstResponseHash", 160, ["responseHash"]);
+  putToken("l2BodyHash", 160, ["bodyHash"]);
+
+  var calls = injectionField(root, groups, "deliveryCallsEmitted", ["callEmitted", "callsEmitted"]);
+  var callOut = sanitizeInjectionList(calls, "delivery");
+  if (callOut) out.deliveryCallsEmitted = callOut;
+  var observed = sanitizeInjectionList(injectionField(root, groups, "deliveryObserved", ["observed"]), "id");
+  if (observed) out.deliveryObserved = observed;
+  var observedAt = sanitizeInjectionList(injectionField(root, groups, "deliveryObservedAt", ["observedAt"]), "time");
+  if (observedAt) out.deliveryObservedAt = observedAt;
+  var errors = sanitizeInjectionList(injectionField(root, groups, "deliveryErrorsObserved", ["deliveryErrors", "errorsObserved"]), "id");
+  if (errors) out.deliveryErrorsObserved = errors;
+  putUnknownOrNumber("ledgerSentMessageCount", 0, 1000000000, ["sentMessageCount"]);
+  putBool("ledgerReacted", ["reacted"]);
+  putUnknownOrNumber("ledgerOwedAtStart", 0, 1, ["owedAtStart"]);
+  putUnknownOrNumber("ledgerOwedAtEnd", 0, 1, ["owedAtEnd"]);
+  putBool("awaitingUserSelection");
+  putToken("completionReason", 120);
+  putBool("finalNoTool");
+  putBool("l2Suppressed", ["suppressed"]);
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function sanitizeAttempts(value) {
@@ -1547,6 +1765,104 @@ function numField(row, key) {
   return typeof row[key] === "number" && Number.isFinite(row[key]) ? row[key] : 0;
 }
 
+function injectionFacetValues(counts) {
+  return Object.keys(counts).sort(function (a, b) {
+    return counts[b] - counts[a] || a.localeCompare(b);
+  }).map(function (value) {
+    return { value: value, count: counts[value] };
+  });
+}
+
+function aggregateInjection(rows) {
+  var records = 0;
+  var candidates = 0;
+  var wouldApply = 0;
+  var l2Attempted = 0;
+  var l2Triggered = 0;
+  var applied = 0;
+  var fallbackOriginalTerminal = 0;
+  var remediationFailures = 0;
+  var unresolved = 0;
+  var terminalReleased = 0;
+  var skipped = 0;
+  var classificationSkipped = 0;
+  var extraCalls = 0;
+  var extraLatencyMs = 0;
+  var extraLatencyRows = 0;
+  var familyCounts = Object.create(null);
+  var skipCounts = Object.create(null);
+  var classificationCounts = Object.create(null);
+  var outcomeCounts = Object.create(null);
+  var modeCounts = Object.create(null);
+  for (var i = 0; i < rows.length; i++) {
+    var metadata = sanitizeInjection(rows[i] && rows[i].injection);
+    if (!metadata) continue;
+    records++;
+    if (metadata.injectionMode) modeCounts[metadata.injectionMode] = (modeCounts[metadata.injectionMode] || 0) + 1;
+    if (Array.isArray(metadata.injectionFamilies)) {
+      for (var f = 0; f < metadata.injectionFamilies.length; f++) {
+        var family = metadata.injectionFamilies[f];
+        familyCounts[family] = (familyCounts[family] || 0) + 1;
+      }
+    }
+    if (metadata.injectionWouldApply === true) wouldApply++;
+    if (metadata.l2Eligible === true || metadata.injectionWouldApply === true) candidates++;
+    if (metadata.l2Attempted === true) l2Attempted++;
+    var runs = typeof metadata.l2AdditionalRuns === "number" ? metadata.l2AdditionalRuns : 0;
+    extraCalls += runs;
+    if (runs > 0 || metadata.l2Attempted === true || metadata.terminalDecision === "l2-triggered") l2Triggered++;
+    if (typeof metadata.l2AddedLatencyMs === "number") {
+      extraLatencyMs += metadata.l2AddedLatencyMs;
+      extraLatencyRows++;
+    }
+    var outcome = metadata.l2Outcome;
+    if (outcome) outcomeCounts[outcome] = (outcomeCounts[outcome] || 0) + 1;
+    var success = outcome === "second-success" || outcome === "applied" || outcome === "success" || outcome === "retry-success";
+    if (success) applied++;
+    var fallback = outcome === "fallback-original-terminal" || metadata.terminalDecision === "l2-fallback-original-terminal";
+    if (fallback) {
+      fallbackOriginalTerminal++;
+      remediationFailures++;
+    } else if (outcome === "failed") {
+      remediationFailures++;
+    }
+    if (outcome === "unresolved" || outcome === "valid-no-tool") unresolved++;
+    if (metadata.terminalHoldState === "released" || metadata.terminalDecision === "normal-release" || metadata.terminalDecision === "l2-triggered" || fallback) terminalReleased++;
+    if (metadata.skipReason) {
+      skipped++;
+      skipCounts[metadata.skipReason] = (skipCounts[metadata.skipReason] || 0) + 1;
+    }
+    if (metadata.classificationSkippedReason) {
+      classificationSkipped++;
+      classificationCounts[metadata.classificationSkippedReason] = (classificationCounts[metadata.classificationSkippedReason] || 0) + 1;
+    }
+  }
+  if (records === 0) return undefined;
+  return {
+    approximate: false,
+    records: records,
+    candidates: candidates,
+    wouldApply: wouldApply,
+    l2Attempted: l2Attempted,
+    l2Triggered: l2Triggered,
+    applied: applied,
+    remediationFailures: remediationFailures,
+    fallbackOriginalTerminal: fallbackOriginalTerminal,
+    unresolved: unresolved,
+    terminalReleased: terminalReleased,
+    skipped: skipped,
+    classificationSkipped: classificationSkipped,
+    extraCalls: extraCalls,
+    extraLatencyMs: extraLatencyMs,
+    averageExtraLatencyMs: extraLatencyRows > 0 ? Math.round(extraLatencyMs / extraLatencyRows) : null,
+    families: injectionFacetValues(familyCounts),
+    skipReasons: injectionFacetValues(skipCounts),
+    classificationSkippedReasons: injectionFacetValues(classificationCounts),
+    outcomes: injectionFacetValues(outcomeCounts),
+    modes: injectionFacetValues(modeCounts),
+  };
+}
+
 function statsNow() {
   var cached = cachedResult(statsCache, Date.now());
   if (cached !== undefined) return cached;
@@ -1602,6 +1918,10 @@ function statsNow() {
     /* no bodies dir yet */
   }
   diskBytes += bodyDiskBytes;
+  // Keep stats byte-for-byte compatible for logs written before injection
+  // telemetry existed: only expose this optional object when a row contains
+  // valid injection metadata.
+  var injection = aggregateInjection(scanned);
   var value = {
     records: rows.length,
     scanned: scanned.length,
@@ -1619,6 +1939,7 @@ function statsNow() {
     bodiesApproximate: bodyDirCapped,
     diskBytes: diskBytes,
   };
+  if (injection) value.injection = injection;
   return setStatsCache(value);
 }
 
@@ -1953,6 +2274,8 @@ exports.pruneNow = pruneNow;
 exports.pruneNowAsync = pruneNowAsync;
 exports.cleanupNowAsync = cleanupNowAsync;
 exports.statsNow = statsNow;
+exports.sanitizeInjection = sanitizeInjection;
+exports.aggregateInjection = aggregateInjection;
 exports.facetsNow = facetsNow;
 exports.usageNow = usageNow;
 exports.extractUsage = extractUsage;

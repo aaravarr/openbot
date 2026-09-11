@@ -24,6 +24,9 @@ const log = require("../../payload/request-log.cjs") as {
   listRequests: (query?: unknown) => { items: Record<string, unknown>[]; total: number; page: number; pageSize: number };
   getRequest: (id: string) => Record<string, unknown> | null;
   clearRequests: () => void;
+  statsNow: () => Record<string, unknown>;
+  sanitizeInjection: (input: unknown) => Record<string, unknown> | undefined;
+  aggregateInjection: (rows: Array<Record<string, unknown>>) => Record<string, unknown> | undefined;
   redact: (value: unknown, secrets?: string[]) => unknown;
 };
 
@@ -585,4 +588,192 @@ test("non-truncated rows carry no full keys and old rows without them still read
     assert.ok(reread.request);
     assert.ok(reread.response);
   });
+});
+
+test("sanitizeInjection keeps bounded decision metadata and drops body-like fields", () => {
+  const sanitized = log.sanitizeInjection({
+    injectionMode: "enforce",
+    injectionFamilies: ["l1.reply-first", "l2.reply-nudge", "l1.reply-first", "not-a-family"],
+    skipReason: "the model produced a plain text answer and nobody delivered it",
+    identity: { gateResult: "pass", prompt: "do not persist this" },
+    l2: {
+      eligible: true,
+      attempted: true,
+      outcome: "second-success",
+      additionalRuns: 2,
+      nudgeShape: "touch-then-tool",
+      addedLatencyMs: 123.4,
+      responseBody: "do not persist this",
+    },
+    ledger: { state: "owed", shape: "touch-then-tool" },
+    terminal: { decision: "l2-triggered", holdState: "released", terminalBytes: 42 },
+    deliveryCallsEmitted: [{ id: "call-1", toolName: "GetDynamicTools", message: "drop" }],
+    deliveryObserved: [{ id: "event-1", message: "drop" }],
+    deliveryErrorsObserved: [{ id: "error-1", detail: "drop" }],
+    latestUserMessageId: "msg-1",
+    firstResponseHash: "sha256:abc123",
+    unknownField: "drop",
+  });
+  assert.ok(sanitized);
+  // The strategy owns its decision vocabulary, so unknown-but-bounded tokens are
+  // preserved (a producer-side rename must not blank the control page) while
+  // free text in the same field is still dropped.
+  assert.deepEqual(sanitized.injectionFamilies, ["l1.reply-first", "l2.reply-nudge", "not-a-family"]);
+  assert.equal(sanitized.skipReason, undefined);
+  assert.equal(sanitized.identityGateResult, "pass");
+  assert.equal(sanitized.injectionWouldApply, undefined);
+  assert.equal(sanitized.l2Eligible, true);
+  assert.equal(sanitized.l2Attempted, true);
+  assert.equal(sanitized.l2Outcome, "second-success");
+  assert.equal(sanitized.l2AdditionalRuns, 2);
+  assert.equal(sanitized.l2AddedLatencyMs, 123.4);
+  assert.equal(sanitized.debtState, "owed");
+  assert.equal(sanitized.debtShape, "touch-then-tool");
+  assert.equal(sanitized.terminalDecision, "l2-triggered");
+  assert.equal(sanitized.terminalHoldState, "released");
+  assert.equal(sanitized.heldTerminalBytes, 42);
+  assert.deepEqual(sanitized.deliveryCallsEmitted, [{ id: "call-1", toolName: "GetDynamicTools" }]);
+  assert.deepEqual(sanitized.deliveryObserved, [{ id: "event-1" }]);
+  assert.deepEqual(sanitized.deliveryErrorsObserved, [{ id: "error-1" }]);
+  assert.equal(sanitized.latestRealUserMessageId, "msg-1");
+  assert.equal(sanitized.firstResponseHash, "sha256:abc123");
+  assert.equal("prompt" in sanitized, false);
+  assert.equal("responseBody" in sanitized, false);
+  assert.equal("unknownField" in sanitized, false);
+});
+
+test("injection metadata persists independently of body capture and remains bounded", () => {
+  withSand((dir) => {
+    const bodySentinel = "injection-body-must-not-be-written";
+    log.saveSettings({ loggingEnabled: true, logBodies: false });
+    log.recordHop({
+      id: "req-injection-meta",
+      status: 200,
+      model: "deepseek-v4-flash",
+      requestBody: { model: "deepseek-v4-flash", messages: [{ role: "user", content: bodySentinel }] },
+      responseBody: { choices: [{ message: { content: bodySentinel } }] },
+      injection: {
+        injectionMode: "dry-run",
+        injectionFamilies: ["l1.reply-first"],
+        injectionWouldApply: true,
+        l2Eligible: true,
+        l2Attempted: false,
+        l2Outcome: "not-run",
+        l2NudgeShape: "no-touch",
+        l2AddedLatencyMs: 0,
+        terminalDecision: "normal-release",
+        deliveryCallsEmitted: [{ id: "call-1", deliveryType: "system-event", sequence: 1 }],
+      },
+    });
+    const row = log.listRequests().items[0];
+    assert.deepEqual(row?.injection, {
+      injectionMode: "dry-run",
+      injectionFamilies: ["l1.reply-first"],
+      injectionWouldApply: true,
+      l2Eligible: true,
+      l2Attempted: false,
+      l2Outcome: "not-run",
+      l2NudgeShape: "no-touch",
+      l2AddedLatencyMs: 0,
+      terminalDecision: "normal-release",
+      deliveryCallsEmitted: [{ id: "call-1", deliveryType: "system-event", sequence: 1 }],
+    });
+    const detail = log.getRequest("req-injection-meta");
+    assert.ok(detail);
+    assert.deepEqual(detail.injection, row?.injection);
+    assert.equal(existsSync(path.join(dir, "openbot-request-bodies", "req-injection-meta.json")), false);
+    assert.equal(scanDir(dir).includes(bodySentinel), false);
+  });
+});
+
+test("legacy and off-mode rows stay quiet in injection stats", () => {
+  withSand((dir) => {
+    log.clearRequests();
+    writeFileSync(
+      path.join(dir, "openbot-requests.jsonl"),
+      JSON.stringify({ id: "legacy-01", startedAt: new Date().toISOString(), status: 200, ok: true }) + "\n",
+    );
+    const stats = log.statsNow();
+    assert.equal("injection" in stats, false);
+    assert.equal(log.listRequests().items[0]?.injection, undefined);
+
+    log.clearRequests();
+    log.saveSettings({ loggingEnabled: false });
+    log.recordHop({ id: "off-01", status: 200, injection: { injectionMode: "enforce", l2Eligible: true } });
+    assert.equal(log.listRequests().total, 0);
+    const offStats = log.statsNow();
+    assert.equal("injection" in offStats, false);
+  });
+});
+
+test("aggregateInjection reports gray-rollout candidates, remediations, fallbacks, and skip facets", () => {
+  const summary = log.aggregateInjection([
+    {
+      injection: {
+        injectionMode: "enforce",
+        injectionFamilies: ["l2.reply-nudge"],
+        injectionWouldApply: true,
+        l2Eligible: true,
+        l2Attempted: true,
+        l2Outcome: "second-success",
+        l2AdditionalRuns: 2,
+        l2AddedLatencyMs: 100,
+        terminalDecision: "l2-triggered",
+      },
+    },
+    {
+      injection: {
+        injectionMode: "enforce",
+        injectionFamilies: ["l1.silence"],
+        skipReason: "no_bot_id",
+        classificationSkippedReason: "parse_error",
+        l2Outcome: "skipped",
+        terminalDecision: "skipped",
+      },
+    },
+    {
+      injection: {
+        injectionMode: "enforce",
+        injectionFamilies: ["l3.closing-send"],
+        l2Outcome: "fallback-original-terminal",
+        terminalDecision: "l2-fallback-original-terminal",
+        terminalHoldState: "released",
+      },
+    },
+    {
+      injection: {
+        injectionMode: "dry-run",
+        l2Outcome: "unresolved",
+      },
+    },
+  ]);
+  assert.ok(summary);
+  assert.equal(summary.records, 4);
+  assert.equal(summary.candidates, 1);
+  assert.equal(summary.wouldApply, 1);
+  assert.equal(summary.l2Attempted, 1);
+  assert.equal(summary.l2Triggered, 1);
+  assert.equal(summary.applied, 1);
+  assert.equal(summary.remediationFailures, 1);
+  assert.equal(summary.fallbackOriginalTerminal, 1);
+  assert.equal(summary.unresolved, 1);
+  assert.equal(summary.terminalReleased, 2);
+  assert.equal(summary.skipped, 1);
+  assert.equal(summary.classificationSkipped, 1);
+  assert.equal(summary.extraCalls, 2);
+  assert.equal(summary.extraLatencyMs, 100);
+  assert.equal(summary.averageExtraLatencyMs, 100);
+  assert.deepEqual(summary.families, [
+    { value: "l1.silence", count: 1 },
+    { value: "l2.reply-nudge", count: 1 },
+    { value: "l3.closing-send", count: 1 },
+  ]);
+  assert.deepEqual(summary.skipReasons, [{ value: "no_bot_id", count: 1 }]);
+  assert.deepEqual(summary.classificationSkippedReasons, [{ value: "parse_error", count: 1 }]);
+  assert.deepEqual(summary.outcomes, [
+    { value: "fallback-original-terminal", count: 1 },
+    { value: "second-success", count: 1 },
+    { value: "skipped", count: 1 },
+    { value: "unresolved", count: 1 },
+  ]);
 });

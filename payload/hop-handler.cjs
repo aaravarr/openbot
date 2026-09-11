@@ -1276,8 +1276,14 @@ function parseInjectionSseData(text) {
 
 
 function mappedInjectionFrame(apiType, frame) {
-  if (apiType === "responses") return protocolConverters.responsesSseToChat(frame);
-  if (apiType === "anthropic") return protocolConverters.anthropicSseToChat(frame);
+  // Per-frame mapping must never synthesize a finish-bearing chunk or the
+  // mandatory [DONE] framing (plan §7.3): the terminal event and the [DONE]
+  // tail are delivered by the injection adapter itself -- the real upstream
+  // `message_delta` / `response.completed` event and the real `data: [DONE]`
+  // frame -- exactly once each. Whole-document conversion below keeps the
+  // default (synthesized) behavior unchanged.
+  if (apiType === "responses") return protocolConverters.responsesSseToChat(frame, { terminal: false, framing: false });
+  if (apiType === "anthropic") return protocolConverters.anthropicSseToChat(frame, { terminal: false, framing: false });
   return frame;
 }
 
@@ -1295,6 +1301,10 @@ function createInjectionSseAdapter(apiType, onEvent, onDone) {
       failed = err;
       return;
     }
+    // With terminal/framing disabled a bare upstream [DONE] frame maps to
+    // empty output, so parse the raw frame too: the upstream [DONE] is the
+    // only framing source and must trip done exactly once (plan \u00a77.3).
+    var upstreamDone = parseInjectionSseData(frame).done;
     var parsed = parseInjectionSseData(mapped);
     for (var i = 0; i < parsed.values.length; i++) {
       var event = parsed.values[i];
@@ -1302,7 +1312,7 @@ function createInjectionSseAdapter(apiType, onEvent, onDone) {
       try { terminal = onEvent(event); } catch (err) { failed = err; return; }
       if (terminal) terminalSeen = true;
     }
-    if (parsed.done) {
+    if (parsed.done || upstreamDone) {
       doneSeen = true;
       try { onDone(terminalSeen); } catch (err) { failed = err; }
     }
@@ -1395,6 +1405,7 @@ function injectionStreamAttempt(urlStr, body, key, clientRes, inbound, apiType, 
         writeInjectionEvent(clientRes, bytes);
       }, observation);
       runtime.pendingHold = hold;
+      var doneBytes = Buffer.from("data: [DONE]\n\n", "utf8");
       var adapter = createInjectionSseAdapter(apiType, function (event) {
         var bytes = Buffer.from("data: " + JSON.stringify(event) + "\n\n", "utf8");
         injectionHardening.observeChatEvent(observation, event, bytes);
@@ -1408,7 +1419,9 @@ function injectionStreamAttempt(urlStr, body, key, clientRes, inbound, apiType, 
         }
         return terminal;
       }, function (hasTerminal) {
-        var doneBytes = Buffer.from("data: [DONE]\n\n", "utf8");
+        // The only [DONE] the client receives here is the upstream's own,
+        // relayed exactly once -- per-frame conversion no longer synthesizes
+        // framing (plan §7.3). It rides behind the terminal in the hold.
         if (hasTerminal && shouldHold) hold.hold(doneBytes); else writeInjectionEvent(clientRes, doneBytes);
       });
       upstreamRes.on("data", function (chunk) { adapter.feed(chunk); });

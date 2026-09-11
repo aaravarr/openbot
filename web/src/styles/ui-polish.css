@@ -13,6 +13,22 @@
    Section: dashboard (owner: the Dashboard/Shell change)
    -------------------------------------------------------------------------- */
 
+/* PROPOSED-05: the official mode switch is a strong, filled action (ink is the
+   documented "strong non-save" slot), not a red text link. Under 768px it sits
+   in a .row, so it needs an explicit touch target. */
+@media (max-width: 768px) {
+  .hero-mode .row .btn--ink { min-height: 44px; }
+}
+
+/* PROPOSED-06: centre the phone-access QR block. The card body is a column
+   flexbox (.stack), so centre the block and the elements that read as its
+   caption. The QR keeps its 200px width; .qr-code-fallback (the encode-error
+   branch) follows the same centre so both states read alike. */
+.qr-body { align-items: center; text-align: center; }
+.qr-body .tunnel-url--centred { justify-content: center; }
+.qr-body .qr-code { align-self: center; margin-inline: auto; }
+.qr-body .qr-code-fallback { align-self: center; }
+
 /* --------------------------------------------------------------------------
    Section: models (owner: the Models page change)
    -------------------------------------------------------------------------- */

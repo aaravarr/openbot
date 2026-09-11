@@ -176,15 +176,16 @@ export function Bots() {
           {selectedActiveIds.length > 0 ? (
             <div className="bot-batch-bar bot-batch-bar--grouped" role="region" aria-label="Batch actions" aria-live="polite">
               <span className="bot-batch-count">{selectedActiveIds.length} selected</span>
-              <span className="bot-batch-spacer" />
-              <span className="bot-batch-group">
-                <Listbox label="Set model" groups={modelGroupsForState(state, state.models.filter((model) => botModels?.available.includes(model.id)))} value={batchModel} placeholder="Set model" disabled={batchBusy || botModels === null} onChange={setBatchModel} />
-                <button className="btn btn--secondary" type="button" disabled={batchBusy || botModels === null} onClick={() => void runBatch("model")}>{batchBusy ? "Applying..." : "Apply"}</button>
-              </span>
-              <span className="bot-batch-sep" aria-hidden="true" />
-              <span className="bot-batch-group">
-                <button className="btn btn--secondary" type="button" disabled={batchBusy} onClick={() => void runBatch("resume")}>Resume</button>
-                <button className="btn btn--secondary" type="button" disabled={batchBusy} onClick={() => void runBatch("pause")}>Pause</button>
+              <span className="bot-batch-actions">
+                <span className="bot-batch-group">
+                  <Listbox label="Set model" groups={modelGroupsForState(state, state.models.filter((model) => botModels?.available.includes(model.id)))} value={batchModel} placeholder="Set model" disabled={batchBusy || botModels === null} onChange={setBatchModel} />
+                  <button className="btn btn--secondary" type="button" disabled={batchBusy || botModels === null} onClick={() => void runBatch("model")}>{batchBusy ? "Applying..." : "Apply"}</button>
+                </span>
+                <span className="bot-batch-sep" aria-hidden="true" />
+                <span className="bot-batch-group">
+                  <button className="btn btn--secondary" type="button" disabled={batchBusy} onClick={() => void runBatch("resume")}>Resume</button>
+                  <button className="btn btn--secondary" type="button" disabled={batchBusy} onClick={() => void runBatch("pause")}>Pause</button>
+                </span>
               </span>
             </div>
           ) : null}
@@ -195,6 +196,7 @@ export function Bots() {
               return (
                 <div className={"bot-row bot-row--dense" + (bot.deleted ? " is-deleted" : "")} key={bot.botId} title={bot.deleted ? "Deleted" : undefined}>
                   <label className="checkbox"><input type="checkbox" aria-label={`Select ${bot.botName}`} checked={selectedIds.has(bot.botId)} disabled={bot.deleted || batchBusy} onChange={() => toggleSelected(bot.botId)} /><span className="checkbox__box">{selectedIds.has(bot.botId) ? <Check aria-hidden="true" /> : null}</span></label>
+                  <span className="bot-row__icon" aria-hidden="true"><BotIcon /></span>
                   <div className="bot-row__main">
                     <strong>{bot.botName}</strong>
                     <span className="bot-row__id">{bot.botId}</span>

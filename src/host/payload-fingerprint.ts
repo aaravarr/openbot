@@ -26,6 +26,7 @@ export const PAYLOAD_FINGERPRINT_FILES = [
   "hop-handler.cjs",
   "hop-server.cjs",
   "image-read.cjs",
+  "injection-hardening.cjs",
   "openai-messages.cjs",
   "openai-stream.cjs",
   "protocol-converters.cjs",

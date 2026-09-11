@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Info, RefreshCw, TriangleAlert } from "lucide-react";
-import { getDeliverySettings, saveDeliverySettings } from "../api/client";
+import { ApiError, getDeliverySettings, saveDeliverySettings } from "../api/client";
 import type { DeliveryMode, DeliverySettings } from "../api/types";
-import { useApp } from "../store";
+import { useApp, useBoxState } from "../store";
 import { Badge, Button, Notice, Switch } from "./ui";
 
 /**
@@ -54,11 +54,26 @@ function layerSummary(layers: DeliverySettings["layers"]): string {
   return (["l1", "l2", "l3"] as const).map((name) => `${name.toUpperCase()} ${layers[name] ? "on" : "off"}`).join(" · ");
 }
 
+/**
+ * One plain sentence for a save that never reached the service. `fetch` rejects
+ * with a bare `TypeError` and the client re-throws it as an `ApiError` whose
+ * status is 0; either way the browser's own "Failed to fetch" is not something to
+ * show the user. A server that did answer keeps its own message — a 400 carries
+ * the useful text ("mode must be one of off, dry-run, enforce").
+ */
+function saveFailureMessage(err: unknown): string {
+  const unreachable = "Could not reach the OpenBot service on this Computer. The setting was not saved.";
+  if (err instanceof TypeError) return unreachable;
+  if (err instanceof ApiError) return err.status === 0 ? unreachable : err.message;
+  return err instanceof Error && err.message ? err.message : unreachable;
+}
+
+/** Leads with what the user just asked for; the env note reports what is in force. */
 function describeSaved(saved: DeliverySettings, requested: DeliveryMode): string {
   const base =
-    saved.mode === "off"
+    requested === "off"
       ? "Delivery follow-up is off. The file keeps its layer tuning."
-      : saved.mode === "dry-run"
+      : requested === "dry-run"
         ? "Dry run: follow-ups are recorded and nothing extra is sent."
         : "Enforce: a follow-up is sent when a turn ends without delivering.";
   return saved.envOverride && saved.mode !== requested
@@ -66,8 +81,13 @@ function describeSaved(saved: DeliverySettings, requested: DeliveryMode): string
     : base;
 }
 
+/** Everything the switch can arm. The payload runs a layer only while its layer object is present. */
+const ALL_LAYERS = { l1: true, l2: true, l3: true } as const;
+
 export function DeliveryCard() {
   const { pushToast } = useApp();
+  const state = useBoxState();
+  const custom = state.snapshot.alignment.desired === "custom";
   const [data, setData] = useState<{ server: DeliverySettings; draft: DeliveryDraft } | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -121,7 +141,14 @@ export function DeliveryCard() {
 
   const { server, draft } = data;
   const requested: DeliveryMode = draft.enabled ? draft.mode : "off";
-  const dirty = requested !== server.mode;
+  // The server state is only "what the card claims" when the mode matches and,
+  // for an enabled mode, every layer the card displays is actually armed. A
+  // config file that is a bare `{"mode":"enforce"}` arms nothing, so the card
+  // reads as dirty and one Save arms it instead of dead-ending on a disabled
+  // button.
+  const dirty =
+    requested !== server.mode ||
+    (requested !== "off" && !(server.layers.l1 && server.layers.l2 && server.layers.l3));
   const badgeTone = !draft.enabled ? undefined : draft.mode === "enforce" ? "accent" : "info";
 
   const edit = (next: DeliveryDraft) => setData({ server, draft: next });
@@ -130,14 +157,17 @@ export function DeliveryCard() {
     setSaving(true);
     setSaveError(null);
     try {
-      const saved = await saveDeliverySettings(requested);
+      // Saving an enabled mode arms every layer the card displays: the file only
+      // runs a layer whose object is present, so a layer left out of the file
+      // (or turned off by hand) stays dead. Saving `off` sends no layers.
+      const saved = await saveDeliverySettings(requested, requested === "off" ? undefined : ALL_LAYERS);
       setData({ server: saved, draft: draftOf(saved) });
       pushToast("success", "Delivery follow-up saved", describeSaved(saved, requested));
     } catch (err) {
       // The switch and radios are optimistic. A failed write rolls the draft
       // back to the last mode the server confirmed instead of leaving the page
       // claiming a mode the hop is not running.
-      const message = err instanceof Error ? err.message : "Could not save delivery settings.";
+      const message = saveFailureMessage(err);
       setData({ server, draft: draftOf(server) });
       setSaveError(message);
       pushToast("error", "Delivery follow-up not saved", message);
@@ -160,6 +190,13 @@ export function DeliveryCard() {
           without one, the result never reaches them. This follow-up nudges the model to deliver it.
         </p>
 
+        {!custom ? (
+          <Notice tone="info" icon={Info}>
+            This setting only applies to custom turns. Stock xAI turns never reach the hop, so nothing here changes
+            them.
+          </Notice>
+        ) : null}
+
         <div className="stack" style={{ gap: 6 }}>
           <Switch
             checked={draft.enabled}
@@ -170,6 +207,12 @@ export function DeliveryCard() {
           <span style={{ color: "var(--muted)", fontSize: 12 }}>
             Off by default. Nothing extra is sent until you turn this on and save.
           </span>
+          {draft.enabled ? (
+            <span style={{ color: "var(--muted)", fontSize: 12 }}>
+              Turning this on and saving arms all three layers (L1 · L2 · L3) — the file only runs a layer while
+              its block is present, so one turned off by hand comes back on.
+            </span>
+          ) : null}
         </div>
 
         {draft.enabled ? (

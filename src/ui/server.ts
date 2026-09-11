@@ -856,6 +856,14 @@ async function handleDeliverySettingsApi(req: http.IncomingMessage, res: http.Se
     sendJson(res, 400, { error: parsedLayers.error });
     return true;
   }
+  if (mode === "off" && parsedLayers.layers !== undefined) {
+    // `off` deliberately keeps the file's layer blocks so switching back on
+    // restores the tuning. Silently dropping a layers field the caller sent
+    // would report success for a write that never happened; the web client
+    // only sends layers alongside an enabled mode.
+    sendJson(res, 400, { error: "layers cannot be set while mode is off" });
+    return true;
+  }
   const state = await enqueueSave(async () => writeDeliverySettings(sandData, { mode, layers: parsedLayers.layers }));
   sendJson(res, 200, { ok: true, ...state });
   return true;

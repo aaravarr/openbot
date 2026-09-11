@@ -502,6 +502,40 @@ test("PUT /api/settings/delivery refuses a bad mode or layer flag and writes not
   }
 });
 
+test("PUT /api/settings/delivery refuses layers while the mode is off", async () => {
+  rmSync(INJECTION_FILE, { force: true });
+  const { server, port } = await listen();
+  try {
+    const res = await request(
+      port,
+      "/api/settings/delivery",
+      "PUT",
+      Buffer.from(JSON.stringify({ mode: "off", layers: { l1: true } })),
+    );
+    assert.equal(res.status, 400);
+    assert.deepEqual(res.json, { error: "layers cannot be set while mode is off" });
+    // The rejection writes nothing: off has no config file to create.
+    assert.equal(existsSync(INJECTION_FILE), false);
+
+    // And when a config already keeps layer tuning, off+layers must not touch
+    // it — the caller is refused, the file keeps what it had.
+    writeFileSync(INJECTION_FILE, JSON.stringify({ mode: "enforce", layers: { l1: { enabled: true } } }) + "\n");
+    const existing = await request(
+      port,
+      "/api/settings/delivery",
+      "PUT",
+      Buffer.from(JSON.stringify({ mode: "off", layers: { l1: false } })),
+    );
+    assert.equal(existing.status, 400);
+    const onDisk = JSON.parse(readFileSync(INJECTION_FILE, "utf8")) as Record<string, unknown>;
+    assert.equal(onDisk.mode, "enforce");
+    assert.deepEqual(onDisk.layers, { l1: { enabled: true } });
+  } finally {
+    server.close();
+    rmSync(INJECTION_FILE, { force: true });
+  }
+});
+
 test("PUT /api/settings/delivery preserves unknown top-level keys across the write", async () => {
   rmSync(INJECTION_FILE, { force: true });
   writeFileSync(INJECTION_FILE, JSON.stringify({ mode: "off", note: "hand written", rollout: { percent: 10 } }) + "\n");

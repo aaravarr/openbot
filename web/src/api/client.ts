@@ -9,6 +9,7 @@ import type {
   BotInfo,
   BotModels,
   Command,
+  DeliveryLayers,
   DeliveryMode,
   DeliverySettings,
   DeliverySettingsResult,
@@ -259,11 +260,21 @@ export async function getDeliverySettings(): Promise<DeliverySettings> {
   return (await request("/api/settings/delivery")) as DeliverySettings;
 }
 
-export async function saveDeliverySettings(mode: DeliveryMode): Promise<DeliverySettingsResult> {
+/**
+ * Writes the mode the hop hot-reads. `layers` is optional on the wire and is
+ * only sent with an enabled mode: the payload runs a layer only while its layer
+ * object is present in the config file, so an explicit `{ l1: true, l2: true,
+ * l3: true }` is how the card arms the layers it displays. Saving `off` omits
+ * it on purpose — the backend keeps the file's layer tuning while it is off.
+ */
+export async function saveDeliverySettings(
+  mode: DeliveryMode,
+  layers?: Partial<DeliveryLayers>,
+): Promise<DeliverySettingsResult> {
   return (await request("/api/settings/delivery", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode }),
+    body: JSON.stringify(layers ? { mode, layers } : { mode }),
   })) as DeliverySettingsResult;
 }
 

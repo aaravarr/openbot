@@ -39,7 +39,7 @@ things: static UI files, the JSON control API, and the hop. All API responses ar
 | GET | `/api/logs/settings` | Read hop request-logging settings | — | `LogSettings` (defaults filled) |
 | PUT | `/api/logs/settings` | Save log settings (validated, normalized; triggers a prune) | partial `LogSettings` JSON | `200` normalized `LogSettings`; `400 { error }` on invalid JSON or out-of-range value |
 | GET | `/api/settings/delivery` | Read the delivery follow-up ("injection hardening") config: effective mode, where that mode came from, layer flags, extra-run cap | — | `{ mode, source, path, exists, envOverride, layers:{l1,l2,l3}, maxAdditionalRuns }` |
-| PUT | `/api/settings/delivery` | Write the sand-data config file the hop hot-reads per request (atomic tmp+rename, unrelated keys kept). A non-`off` mode also creates/keeps every layer object enabled — a layer only runs while its object is present; `off` leaves them for next time | `{ mode: "off"\|"dry-run"\|"enforce", layers?: { l1?: bool, l2?: bool, l3?: bool } }` | `200 { ok:true, …same fields as GET }`; `400 { error }` on invalid JSON, mode, or non-boolean layer flag; `405` for other methods |
+| PUT | `/api/settings/delivery` | Write the sand-data config file the hop hot-reads per request (atomic tmp+rename, unrelated keys kept). A non-`off` mode also creates/keeps every layer object enabled — a layer only runs while its object is present; `off` leaves them for next time | `{ mode: "off"\|"dry-run"\|"enforce", layers?: { l1?: bool, l2?: bool, l3?: bool } }` | `200 { ok:true, …same fields as GET }`; `400 { error }` on invalid JSON, mode, a non-boolean layer flag, or `layers` sent while the mode is `off` (an `off` write keeps the file's layer blocks, so the field is refused rather than silently dropped); `405` for other methods |
 | GET | `/api/logs` | List hop request records, newest first | Query: `q` (substring over id/model/error/provider/endpoint), `model` (exact), `from`,`to` (ISO date range on `startedAt`), `ok=true|false`, `page` (≥1), `pageSize` (1–100, default 50) | `{ items: LogRecord[], total, page, pageSize }` |
 | GET | `/api/logs/{id}` | One record incl. captured request/response bodies (redacted, possibly truncated) | id is URL-encoded path segment, `[A-Za-z0-9._-]+` | `200 LogRecord & { request?, response? }`; `404 { error }` |
 | POST | `/api/logs/clear` | Delete all log records and body files | — | `{ ok: true }` |
@@ -328,9 +328,9 @@ current UI exposure.
 ### 4.8 Frontend platform
 
 - **FR-47** [UI] Hash-based client routing: dashboard (default), bots, models, setup, logs,
-  settings, add-provider, provider detail, model detail (`#/`, `#/bots`, `#/models`, `#/setup`,
-  `#/logs`, `#/settings`, `#/add`, `#/p/:id`, `#/p/:id/m/:modelId`), with guarded fallback
-  to dashboard when a referenced provider/model disappears.
+  settings (`#/`, `#/bots`, `#/models`, `#/models/:providerId`, `#/setup`, `#/logs`,
+  `#/logs?id=…&page=…`, `#/settings`); any unknown hash falls back to the dashboard, and the
+  Models page falls back to its first provider selection when a referenced provider disappears.
 - **FR-48** [UI] Static-served SPA from the same origin as the API (no CORS, no separate dev
   server in production; `vite build` → `ui/`).
 - **FR-49** [UI] Accessibility basics already encoded functionally: skip link, aria-live toasts,

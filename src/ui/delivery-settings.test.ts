@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { mock, test } from "node:test";
 import {
   isInjectionMode,
   parseInjectionLayers,
@@ -143,6 +143,57 @@ test("the environment mode override pins the reported mode but still allows a wr
   assert.equal(invalid.mode, "dry-run");
 });
 
+test("a per-layer env override pins the reported layer, like the payload's envBool", (t) => {
+  const dir = sandbox(t);
+  const file = path.join(dir, "openbot-injection.json");
+  const allOn = JSON.stringify({
+    mode: "enforce",
+    layers: { l1: { enabled: true }, l2: { enabled: true }, l3: { enabled: true } },
+  });
+  const allOff = JSON.stringify({
+    mode: "enforce",
+    layers: { l1: { enabled: false }, l2: { enabled: false }, l3: { enabled: false } },
+  });
+  const ALL_ON = [true, true, true];
+  const ALL_OFF = [false, false, false];
+  const report = (env: NodeJS.ProcessEnv): boolean[] => {
+    const { layers } = readDeliverySettings(dir, env);
+    return [layers.l1, layers.l2, layers.l3];
+  };
+  const withLayer = (flags: boolean[], index: number, value: boolean): boolean[] =>
+    flags.map((flag, i) => (i === index ? value : flag));
+  const layerEnv = [
+    { index: 0, name: "OPENBOT_INJECTION_L1_ENABLED" },
+    { index: 1, name: "OPENBOT_INJECTION_L2_ENABLED" },
+    { index: 2, name: "OPENBOT_INJECTION_L3_ENABLED" },
+  ];
+
+  for (const { index, name } of layerEnv) {
+    writeFileSync(file, allOn);
+    for (const value of ["0", "false", "no", "off"]) {
+      assert.deepEqual(report({ [name]: value }), withLayer(ALL_ON, index, false), name + "=" + value + " disarms its layer");
+    }
+    writeFileSync(file, allOff);
+    for (const value of ["1", "true", "yes", " ON "]) {
+      assert.deepEqual(report({ [name]: value }), withLayer(ALL_OFF, index, true), name + "=" + value + " arms its layer");
+    }
+    for (const value of ["", "maybe", "2"]) {
+      assert.deepEqual(report({ [name]: value }), ALL_OFF, name + "=" + value + " is ignored, like the payload");
+    }
+    assert.deepEqual(report({}), ALL_OFF, name + " unset leaves the file authoritative");
+  }
+
+  // The write reports the same effective state, override included, but the file
+  // keeps what the caller wrote and envOverride still means the mode only.
+  writeFileSync(file, allOn);
+  const written = writeDeliverySettings(dir, { mode: "enforce" }, { OPENBOT_INJECTION_L3_ENABLED: "off" });
+  assert.deepEqual([written.layers.l1, written.layers.l2, written.layers.l3], [true, true, false]);
+  assert.equal(written.envOverride, false);
+  assert.equal(written.source, "file");
+  const onDisk = readFile(file).layers as Record<string, { enabled?: boolean }>;
+  assert.equal(onDisk.l3?.enabled, true, "the override pins the report, not the file");
+});
+
 test("the config path follows the payload precedence", (t) => {
   const dir = sandbox(t);
   assert.equal(resolveInjectionPath(dir, {}), path.join(dir, "openbot-injection.json"));
@@ -160,13 +211,65 @@ test("the config path follows the payload precedence", (t) => {
   );
 });
 
+test("a whitespace-only path env var is a path, not an absent one, like the payload", (t) => {
+  const dir = sandbox(t);
+  // The payload tests each var for truthiness without trimming, so whitespace is
+  // truthy and names that literal path on both sides; only an empty value falls
+  // through to the next branch.
+  const whitespace = resolveInjectionPath(dir, { OPENBOT_INJECTION: "   ", OPENBOT_SAND_DATA: dir });
+  assert.equal(whitespace, "   ");
+  assert.notEqual(whitespace, path.join(dir, "openbot-injection.json"));
+  assert.equal(
+    resolveInjectionPath(dir, { OPENBOT_INJECTION: "", OPENBOT_SAND_DATA: dir }),
+    path.join(dir, "openbot-injection.json"),
+  );
+
+  const spacedSandData = resolveInjectionPath(dir, { OPENBOT_SAND_DATA: " " });
+  assert.equal(spacedSandData, path.join(" ", "openbot-injection.json"));
+  assert.notEqual(spacedSandData, path.join(dir, "openbot-injection.json"));
+});
+
 test("a write leaves no tmp file behind and creates a missing directory", (t) => {
   const dir = sandbox(t);
   const target = path.join(dir, "nested", "openbot-injection.json");
   const state = writeDeliverySettings(path.join(dir, "nested"), { mode: "dry-run" }, {});
   assert.equal(state.path, target);
   assert.equal(existsSync(target), true);
-  assert.equal(existsSync(`${target}.tmp`), false);
+  // The temp name is unique per writer (pid + timestamp), so assert over the
+  // glob rather than one fixed `.tmp` sibling.
+  assert.deepEqual(readdirSync(path.dirname(target)).filter((name) => name.endsWith(".tmp")), []);
+});
+
+test("a failed rename leaves no half-written target and no tmp behind", (t) => {
+  const dir = sandbox(t);
+  const target = path.join(dir, "openbot-injection.json");
+  // Windows refuses to rename a file over a directory (EPERM) and a POSIX
+  // rename over one fails EISDIR/ENOTDIR, so a directory sitting at the target
+  // forces the rename to throw after the temp has been written.
+  fs.mkdirSync(target);
+  assert.throws(() => writeDeliverySettings(dir, { mode: "dry-run" }, {}));
+  assert.equal(statSync(target).isDirectory(), true, "the failed write never replaced the target");
+  assert.deepEqual(readdirSync(dir).filter((name) => name.endsWith(".tmp")), [], "no temp file strayed");
+});
+
+test("a thrown write leaves the previous valid JSON in place", (t) => {
+  const dir = sandbox(t);
+  const file = path.join(dir, "openbot-injection.json");
+  const previous = { mode: "enforce", layers: { l1: { enabled: true }, l2: { enabled: false }, l3: { enabled: false } } };
+  writeFileSync(file, JSON.stringify(previous, null, 2) + "\n");
+  // Fail the temp write the way a full disk would: the target must keep the
+  // previous valid config and no temp may stray.
+  const failWrite = mock.method(fs, "writeFileSync", () => {
+    throw new Error("ENOSPC: no space left on device");
+  });
+  try {
+    assert.throws(() => writeDeliverySettings(dir, { mode: "dry-run" }, {}), /ENOSPC/);
+  } finally {
+    failWrite.mock.restore();
+  }
+  const onDisk = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+  assert.deepEqual(onDisk, previous, "the previous config survived the failed write");
+  assert.deepEqual(readdirSync(dir).filter((name) => name.endsWith(".tmp")), [], "no temp file strayed");
 });
 
 test("layer parsing rejects non-boolean flags", () => {

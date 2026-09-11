@@ -251,8 +251,13 @@ code, kbd, .mono { font-family: var(--font-mono); }
 
 /* status strip */
 .status-strip {
-  height: 36px;
-  display: flex; align-items: center; gap: var(--sp-4);
+  /* Wraps instead of clipping. Between 769px and ~975px the five health readouts
+     are wider than the strip's content box, and #root clips x, so an unwrapped
+     row silently lost the tail of "Service ok · 10ms" (and squeezed the mode pill
+     to nothing). A single row still measures 36px. */
+  min-height: 36px;
+  display: flex; align-items: center; gap: var(--sp-4); row-gap: var(--sp-2);
+  flex-wrap: wrap;
   padding: 0 max(var(--sp-4), env(safe-area-inset-right)) 0 max(var(--sp-4), env(safe-area-inset-left));
   max-width: 1200px; width: 100%; margin: 0 auto;
   border-top: 1px solid var(--hairline-soft);
@@ -261,8 +266,11 @@ code, kbd, .mono { font-family: var(--font-mono); }
 .status-strip__right { margin-left: auto; display: flex; align-items: center; gap: var(--sp-3); flex: none; }
 .last-poll { font-family: var(--font-mono); font-size: 11px; color: var(--faint); }
 
-.health-cluster { display: flex; align-items: center; gap: var(--sp-5); flex: none; }
-.health-item { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-sm); }
+/* Shrinks and wraps so every readout stays whole; the 320px basis keeps the
+   cluster beside the mode pill while it still fits there. */
+.health-cluster { display: flex; align-items: center; gap: var(--sp-5); row-gap: var(--sp-2); flex: 1 1 320px; flex-wrap: wrap; min-width: 0; }
+/* flex: none keeps word + value on one line: a squeezed item wraps mid-phrase. */
+.health-item { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-sm); flex: none; }
 .health-item .word { color: var(--muted); }
 .health-item .val { font-family: var(--font-mono); color: var(--ink); }
 .health-item.is-fault .val { color: var(--danger); }
@@ -1229,10 +1237,13 @@ table.data td.cell-actions { white-space: nowrap; width: 1%; }
 }
 
 /* Five top-nav links (Dashboard · Bots · Models · Logs · Settings) need the
-   width back before the mobile floor takes over at 768px. */
+   width back before the mobile floor takes over at 768px. The loopback chip
+   stays visible here: it is the only surface for the loopback URL and its copy
+   button, so the room comes out of nav padding and gaps instead of the chip. */
 @media (max-width: 860px) {
-  .nav__link { padding: 0 8px; }
-  .loopback-chip { display: none; }
+  .topnav { gap: var(--sp-3); }
+  .nav { gap: 2px; }
+  .nav__link { padding: 0 6px; }
 }
 
 /* Mobile (≤768px): top nav collapses to the bottom tab bar, single-column

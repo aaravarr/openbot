@@ -39,6 +39,12 @@ export type DeliveryWrite = {
 };
 
 const LAYER_NAMES: readonly InjectionLayerName[] = ["l1", "l2", "l3"];
+/** The per-layer override names `readInjectionConfig` in the payload honours. */
+const LAYER_ENV_OVERRIDES: Record<InjectionLayerName, string> = {
+  l1: "OPENBOT_INJECTION_L1_ENABLED",
+  l2: "OPENBOT_INJECTION_L2_ENABLED",
+  l3: "OPENBOT_INJECTION_L3_ENABLED",
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -48,13 +54,17 @@ export function isInjectionMode(value: unknown): value is InjectionMode {
   return typeof value === "string" && (INJECTION_MODES as readonly string[]).includes(value);
 }
 
-/** Mirrors `injectionPath()` in the payload module, branch for branch. */
+/**
+ * Mirrors `injectionPath()` in the payload module, branch for branch. The payload
+ * tests each var for truthiness without trimming, so a whitespace-only value names
+ * that literal path on both sides and only an empty value falls through.
+ */
 export function resolveInjectionPath(sandData: string, env: NodeJS.ProcessEnv = process.env): string {
-  const explicit = env.OPENBOT_INJECTION?.trim();
+  const explicit = env.OPENBOT_INJECTION;
   if (explicit) return explicit;
-  const envSandData = env.OPENBOT_SAND_DATA?.trim();
+  const envSandData = env.OPENBOT_SAND_DATA;
   if (envSandData) return path.join(envSandData, INJECTION_FILE_NAME);
-  const plan = env.OPENBOT_PLAN?.trim();
+  const plan = env.OPENBOT_PLAN;
   if (plan) return path.join(path.dirname(plan), INJECTION_FILE_NAME);
   return path.join(sandData, INJECTION_FILE_NAME);
 }
@@ -114,12 +124,33 @@ function writeTopLevelLayer(next: Record<string, unknown>, name: InjectionLayerN
   next[name] = { ...block, enabled };
 }
 
-/** tmp+rename so a crash can never leave a truncated config behind. */
+/**
+ * tmp+rename so a crash can never leave a truncated config behind. The temp
+ * name is unique per writer (same convention as the pending-bounce write in
+ * `src/supervisor/reconcile.ts`) so two concurrent writers cannot interleave:
+ * with a fixed `.tmp` sibling, one rename can publish a file the other wrote
+ * and the loser's rename fails ENOENT. The cleanup keeps a failed write from
+ * straying, and never touches the target.
+ */
 function atomicWriteJson(target: string, value: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  const tmp = `${target}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o644 });
-  fs.renameSync(tmp, target);
+  const tmp = `${target}.${String(process.pid)}.${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o644 });
+    fs.renameSync(tmp, target);
+  } finally {
+    // renameSync already consumed the temp on success; on failure, remove it.
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
+/** Mirrors `envBool` in the payload: anything it does not recognise is ignored. */
+function envBool(env: NodeJS.ProcessEnv, name: string): boolean | undefined {
+  if (!Object.prototype.hasOwnProperty.call(env, name)) return undefined;
+  const value = String(env[name]).trim().toLowerCase();
+  if (value === "1" || value === "true" || value === "yes" || value === "on") return true;
+  if (value === "0" || value === "false" || value === "no" || value === "off") return false;
+  return undefined;
 }
 
 export function readDeliverySettings(sandData: string, env: NodeJS.ProcessEnv = process.env): DeliverySettings {
@@ -129,6 +160,10 @@ export function readDeliverySettings(sandData: string, env: NodeJS.ProcessEnv = 
   for (const name of LAYER_NAMES) {
     const block = raw ? layerSource(raw, name) : undefined;
     layers[name] = block ? enabledOf(block) : false;
+    // The payload applies its per-layer overrides after the file is read and the
+    // hop shares this process, so an override must win in the report too.
+    const pinned = envBool(env, LAYER_ENV_OVERRIDES[name]);
+    if (pinned !== undefined) layers[name] = pinned;
   }
   const rawMode = raw?.mode;
   let mode: InjectionMode = isInjectionMode(rawMode) ? rawMode : "off";

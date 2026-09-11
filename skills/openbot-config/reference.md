@@ -60,6 +60,7 @@ Default root: `/home/box/sand-data/` (see env below).
 | `openbot-bot-models.json` | JSON | Optional per-bot overrides: { "assignments": { "<botId>": "<catalog modelId>" } }; missing/corrupt = empty. OPENBOT_BOT_MODELS overrides the path. |
 | `openbot-expose` | text | `loopback` or `cloudflare-quick` plus newline. Written by reconcile. |
 | `openbot-logs.json` | JSON | LogSettings (see below). Trailing newline. |
+| `openbot-injection.json` | JSON | Optional named injection strategy (see below); absent/invalid = mode off; trailing newline. |
 | `openbot-model-catalog.json` | JSON | Source B cache — **do not hand-edit**; `POST /api/model-catalog/refresh` |
 | `openbot-tunnel.json` | JSON | Cached public tunnel URL — do not fake a URL; use `set-expose` / `openbot tunnel on` |
 | `openbot-requests.jsonl` + `openbot-request-bodies/` | logs | Not config |
@@ -68,6 +69,88 @@ Default root: `/home/box/sand-data/` (see env below).
 | `bin/cloudflared` | binary | Downloaded by tunnel reconcile |
 
 Host file: `/home/box/sand-host/host-main.cjs`.
+
+## `openbot-injection.json`
+
+Injection hardening is a separate named opt-in strategy for the **custom hop**. It runs after the pure `toOpenAIMessages` structural conversion and before provider-specific payload conversion. Official mode, including the official tap, is untouched.
+
+### Path, reload, and fail-closed behavior
+
+- Default path: `/home/box/sand-data/openbot-injection.json`; override with `OPENBOT_INJECTION` (or set the path through the usual `OPENBOT_SAND_DATA` root).
+- The hop reads and validates this file on every request. Missing, invalid JSON, an unsupported value, or an invalid field fails closed to `{ "mode": "off" }`.
+- Write valid UTF-8 JSON atomically and keep it secret-free. This file is independent of routing, credentials, logging, mode, and tunnel state.
+- Editing it takes effect on the next hop request. It does not wrap or unwrap the host, reconcile the plan, start a tunnel, or require a host/session bounce.
+
+### JSON shape
+
+The following is the complete recommended shape. Keep `mode` at `off` until a cohort has passed dry-run checks; layer objects are optional, and a present layer object defaults `enabled` to `true`.
+
+```json
+{
+  "mode": "off",
+  "layers": {
+    "l1": {
+      "enabled": true,
+      "startOfTurnAckThreshold": 1,
+      "watchingSilenceThreshold": 6,
+      "earlyResultThreshold": 0
+    },
+    "l2": {
+      "enabled": true,
+      "maxAdditionalRuns": 1,
+      "terminalDecisionTimeoutMs": 250,
+      "timeoutMs": 15000,
+      "maxAdditionalPromptTokens": 131072,
+      "maxAdditionalCompletionTokens": 2048,
+      "maxAdditionalCostUsd": 0.10
+    },
+    "l3": {
+      "enabled": true,
+      "maxRedrivesPerEpoch": 1,
+      "ttlMs": 300000
+    }
+  }
+}
+```
+
+A layer object may be omitted to disable that layer. Explicit `enabled: false` also disables it; top-level `mode: "off"` always wins. The modes are:
+
+- `off` (default): no injection and the current single-request behavior remains unchanged.
+- `dry-run`: compute and record the same gates, family, shape, suffix fingerprint, and body hash, but do not mutate the request, hold a terminal, or dispatch an additional run; all deltas and first bytes remain immediate.
+- `enforce`: apply enabled L1/L2/L3 behavior after the gates and bounds pass. L2 is terminal-only: it forwards all non-terminal deltas immediately and holds only the tiny terminal/framing event set while deciding whether to run once more.
+
+### Defaults and validation limits
+
+| Field | Default | Valid range / rule |
+|---|---:|---|
+| `mode` | `off` | `off`, `dry-run`, or `enforce`; invalid means `off`. |
+| `layers.l1/l2/l3.enabled` | `true` when the layer object is present | Boolean; top-level `off` still wins. |
+| `layers.l1.startOfTurnAckThreshold` | `1` | Integer at least 1; compares with `>` (official §3.21). |
+| `layers.l1.watchingSilenceThreshold` | `6` | Integer at least 1 (official §3.22). |
+| `layers.l1.earlyResultThreshold` | `0` | Integer at least 0 (official §3.23). |
+| `layers.l2.maxAdditionalRuns` | `1` | Integer 0..1; hard maximum is 1. |
+| `layers.l2.terminalDecisionTimeoutMs` | `250` | Integer 1..2000; hard local terminal-decision deadline. |
+| `layers.l2.timeoutMs` | `15000` | Integer 1000..30000; also bounded by the existing request deadline. |
+| `layers.l2.maxAdditionalPromptTokens` | `131072` | Integer 8192..262144; includes complete canonical context plus nudge. |
+| `layers.l2.maxAdditionalCompletionTokens` | `2048` | Integer 128..16384; hard cap for the additional run. |
+| `layers.l2.maxAdditionalCostUsd` | `0.10` | Number 0..10; unknown model rate or over-budget reservation skips L2. |
+| `layers.l3.maxRedrivesPerEpoch` | `1` | Integer 0..3; hard maximum is 3. |
+| `layers.l3.ttlMs` | `300000` | Integer 60000..900000; expired obligations are unresolved. |
+
+There is deliberately no response-size or capture-admission setting. `heldTerminalBytes` is a runtime observation of the small terminal event set, not a configurable response buffer; an invalidly large terminal is released immediately and L2 is skipped.
+
+### Relationship and rollback
+
+- `openbot-plan.json` remains the route/catalog/model plan; `openbot-logs.json` controls persistence/retention, not injection enablement; `openbot-mode` still selects official versus custom; request JSONL remains logs. None of these files should be used to turn injection on.
+- An absent file is equivalent to `{ "mode": "off" }`. To roll back, atomically replace it with the following (or remove the optional file):
+
+```json
+{
+  "mode": "off"
+}
+```
+
+- The rollback takes effect on the next request without a host bounce, reconcile, plan rewrite, or new session. A future UI/API save kind may expose the same fields, but it must not silently turn the mode on.
 
 ## Env overrides
 
@@ -78,6 +161,7 @@ Host file: `/home/box/sand-host/host-main.cjs`.
 | `OPENBOT_MODE` | Mode file path (runtime) |
 | `OPENBOT_SECRETS` | Secrets JSON path |
 | `OPENBOT_LOGS` | Log settings path |
+| `OPENBOT_INJECTION` | Injection policy path (default `<OPENBOT_SAND_DATA>/openbot-injection.json`) |
 | `OPENBOT_PAUSE` | Pause file path (highest priority on the payload side, above `OPENBOT_SAND_DATA` / `OPENBOT_PLAN` inference) |
 | `OPENBOT_BOT_MODELS` | Per-bot model assignment JSON path |
 | `OPENBOT_MAPS` | Maps module path (default `payload/provider-maps.cjs` next to hop) |
@@ -198,6 +282,26 @@ Ranges: `logRetentionDays` 1–365; `maxBodyCaptureBytes` 1024–1048576; `maxRe
 `payload/request-log.cjs` `loadSettings()` reads the file each time. Enabling logging **on** for official host tap may keep wrap marked (`attachSession` / `wrapSession` → `tapSession`, not a hop). Prefer `PUT /api/logs/settings` so prune plus official reconcile run. Custom hop logging can take a JSON edit.
 
 `PUT /api/logs/settings` JSON body uses the same fields; response includes `wrapBytesChanged` and optional `wrapError`. Also: `GET /api/logs/settings`, `GET /api/logs`, `GET /api/logs/:id`, `POST /api/logs/clear`.
+
+## Injection observability
+
+The control page shows bounded injection metadata beside paired `custom-host`/hop rows, even when request-body capture is disabled. It must never expose a key or a full prompt/response body. The fields are:
+
+| Group | Fields |
+|---|---|
+| Strategy and gates | `injectionMode`; `injectionFamilies[]`; `identityGateResult`; `skipReason`; `classificationSkippedReason`; `injectionEpoch`; `injectionFingerprint`; `injectionWouldApply` |
+| L2 decision and budget | `l2SupportedProtocol`; `l2Eligible`; `l2Attempted`; `l2Outcome`; `l2AdditionalRuns`; `l2NudgeShape`; `l2AddedLatencyMs`; `l2PromptTokensEstimated`; `l2CompletionTokenCap`; `l2CostReservedUsd`; `l2PromptTokensActual`; `l2CompletionTokensActual`; `l2CostActualUsd` |
+| Timing and response | `firstByteForwardedAt`; `firstContentAt`; `currentResponseToolCallCount`; `firstResponseHash`; `l2BodyHash` |
+| Latest-user debt | `latestRealUserMessageId`; `latestRealUserMessageSequence`; `lastTouchSequence`; `toolCallsAfterLastTouch`; `touchClassification`; `hostDeliveryEventMode`; `debtState`; `debtShape`; `awaitingUserSelection`; `completionReason` |
+| Terminal | `terminalFinishReason`; `terminalHoldState`; `heldTerminalBytes`; `terminalDecision`; `terminalReleaseReason`; `terminalReleaseAt` |
+| Delivery and ledger | `deliveryCallsEmitted[]`; `deliveryObserved[]`; `deliveryObservedAt[]`; `deliveryErrorsObserved[]`; `ledgerSentMessageCount`; `ledgerReacted`; `ledgerOwedAtStart`; `ledgerOwedAtEnd` |
+| Outcome | `finalNoTool`; `l2Suppressed` |
+
+`injectionFamilies[]` uses bounded names: `l1.reply-first`, `l1.start-ack`, `l1.silence`, `l1.early-result`, `l2.reply-nudge`, `l3.reply-nudge`, and `l3.closing-send`.
+
+`l2NudgeShape` is `no-touch` (§3.27), `touch-then-tool` (§3.28), or `none`. `touchClassification` is `none`, `observed`, `initiated-fallback`, `failed`, or `unknown`; `hostDeliveryEventMode` is `available` or `unavailable`; `debtState`/`debtShape` preserve `owed|not-owed|unknown` and `no-touch|touch-then-tool|touch-no-tool|unknown`. `ledgerOwedAtStart`, `ledgerOwedAtEnd`, `awaitingUserSelection`, and `completionReason` remain unknown/omitted unless a trusted host event supplies them.
+
+The page distinguishes gateway `call-emitted` from host-confirmed `delivery-observed` (including `observedAt`); an initiated-call fallback is visibly marked and is not rendered as delivery success. Bounded counters/events include `injection.would_apply`, `injection.applied`, `injection.terminal_released`, `injection.l2_triggered`, `injection.l2_fallback_original_terminal`, `injection.suppressed_duplicate`, `injection.skipped{skipReason}`, `injection.classification_skipped{classificationSkippedReason}`, `injection.budget_exceeded`, `injection.unresolved`, `delivery.call_emitted`, `delivery.observed`, `delivery.unknown`, and `delivery.host_event_unavailable`.
 
 -## `openbot-pause.json`
 

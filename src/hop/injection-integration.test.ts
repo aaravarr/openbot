@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -249,6 +249,8 @@ function sseData(value: unknown): string {
 
 interface Harness {
   hopPort: number;
+  /** Sand-data temp dir (request log rows live at openbot-requests.jsonl). */
+  dir: string;
   readonly hits: UpstreamHit[];
   plan: PlanItem[];
   /** Completes an in-flight hang item (terminal + [DONE] then end). */
@@ -273,6 +275,8 @@ interface FixtureOptions {
   layers?: { l1?: boolean; l2?: boolean; l3?: boolean };
   /** Override l2 knobs (watchdog, retry budget). */
   l2?: Record<string, unknown>;
+  /** Turn the request log on and expose rows for identity-logging assertions. */
+  logging?: boolean;
 }
 
 async function fixture(options: FixtureOptions): Promise<Harness> {
@@ -366,7 +370,10 @@ async function fixture(options: FixtureOptions): Promise<Harness> {
     }),
   );
   writeFileSync(path.join(dir, "secrets.json"), JSON.stringify({ providers: { stub: "sk-test" } }));
-  writeFileSync(path.join(dir, "openbot-logs.json"), JSON.stringify({ loggingEnabled: false }));
+  writeFileSync(
+    path.join(dir, "openbot-logs.json"),
+    JSON.stringify({ loggingEnabled: options.logging === true, logBodies: options.logging === true }),
+  );
 
   const managed: Array<[string, string | undefined]> = [
     ["OPENBOT_PLAN", process.env.OPENBOT_PLAN],
@@ -415,6 +422,7 @@ async function fixture(options: FixtureOptions): Promise<Harness> {
 
   const harness: Harness = {
     hopPort: hopServer.port,
+    dir,
     hits,
     get plan() {
       return plan;
@@ -483,6 +491,27 @@ async function fixture(options: FixtureOptions): Promise<Harness> {
     },
   };
   return harness;
+}
+
+/** Parsed request-log rows from the fixture's sand-data dir. */
+function readRows(dir: string): Array<Record<string, any>> {
+  const file = path.join(dir, "openbot-requests.jsonl");
+  let text = "";
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return [];
+  }
+  const rows: Array<Record<string, any>> = [];
+  for (const line of text.split(/\n/)) {
+    if (!line.trim()) continue;
+    try {
+      rows.push(JSON.parse(line));
+    } catch {
+      /* skip bad lines */
+    }
+  }
+  return rows;
 }
 
 /** The inbound request body the test client sends. */
@@ -1106,6 +1135,46 @@ test("second run still silent (chat-completions SSE no-touch): both texts forwar
     assert.equal(env.hits.length, 2, "the cap is one additional run");
     assertCleanStream(out.raw, { firstDeltas: ["first", "second"], terminalFinish: "stop" });
     assert.equal(out.raw.includes("[SAND_HIDDEN_PROMPT]"), false);
+  } finally {
+    await env.close();
+  }
+});
+
+
+test("hop rows carry the observed botId and the honest skip reason, never a trust promotion", async () => {
+  hardening.resetForTests();
+  const env = await fixture({ protocol: "chat-completions", mode: "enforce", logging: true });
+  try {
+    // A custom-wrap body: host-shaped system prompt with the profile path and
+    // a <user_query> DM turn. No trusted context is attached for this case.
+    const body = {
+      model: "m",
+      messages: [
+        {
+          role: "system",
+          content: "Profile: /home/box/agent-data/agents/b8783b54-0ab5-42ec-ac3b-3c838bc528bd/profile.json",
+        },
+        { role: "user", content: "<user_query>please do the thing</user_query>" },
+      ],
+      stream: true,
+    };
+    const out = await env.post(body);
+    assert.equal(out.status, 200);
+    await waitFor(() => readRows(env.dir).length > 0, "hop row flush");
+    const row = readRows(env.dir).find((r) => r.channel === "hop");
+    assert.ok(row, "a hop row was recorded");
+    assert.equal(row.botId, "b8783b54-0ab5-42ec-ac3b-3c838bc528bd", "row botId mirrors the observed identity");
+    assert.equal(row.chatType, "dm");
+    assert.equal(row.injection.identityGateResult, "pass", "observable identity gates honestly (uncertain fallback)");
+    assert.equal(row.injection.skipReason, undefined, "no fabricated no_bot_id on observed identity");
+    // The trusted lane is untouched: a trusted person context still runs L2.
+    hardening.resetForTests();
+    const trusted = await env.post(inboundBody("no-touch", true), { epochId: "epoch-e2e-trusted" });
+    assert.equal(trusted.status, 200);
+    await waitFor(() => readRows(env.dir).filter((r) => r.channel === "hop").length >= 2, "second hop row flush");
+    const trustedRow = readRows(env.dir).filter((r) => r.channel === "hop").at(-1);
+    assert.ok(trustedRow, "second hop row was recorded");
+    assert.equal(trustedRow.injection.l2Eligible, true, "trusted person turn remains L2 eligible");
   } finally {
     await env.close();
   }

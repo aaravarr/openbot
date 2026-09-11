@@ -717,6 +717,10 @@ function openUpstream(urlStr, body, key, inbound, apiType) {
   var lib = u.protocol === "https:" ? https : http;
   var outboundBody = Object.assign({}, body);
   delete outboundBody.__openbot_api_type;
+  // Identity metadata rides the body for logging and the dry-run gate only;
+  // no upstream provider ever sees it (same gate as __openbot_api_type).
+  delete outboundBody.openbotBotId;
+  delete outboundBody.openbotChatType;
   var payload = Buffer.from(JSON.stringify(outboundBody), "utf8");
   var wantStream = body && body.stream === true;
   var headers = {
@@ -1231,14 +1235,26 @@ function injectionHeader(headers, name) {
 
 function injectionObservedContext(req, body, conversationId) {
   var headers = (req && req.headers) || {};
+  // Observable identity is bounded to body fields, transport headers and the
+  // host prompt path — never transcript prose (plan §9.1). The OpenAI wire
+  // protocol carries no bot identity, so the request-log contract (botId from
+  // /home/box/agent-data/agents/<uuid>/profile.json in the system prompt,
+  // chatType from <user_query>) is the only observable source the custom wrap
+  // actually provides. It stays observable-only: it can never reach the
+  // trusted gate.
+  var clues = requestLog.extractChatContext ? requestLog.extractChatContext(isRecord(body) ? body.messages : undefined) : {};
   var observed = {
-    botId: isRecord(body) && typeof body.botId === "string" ? body.botId : injectionHeader(headers, "x-openbot-bot-id"),
+    botId: isRecord(body) && typeof body.botId === "string" ? body.botId : injectionHeader(headers, "x-openbot-bot-id") || clues.botId || "",
     conversationId: conversationId || "",
     epochId: isRecord(body) && typeof body.epochId === "string" ? body.epochId : injectionHeader(headers, "x-openbot-epoch-id"),
-    chatType: isRecord(body) && typeof body.chatType === "string" ? body.chatType : injectionHeader(headers, "x-openbot-chat-type"),
+    chatType: isRecord(body) && typeof body.chatType === "string" ? body.chatType : injectionHeader(headers, "x-openbot-chat-type") || clues.chatType || "",
     directChat: isRecord(body) && (body.directChat === true || body.direct_chat === true),
     internalLane: isRecord(body) && (body.internalLane === true || body.internal_lane === true),
   };
+  // Bounded observation fields for the request log. They are NOT trust: the
+  // gate below never consults them when a trusted host context is present.
+  if (observed.botId) body.openbotBotId = String(observed.botId).slice(0, 64);
+  if (observed.chatType) body.openbotChatType = String(observed.chatType).slice(0, 32);
   return injectionHardening.contextFromRequest(req, body, observed);
 }
 
@@ -1824,6 +1840,11 @@ async function handleCompletionsInner(req, res) {
     });
     var outboundBody = apiType === "responses" ? protocolConverters.chatToResponses(body) : apiType === "anthropic" ? protocolConverters.chatToAnthropic(body) : body;
     outboundBody.__openbot_api_type = apiType;
+    // Converted families rebuild the body from an allow-list, so the
+    // observable-identity mirror must be stamped on the converted document
+    // too (openUpstream strips it before the upstream ever sees it).
+    if (injectionContext.observed && injectionContext.observed.botId) outboundBody.openbotBotId = injectionContext.observed.botId;
+    if (injectionContext.observed && injectionContext.observed.chatType) outboundBody.openbotChatType = injectionContext.observed.chatType;
     noteWireBytes(outboundBody);
     fields.requestBody = outboundBody;
     fields.stream = body.stream === true;
@@ -1961,6 +1982,9 @@ exports.inboundClientMeta = inboundClientMeta;
 exports.detectClientName = detectClientName;
 exports.parseClientVersion = parseClientVersion;
 exports.findConversationId = findConversationId;
+// Test seam: the full observed-context construction (headers + body + host
+// prompt clues) without a live HTTP request.
+exports.injectionObservedContextForTests = injectionObservedContext;
 exports.opencodeSessionId = opencodeSessionId;
 exports.loadKey = loadKey;
 exports.noteFirstContent = noteFirstContent;

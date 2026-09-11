@@ -1101,6 +1101,11 @@ function recordHopInner(input) {
   if (context.chatName) row.chatName = context.chatName;
   var botId = cleanText(src.botId, 64);
   if (botId) row.botId = botId;
+  // Hop-side observable identity mirror: the hop extracts these the same way
+  // extractChatContext does for host rows, so paired rows compare directly.
+  var hopBotId = cleanText(src.requestBody && src.requestBody.openbotBotId, 64);
+  if (!row.botId && hopBotId) row.botId = hopBotId;
+  if (!row.chatType && (src.requestBody && src.requestBody.openbotChatType) === "group") row.chatType = "group";
   var chatType = src.chatType === "group" || src.chatType === "dm" || src.chatType === "routine" ? src.chatType : undefined;
   if (chatType) row.chatType = chatType;
   var chatName = cleanText(src.chatName, 200);

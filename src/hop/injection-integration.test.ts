@@ -32,6 +32,13 @@ const hardening = require(hardeningModule) as {
   CLOSING_SEND_PROMPT: string;
   resetForTests: () => void;
 };
+const convertersModule = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../payload/protocol-converters.cjs",
+);
+const protocolConverters = require(convertersModule) as {
+  anthropicSseToChat: (raw: string, opts?: { terminal?: boolean; framing?: boolean }) => string;
+};
 
 type Protocol = "chat-completions" | "responses" | "anthropic";
 
@@ -542,31 +549,16 @@ function isDeliveryName(name: string): boolean {
  * exact order — including a remediation second run's deltas, which the spec
  * (§7.2) splices onto the same host stream before its terminal.
  *
- * pinMultipleTerminals is an intentional PRODUCT-BUG PIN, not a weaker
- * invariant: payload/protocol-converters.cjs anthropicSseToChat appends a
- * synthetic terminal chunk + [DONE] after EVERY per-frame invocation, and the
- * injection adapter consumes provider SSE frame by frame, so an anthropic
- * stream currently emits one bogus extra terminal per parsed frame instead of
- * exactly one (plan §7.3 "Hold only the finish-bearing chunk or chunks and
- * the mandatory [DONE] framing"). Passing pinMultipleTerminals asserts the
- * exact CURRENT bogus terminal count; once the product bug is fixed these
- * cases must flip back to terminalFinish-only (delete the pin). */
-function assertCleanStream(raw: string, opts: { firstDeltas: string[]; terminalFinish: string; allowDeliveryTools?: number; pinMultipleTerminals?: number }): ChunkView[] {
+ * Per-frame conversion never synthesizes terminals or [DONE] framing (plan
+ * §7.3): exactly one finish-bearing chunk and one [DONE] are expected, always. */
+function assertCleanStream(raw: string, opts: { firstDeltas: string[]; terminalFinish: string; allowDeliveryTools?: number }): ChunkView[] {
   const parsed = parseSseText(raw);
   assert.equal(parsed.done, true, "client stream must end with [DONE]");
   const views = parsed.dataLines.map(chunkView);
   const contents = views.map((view) => view.content).filter((value): value is string => value !== null);
   assert.deepEqual(contents, opts.firstDeltas, "every original delta present exactly once, in order");
   const finishes = views.map((view) => view.finish).filter((value): value is string => value !== null);
-  if (opts.pinMultipleTerminals === undefined) {
-    assert.deepEqual(finishes, [opts.terminalFinish], "exactly one terminal finish event");
-  } else {
-    assert.deepEqual(
-      finishes,
-      Array.from({ length: opts.pinMultipleTerminals }, () => opts.terminalFinish),
-      "PINNED PRODUCT BUG: anthropic per-frame conversion emits extra synthetic terminals (see payload/protocol-converters.cjs); fix the product, then drop this pin",
-    );
-  }
+  assert.deepEqual(finishes, [opts.terminalFinish], "exactly one terminal finish event");
   const delivery = views.flatMap((view) => view.toolNames).filter(isDeliveryName);
   assert.equal(delivery.length, opts.allowDeliveryTools ?? 0, "no forged delivery tool call");
   return views;
@@ -783,11 +775,7 @@ test("anthropic SSE no-touch: 3.27 suffix mapped through chatToAnthropic, histor
     assert.equal(last?.role, "user");
     assert.equal(last?.content, nudgeContent("no-touch"));
     assert.equal(env.hits[1]?.body.system, env.hits[0]?.body.system, "history prefix is not mutated");
-    // PRODUCT-BUG PIN: with a 4-frame first stream (2 deltas + terminal
-    // frame + [DONE] frame) the per-frame anthropic converter emits one
-    // bogus terminal per parsed frame; 3 currently reach the client after
-    // the hold. Expected after a product fix: drop pinMultipleTerminals.
-    assertCleanStream(out.raw, { firstDeltas: ["Anth", "ropic text", "nudge text"], terminalFinish: "stop", pinMultipleTerminals: 3 });
+    assertCleanStream(out.raw, { firstDeltas: ["Anth", "ropic text", "nudge text"], terminalFinish: "stop" });
     assert.equal(out.raw.includes("[SAND_HIDDEN_PROMPT]"), false);
   } finally {
     await env.close();
@@ -825,10 +813,7 @@ test("anthropic SSE touch-no-tool: released immediately with zero second calls",
     const out = await env.post(inboundBody("touch-no-tool", true), { epochId: "epoch-anth-tnt-sse" });
     assert.equal(out.status, 200);
     assert.equal(env.hits.length, 1);
-    // PRODUCT-BUG PIN: per-frame anthropic conversion synthesizes a terminal
-    // per frame; 3 reach the client after the hold. After a product fix:
-    // drop pinMultipleTerminals.
-    assertCleanStream(out.raw, { firstDeltas: ["done already"], terminalFinish: "stop", pinMultipleTerminals: 3 });
+    assertCleanStream(out.raw, { firstDeltas: ["done already"], terminalFinish: "stop" });
   } finally {
     await env.close();
   }
@@ -900,6 +885,25 @@ test("OFF chat-completions SSE: bytes are exactly the classic passthrough frames
   assert.equal(offOut.raw, expected, "OFF streams the upstream document untouched");
 });
 
+test("OFF anthropic SSE: the converted document is byte-identical to whole-document anthropicSseToChat", async () => {
+  hardening.resetForTests();
+  const env = await fixture({ protocol: "anthropic", mode: "off" });
+  env.plan = [{ text: ["Hel", "lo"] }];
+  try {
+    const out = await env.post(inboundBody("no-touch", true), { epochId: "epoch-off-anth-sse" });
+    assert.equal(out.status, 200);
+    assert.equal(env.hits.length, 1, "OFF never issues a second upstream call");
+    // OFF byte-identity invariant: the client receives exactly what
+    // whole-document conversion produces -- the per-frame terminal/framing
+    // options used by the injection adapter must never touch this path.
+    const upstreamDoc = upstreamSse("anthropic", env.plan[0]!);
+    const expected = protocolConverters.anthropicSseToChat(upstreamDoc);
+    assert.equal(out.raw, expected, "OFF anthropic SSE is whole-document converted bytes");
+  } finally {
+    await env.close();
+  }
+});
+
 test("OFF chat-completions JSON: the upstream document is forwarded byte-for-byte", async () => {
   hardening.resetForTests();
   const env = await fixture({ protocol: "chat-completions", mode: "off" });
@@ -921,7 +925,7 @@ test("OFF chat-completions JSON: the upstream document is forwarded byte-for-byt
 // ---- Failure paths. Every path must release the held terminal exactly once
 // ---- and leave the client with exactly one terminal event.
 
-async function assertFailurePath(options: FixtureOptions & { plan: PlanItem[]; shape: "no-touch" | "touch-then-tool"; label: string; secondDeltas?: string[]; pinnedTerminals?: number }) {
+async function assertFailurePath(options: FixtureOptions & { plan: PlanItem[]; shape: "no-touch" | "touch-then-tool"; label: string; secondDeltas?: string[] }) {
   hardening.resetForTests();
   const env = await fixture(options);
   env.plan = options.plan;
@@ -931,18 +935,12 @@ async function assertFailurePath(options: FixtureOptions & { plan: PlanItem[]; s
       // plan §7.4: deltas the second run already emitted before its failure
       // cannot be retracted; the client legitimately receives first-run
       // deltas, any partial second-run deltas, then the replayed ORIGINAL
-      // terminal -- exactly one terminal total (see pinnedTerminals below
-      // for the pinned anthropic per-frame product bug).
+      // terminal -- exactly one terminal total.
       firstDeltas: [...(options.plan[0]?.text ?? []), ...(options.secondDeltas ?? [])],
       terminalFinish: "stop",
-      ...(options.pinnedTerminals !== undefined ? { pinMultipleTerminals: options.pinnedTerminals } : {}),
     });
     const terminalCount = views.filter((view) => view.finish !== null).length;
-    if (options.pinnedTerminals === undefined) {
-      assert.equal(terminalCount, 1, options.label + ": exactly one terminal event");
-    } else {
-      assert.equal(terminalCount, options.pinnedTerminals, options.label + ": PINNED PRODUCT BUG terminal count (fix payload anthropic per-frame conversion, then drop the pin)");
-    }
+    assert.equal(terminalCount, 1, options.label + ": exactly one terminal event");
     // A 502 nudge attempt is retried by the hop's own bounded policy, so the
     // attempt chain consumes 1..3 calls; the invariant under test is the
     // replay of the original terminal above, not the retry count.
@@ -981,12 +979,6 @@ test("failure second-run 502 (anthropic SSE no-touch): original terminal replaye
     label: "anth-nt-502",
     shape: "no-touch",
     plan: [{ text: ["anth held"] }, { status: 502 }],
-    // PRODUCT-BUG PIN: per-frame anthropic conversion synthesizes a terminal
-    // for EVERY parsed frame (even the bare [DONE] tail frame), so the
-    // 3-frame first stream holds 3 terminals and the failure-release path
-    // replays all 3. After a product fix: expect exactly one terminal again
-    // and drop this pin.
-    pinnedTerminals: 3,
   });
 });
 

@@ -205,6 +205,11 @@ code, kbd, .mono { font-family: var(--font-mono); }
   transition: background var(--dur-1) var(--ease-standard), color var(--dur-1) var(--ease-standard);
   position: relative;
   background: transparent; border: none; cursor: pointer;
+  /* Flex items default to min-width:auto, so under width pressure the nav's own
+     box shrank while every link kept its full width and painted over the right
+     cluster (overlap with no overflow at 769-1023px; scrollWidth never saw it
+     because #root clips). min-width: 0 lets a link yield instead. */
+  min-width: 0;
 }
 .nav__link svg { width: 14px; height: 14px; }
 .nav__link:hover { color: var(--ink); background: var(--surface-3); text-decoration: none; }
@@ -1215,18 +1220,27 @@ table.data td.cell-actions { white-space: nowrap; width: 1%; }
   .col-8, .col-4, .col-6, .col-12 { grid-column: span 1; }
   .health-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   /* The pill shares the top nav now, so it has less room than the full-width
-     strip had; the model name truncates rather than pushing the nav around. */
+     strip had; the model name truncates rather than pushing the nav around.
+     (In the 769-1023 compact band the slug is hidden entirely — see the 1023px
+     block above.) */
   .topnav__right .mode-pill__model { max-width: 16ch; }
 }
 
-/* Five top-nav links (Dashboard · Bots · Models · Logs · Settings) need the
-   width back before the mobile floor takes over at 768px. The loopback chip
-   stays visible here: it is the only surface for the loopback URL and its copy
-   button, so the room comes out of nav padding and gaps instead of the chip. */
-@media (max-width: 860px) {
+/* Five top-nav links (Dashboard · Bots · Models · Logs · Settings) plus the
+   full right cluster fit together only from 1024px up. Measured pressure in the
+   769-1023 band: the right cluster is 384px with chip, 261px without, while the
+   five links need 395-443px — the links alone overrun even after the mode pill
+   gives up its model slug. Below 1023 the band therefore also gives up the
+   loopback chip (it was hidden below 768 before; the band now loses the only
+   on-page surface for the loopback URL — the Dashboard still shows it), trims
+   nav padding and gaps, and drops the pill slug (the mode token remains). */
+@media (max-width: 1023px) {
   .topnav { gap: var(--sp-3); }
   .nav { gap: 2px; }
   .nav__link { padding: 0 6px; }
+  .topnav__right .mode-pill__model,
+  .topnav__right .mode-pill__divider { display: none; }
+  .loopback-chip { display: none; }
 }
 
 /* Mobile (≤768px): top nav collapses to the bottom tab bar, single-column

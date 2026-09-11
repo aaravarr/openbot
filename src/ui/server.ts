@@ -19,6 +19,7 @@ import { loadSecrets, parseSecretBytes, saveSecrets, upsertSecret } from "../sup
 import { readExposeFile } from "../supervisor/tunnel.ts";
 import { completeOpenAIOAuth, startOpenAIOAuth } from "../supervisor/openai-oauth.ts";
 import { handleBotModelsApi } from "./bot-models.ts";
+import { isInjectionMode, parseInjectionLayers, readDeliverySettings, writeDeliverySettings } from "./delivery-settings.ts";
 
 type LogSettings = {
   loggingEnabled: boolean;
@@ -817,6 +818,49 @@ async function handleGrokSkillsApi(req: http.IncomingMessage, res: http.ServerRe
   return false;
 }
 
+/**
+ * Delivery follow-up ("injection hardening") switch. The hop hot-reads the file
+ * this writes, so a change lands on the next request and needs no restart. The
+ * file is read fresh every call because it may also be edited by hand.
+ */
+async function handleDeliverySettingsApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+  if (url.pathname !== "/api/settings/delivery") return false;
+  const current = deps();
+  const sandData = String(current.paths.sandData);
+  if (req.method === "GET") {
+    sendJson(res, 200, readDeliverySettings(sandData));
+    return true;
+  }
+  if (req.method !== "PUT") {
+    sendJson(res, 405, { error: "method not allowed" });
+    return true;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readBody(req)) as unknown;
+  } catch {
+    sendJson(res, 400, { error: "invalid json" });
+    return true;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    sendJson(res, 400, { error: "body must be an object" });
+    return true;
+  }
+  const { mode, layers } = parsed as { mode?: unknown; layers?: unknown };
+  if (!isInjectionMode(mode)) {
+    sendJson(res, 400, { error: "mode must be one of off, dry-run, enforce" });
+    return true;
+  }
+  const parsedLayers = parseInjectionLayers(layers);
+  if (!parsedLayers.ok) {
+    sendJson(res, 400, { error: parsedLayers.error });
+    return true;
+  }
+  const state = await enqueueSave(async () => writeDeliverySettings(sandData, { mode, layers: parsedLayers.layers }));
+  sendJson(res, 200, { ok: true, ...state });
+  return true;
+}
+
 async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
   const current = deps();
   if (await handleBotModelsApi(req, res, url, current, readBody, sendJson, catalogFromPlanJson)) return;
@@ -877,6 +921,9 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     return;
   }
   if (await handlePauseApi(req, res, url)) {
+    return;
+  }
+  if (await handleDeliverySettingsApi(req, res, url)) {
     return;
   }
   if (await handlePauseBotsApi(req, res, url)) {

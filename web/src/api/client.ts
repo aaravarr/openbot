@@ -9,6 +9,9 @@ import type {
   BotInfo,
   BotModels,
   Command,
+  DeliveryMode,
+  DeliverySettings,
+  DeliverySettingsResult,
   FetchModelsError,
   FetchModelsErrorKind,
   FetchModelsResult,
@@ -249,6 +252,19 @@ export async function getGrokSkills(): Promise<GrokSkillsReport> {
 export async function installGrokSkills(slug?: string): Promise<GrokSkillsReport & { ok: true }> {
   const body = slug !== undefined ? { slug } : {};
   return (await request("/api/grok-skills/install", jsonInit(body))) as GrokSkillsReport & { ok: true };
+}
+
+/* ---- Delivery follow-up (injection hardening) ---- */
+export async function getDeliverySettings(): Promise<DeliverySettings> {
+  return (await request("/api/settings/delivery")) as DeliverySettings;
+}
+
+export async function saveDeliverySettings(mode: DeliveryMode): Promise<DeliverySettingsResult> {
+  return (await request("/api/settings/delivery", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  })) as DeliverySettingsResult;
 }
 
 /* ---- Logs ---- */

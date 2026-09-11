@@ -1208,7 +1208,7 @@ table.data td.cell-actions { white-space: nowrap; width: 1%; }
   padding-right: env(safe-area-inset-right);
   padding-bottom: env(safe-area-inset-bottom);
 }
-.bottom-tabs__inner { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); height: 56px; }
+.bottom-tabs__inner { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); height: 56px; }
 .bottom-tab {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 3px; font-size: 10px; color: var(--muted);
@@ -1226,6 +1226,13 @@ table.data td.cell-actions { white-space: nowrap; width: 1%; }
   .col-8, .col-4, .col-6, .col-12 { grid-column: span 1; }
   .health-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .mode-pill__model { max-width: 16ch; }
+}
+
+/* Five top-nav links (Dashboard · Bots · Models · Logs · Settings) need the
+   width back before the mobile floor takes over at 768px. */
+@media (max-width: 860px) {
+  .nav__link { padding: 0 8px; }
+  .loopback-chip { display: none; }
 }
 
 /* Mobile (≤768px): top nav collapses to the bottom tab bar, single-column

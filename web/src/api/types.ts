@@ -96,6 +96,33 @@ export type LogSettings = {
   maxRecords: number;
 };
 
+/**
+ * Delivery follow-up ("injection hardening") settings.
+ *
+ * The backend hot-reads the config file on every hop request, so a saved mode
+ * applies from the next request with no restart. `source` says where the
+ * effective mode came from; `envOverride` means the environment pins it and the
+ * file can no longer win.
+ */
+export type DeliveryMode = "off" | "dry-run" | "enforce";
+
+export type DeliveryModeSource = "env" | "file" | "default";
+
+export type DeliveryLayers = { l1: boolean; l2: boolean; l3: boolean };
+
+export type DeliverySettings = {
+  mode: DeliveryMode;
+  source: DeliveryModeSource;
+  path: string;
+  exists: boolean;
+  envOverride: boolean;
+  layers: DeliveryLayers;
+  /** The runtime hard-caps this at 1; a value outside 0..1 falls back to 1. */
+  maxAdditionalRuns: number;
+};
+
+export type DeliverySettingsResult = DeliverySettings & { ok: true };
+
 export type BoxState = {
   snapshot: Snapshot;
   providers: Provider[];

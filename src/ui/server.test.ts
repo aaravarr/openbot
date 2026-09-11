@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { createRequire } from "node:module";
 import test from "node:test";
@@ -419,3 +419,130 @@ test("process guards keep the process alive on an unhandled rejection", () => {
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.match(result.stdout, /survived/);
 });
+
+const INJECTION_FILE = "/tmp/openbot-sand-data/openbot-injection.json";
+
+test("GET /api/settings/delivery reports the payload defaults when no config exists", async () => {
+  rmSync(INJECTION_FILE, { force: true });
+  const { server, port } = await listen();
+  try {
+    const res = await request(port, "/api/settings/delivery", "GET");
+    assert.equal(res.status, 200);
+    const body = res.json as Record<string, unknown>;
+    assert.equal(body.mode, "off");
+    assert.equal(body.source, "default");
+    assert.equal(body.exists, false);
+    assert.equal(body.envOverride, false);
+    assert.deepEqual(body.layers, { l1: false, l2: false, l3: false });
+    assert.equal(body.maxAdditionalRuns, 1);
+  } finally {
+    server.close();
+  }
+});
+
+test("PUT /api/settings/delivery writes the file the hop hot-reads and turns the layers on", async () => {
+  rmSync(INJECTION_FILE, { force: true });
+  const { server, port } = await listen();
+  try {
+    const res = await request(port, "/api/settings/delivery", "PUT", Buffer.from(JSON.stringify({ mode: "dry-run" })));
+    assert.equal(res.status, 200);
+    const body = res.json as Record<string, unknown>;
+    assert.equal(body.ok, true);
+    assert.equal(body.mode, "dry-run");
+    // A bare mode write must not leave a switch that does nothing: the payload
+    // only runs a layer whose block is present.
+    assert.deepEqual(body.layers, { l1: true, l2: true, l3: true });
+    assert.equal(body.source, "file");
+    const onDisk = JSON.parse(readFileSync(INJECTION_FILE, "utf8")) as Record<string, unknown>;
+    assert.equal(onDisk.mode, "dry-run");
+    assert.equal(existsSync(`${INJECTION_FILE}.tmp`), false);
+
+    const reread = await request(port, "/api/settings/delivery", "GET");
+    assert.equal((reread.json as Record<string, unknown>).mode, "dry-run");
+
+    const off = await request(port, "/api/settings/delivery", "PUT", Buffer.from(JSON.stringify({ mode: "off" })));
+    assert.equal(off.status, 200);
+    assert.equal((off.json as Record<string, unknown>).mode, "off");
+    // Off keeps the layer blocks so switching back on restores the tuning.
+    assert.deepEqual((JSON.parse(readFileSync(INJECTION_FILE, "utf8")) as Record<string, unknown>).layers, {
+      l1: { enabled: true },
+      l2: { enabled: true },
+      l3: { enabled: true },
+    });
+  } finally {
+    server.close();
+    rmSync(INJECTION_FILE, { force: true });
+    rmSync(`${INJECTION_FILE}.tmp`, { force: true });
+  }
+});
+
+test("PUT /api/settings/delivery refuses a bad mode or layer flag and writes nothing", async () => {
+  rmSync(INJECTION_FILE, { force: true });
+  const { server, port } = await listen();
+  try {
+    const badMode = await request(port, "/api/settings/delivery", "PUT", Buffer.from(JSON.stringify({ mode: "loud" })));
+    assert.equal(badMode.status, 400);
+    const badLayer = await request(
+      port,
+      "/api/settings/delivery",
+      "PUT",
+      Buffer.from(JSON.stringify({ mode: "enforce", layers: { l2: "yes" } })),
+    );
+    assert.equal(badLayer.status, 400);
+    const noMode = await request(port, "/api/settings/delivery", "PUT", Buffer.from("{}"));
+    assert.equal(noMode.status, 400);
+    const notJson = await request(port, "/api/settings/delivery", "PUT", Buffer.from("not json"));
+    assert.equal(notJson.status, 400);
+    assert.equal(existsSync(INJECTION_FILE), false);
+    const wrongMethod = await request(port, "/api/settings/delivery", "POST", Buffer.from("{}"));
+    assert.equal(wrongMethod.status, 405);
+  } finally {
+    server.close();
+    rmSync(INJECTION_FILE, { force: true });
+  }
+});
+
+test("PUT /api/settings/delivery preserves unknown top-level keys across the write", async () => {
+  rmSync(INJECTION_FILE, { force: true });
+  writeFileSync(INJECTION_FILE, JSON.stringify({ mode: "off", note: "hand written", rollout: { percent: 10 } }) + "\n");
+  const { server, port } = await listen();
+  try {
+    const res = await request(port, "/api/settings/delivery", "PUT", Buffer.from(JSON.stringify({ mode: "enforce" })));
+    assert.equal(res.status, 200);
+    const onDisk = JSON.parse(readFileSync(INJECTION_FILE, "utf8")) as Record<string, unknown>;
+    assert.equal(onDisk.mode, "enforce");
+    assert.equal(onDisk.note, "hand written");
+    assert.deepEqual(onDisk.rollout, { percent: 10 });
+    // Enabling also writes the layer blocks so the switch is not inert.
+    assert.deepEqual(onDisk.layers, { l1: { enabled: true }, l2: { enabled: true }, l3: { enabled: true } });
+  } finally {
+    server.close();
+    rmSync(INJECTION_FILE, { force: true });
+  }
+});
+
+test("an OPENBOT_INJECTION_MODE override is reported as env but the write still lands", async () => {
+  rmSync(INJECTION_FILE, { force: true });
+  const previous = process.env.OPENBOT_INJECTION_MODE;
+  process.env.OPENBOT_INJECTION_MODE = "enforce";
+  const { server, port } = await listen();
+  try {
+    const res = await request(port, "/api/settings/delivery", "PUT", Buffer.from(JSON.stringify({ mode: "dry-run" })));
+    assert.equal(res.status, 200);
+    const body = res.json as Record<string, unknown>;
+    assert.equal(body.ok, true);
+    // The override pins the reported mode...
+    assert.equal(body.mode, "enforce");
+    assert.equal(body.source, "env");
+    assert.equal(body.envOverride, true);
+    // ...but the file still records what the user asked for, so dropping the
+    // override makes the written mode effective again.
+    assert.equal((JSON.parse(readFileSync(INJECTION_FILE, "utf8")) as Record<string, unknown>).mode, "dry-run");
+  } finally {
+    server.close();
+    if (previous === undefined) delete process.env.OPENBOT_INJECTION_MODE;
+    else process.env.OPENBOT_INJECTION_MODE = previous;
+    rmSync(INJECTION_FILE, { force: true });
+  }
+});
+

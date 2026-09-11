@@ -31,6 +31,12 @@ type ListboxProps = {
   triggerStyle?: React.CSSProperties;
   /** Text shown when the search filter matches nothing. Defaults to "No matching models". */
   emptyText?: string;
+  /**
+   * Key status of the selected item. When set, a status dot is drawn inside the
+   * trigger and the matching words are appended to the trigger's accessible name
+   * (the dot itself is decorative).
+   */
+  keyState?: "saved" | "missing";
 };
 
 type FlatOption = { option: ListboxOption; groupLabel: string };
@@ -44,6 +50,7 @@ export function Listbox({
   placeholder,
   triggerStyle,
   emptyText = "No matching models",
+  keyState,
 }: ListboxProps) {
   const uid = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -228,23 +235,32 @@ export function Listbox({
   };
 
   const triggerLabel = selectedOption ? selectedOption.label : placeholder ?? "Select…";
+  // The status is a colour-only dot, so the words travel in the trigger's
+  // accessible name instead of a visible label.
+  const statusSuffix = keyState === "saved" ? ", key saved" : keyState === "missing" ? ", no key" : "";
 
   return (
     <div className="listbox" ref={rootRef}>
       <button
         type="button"
         ref={triggerRef}
-        className="listbox__trigger"
+        className={`listbox__trigger${keyState ? " listbox__trigger--with-status" : ""}`}
         style={triggerStyle}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={`${uid}-panel`}
-        aria-label={label}
+        aria-label={label ? `${label}${statusSuffix}` : undefined}
         disabled={disabled}
         onClick={() => (open ? close() : openPanel())}
         onKeyDown={handleTriggerKey}
       >
         <span className="listbox__value">{triggerLabel}</span>
+        {keyState ? (
+          <span
+            className={`listbox__status listbox__status--${keyState === "saved" ? "ok" : "warn"}`}
+            aria-hidden="true"
+          />
+        ) : null}
         <ChevronDown className={`listbox__chevron${open ? " is-open" : ""}`} aria-hidden="true" />
       </button>
 

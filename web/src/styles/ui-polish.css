@@ -16,3 +16,25 @@
 /* --------------------------------------------------------------------------
    Section: models (owner: the Models page change)
    -------------------------------------------------------------------------- */
+
+/* PROPOSED-07 (Models): one control size and one border weight for the provider
+   card head. The Listbox trigger is 32px with a --hairline-strong border while
+   the five actions beside it were 28px ghost-sm with a --hairline border — the
+   "some bigger, some smaller" report. The actions are raised to the picker's
+   32px/picker border; Remove stays ghost-danger so it is distinct by colour
+   only, never by size. Copy is unified in Models.tsx, not here. */
+.models-head-actions {
+  display: flex; align-items: center; gap: var(--sp-2);
+  flex-wrap: wrap; min-width: 0;
+}
+.models-head-actions .btn { border-color: var(--hairline-strong); }
+
+/* PROPOSED-08 (Models): the key state becomes an 8px dot inside the provider
+   selector instead of a standalone "Key saved" badge in the action cluster. The
+   words survive in the trigger's accessible name (Listbox keyState prop) and, in
+   the warning case, in the visible notice. Same --success/--surface pairing as
+   .health-dot--ok, so no new colour enters the system. */
+.listbox__status { width: 8px; height: 8px; border-radius: 50%; flex: none; margin-left: auto; }
+.listbox__status--ok { background: var(--success); }
+.listbox__status--warn { background: var(--warning); }
+.listbox__trigger--with-status { padding-right: 30px; }

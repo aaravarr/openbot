@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Check,
   ChevronRight,
   Database,
   Download,
@@ -376,6 +375,7 @@ export function Models({ providerId }: { providerId?: string }) {
               <div className="card__head-main models-provider-picker">
                 <Listbox
                   label="Provider"
+                  keyState={selectedHasKey ? "saved" : "missing"}
                   value={selectedId}
                   onChange={(value) => {
                     setSelectedId(value);
@@ -387,7 +387,12 @@ export function Models({ providerId }: { providerId?: string }) {
                       value: provider.id,
                       label: provider.name,
                       sublabel: provider.origin,
-                      badges: hasKey(state, provider.id) ? <Badge tone="success">Key</Badge> : <Badge tone="warning">No key</Badge>,
+                      badges: (
+                        <span
+                          className={`listbox__status listbox__status--${hasKey(state, provider.id) ? "ok" : "warn"}`}
+                          aria-hidden="true"
+                        />
+                      ),
                     })),
                   }]}
                   placeholder="Select a provider"
@@ -395,37 +400,34 @@ export function Models({ providerId }: { providerId?: string }) {
                 />
                 <div className="origin-line" title={selected.origin}>{selected.origin}</div>
               </div>
-              <div className="row gap-2 wrap">
-                {selectedHasKey ? (
-                  <Badge tone="success" icon={Check}>
-                    Key saved
-                  </Badge>
-                ) : (
-                  <Badge tone="warning" icon={TriangleAlert}>
-                    No API key
-                  </Badge>
-                )}
-                <Button variant="ghost-sm" icon={Download} loading={fetching} loadingLabel="Fetching…" onClick={() => void doFetch(selected)}>
+              <div className="models-head-actions">
+                <Button variant="ghost" icon={Download} loading={fetching} loadingLabel="Fetching…" onClick={() => void doFetch(selected)}>
                   Fetch models
                 </Button>
                 {models.length ? (
                   <Button
-                    variant="ghost-sm"
+                    variant="ghost"
                     icon={RefreshCw}
                     loading={refreshingAll}
                     loadingLabel="Refreshing…"
+                    data-tip="Refresh every model from the public catalog"
                     onClick={() => void refreshAllFromCatalog()}
                   >
-                    Refresh all from catalog
+                    Refresh all
                   </Button>
                 ) : null}
-                <Button variant="ghost-sm" icon={Pencil} onClick={() => setEditProvider(true)}>
+                <Button variant="ghost" icon={Pencil} onClick={() => setEditProvider(true)}>
                   Edit
                 </Button>
-                <Button variant="ghost-sm" icon={KeyRound} onClick={() => setReplaceKey(true)}>
-                  {selectedHasKey ? "Replace key" : "Add key"}
+                <Button
+                  variant="ghost"
+                  icon={KeyRound}
+                  data-tip={selectedHasKey ? "Replace the stored API key" : undefined}
+                  onClick={() => setReplaceKey(true)}
+                >
+                  {selectedHasKey ? "Replace" : "Add key"}
                 </Button>
-                <Button variant="ghost-danger-sm" icon={Trash2} onClick={() => setConfirmRemove(true)}>
+                <Button variant="ghost-danger" icon={Trash2} onClick={() => setConfirmRemove(true)}>
                   Remove
                 </Button>
               </div>

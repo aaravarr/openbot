@@ -14,6 +14,7 @@ export type ButtonVariant =
   | "secondary-sm"
   | "ink"
   | "danger"
+  | "outline-danger"
   | "ghost"
   | "ghost-sm"
   | "ghost-danger"

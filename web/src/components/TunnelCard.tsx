@@ -58,10 +58,10 @@ export function TunnelCard() {
           </span>
           {live ? <Badge tone="success">Live</Badge> : tunnel.kind === "error" ? <Badge tone="danger">Error</Badge> : <Badge>Off</Badge>}
         </div>
-        <div className="card__body stack qr-body" style={{ gap: 12 }}>
+        <div className="card__body stack" style={{ gap: 12 }}>
           {live ? (
             <>
-              <div className="tunnel-url tunnel-url--centred">
+              <div className="tunnel-url">
                 <Globe style={{ color: "var(--muted)", width: 15, height: 15, flex: "none" }} aria-hidden="true" />
                 <span className="url">{href}</span>
               </div>
@@ -81,7 +81,7 @@ export function TunnelCard() {
                 >
                   Refresh URL
                 </Button>
-                <Button variant="ghost-danger" onClick={() => setConfirm("stop")}>
+                <Button variant="outline-danger" onClick={() => setConfirm("stop")}>
                   Stop
                 </Button>
               </div>

@@ -41,25 +41,20 @@ type LogList = {
 type LogInjectionFacet = { value: string; count: number };
 
 type LogInjectionStats = {
-  approximate: boolean;
   records: number;
   candidates: number;
   wouldApply: number;
   l2Attempted: number;
   l2Triggered: number;
   applied: number;
-  remediationAttempts: number;
   remediationFailures: number;
   fallbackOriginalTerminal: number;
-  l2FallbackOriginalTerminal: number;
   unresolved: number;
   terminalReleased: number;
   skipped: number;
   classificationSkipped: number;
   extraCalls: number;
-  l2AdditionalRuns: number;
   extraLatencyMs: number;
-  l2AddedLatencyMs: number;
   averageExtraLatencyMs: number | null;
   families: LogInjectionFacet[];
   skipReasons: LogInjectionFacet[];

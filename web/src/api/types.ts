@@ -229,26 +229,20 @@ export type LogInjectionFacet = { value: string; count: number };
 
 /** Gray-rollout counters computed from the bounded injection metadata rows. */
 export type LogInjectionStats = {
-  /** True when the stats scan only covered the newest bounded sample. */
-  approximate: boolean;
   records: number;
   candidates: number;
   wouldApply: number;
   l2Attempted: number;
   l2Triggered: number;
   applied: number;
-  remediationAttempts: number;
   remediationFailures: number;
   fallbackOriginalTerminal: number;
-  l2FallbackOriginalTerminal: number;
   unresolved: number;
   terminalReleased: number;
   skipped: number;
   classificationSkipped: number;
   extraCalls: number;
-  l2AdditionalRuns: number;
   extraLatencyMs: number;
-  l2AddedLatencyMs: number;
   averageExtraLatencyMs: number | null;
   families: LogInjectionFacet[];
   skipReasons: LogInjectionFacet[];

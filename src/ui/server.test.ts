@@ -302,7 +302,6 @@ test("GET /api/logs/stats exposes optional injection aggregate", async () => {
     assert.equal(res.status, 200);
     const body = res.json as {
       injection?: {
-        approximate: boolean;
         records: number;
         candidates: number;
         applied: number;
@@ -312,7 +311,6 @@ test("GET /api/logs/stats exposes optional injection aggregate", async () => {
       };
     };
     assert.ok(body.injection);
-    assert.equal(body.injection.approximate, false);
     assert.equal(body.injection.records, 1);
     assert.equal(body.injection.candidates, 1);
     assert.equal(body.injection.applied, 1);

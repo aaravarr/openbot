@@ -153,18 +153,18 @@ function InjectionFacetList({ label, values }: { label: string; values: Array<{ 
   );
 }
 
-function InjectionStatsCard({ stats }: { stats: LogInjectionStats }): ReactNode {
+function InjectionStatsCard({ stats, approximate }: { stats: LogInjectionStats; approximate: boolean }): ReactNode {
   return (
     <section className="card logs-injection" aria-label="Injection hardening telemetry" style={{ marginTop: 12 }}>
       <div className="card__head">
         <span className="card__label"><ShieldCheck aria-hidden="true" /> Injection hardening</span>
-        <span className="sub">{stats.records} metadata record{stats.records === 1 ? "" : "s"}{stats.approximate ? " · sampled" : ""}</span>
+        <span className="sub">{stats.records} metadata record{stats.records === 1 ? "" : "s"}{approximate ? " · sampled" : ""}</span>
       </div>
       <div className="card__body stack" style={{ gap: 14 }}>
         <div className="token-trio" style={{ flexWrap: "wrap" }}>
           <div className="token-stat"><div className="k">Candidates</div><div className="v">{stats.candidates}</div></div>
           <div className="token-stat"><div className="k">Remediated</div><div className="v">{stats.applied}</div></div>
-          <div className="token-stat"><div className="k">Fallbacks</div><div className="v">{stats.l2FallbackOriginalTerminal}</div></div>
+          <div className="token-stat"><div className="k">Fallbacks</div><div className="v">{stats.fallbackOriginalTerminal}</div></div>
           <div className="token-stat"><div className="k">Extra calls</div><div className="v">{stats.extraCalls}</div></div>
           <div className="token-stat"><div className="k">Extra latency</div><div className="v">{formatLatency(stats.extraLatencyMs)}</div></div>
           <div className="token-stat"><div className="k">Skipped</div><div className="v">{stats.skipped}</div></div>
@@ -686,7 +686,7 @@ export function Logs({ logId, page: routePage }: { logId?: string; page?: number
           ) : null}
         </section>
       ) : null}
-      {stats?.injection ? <InjectionStatsCard stats={stats.injection} /> : null}
+      {stats?.injection ? <InjectionStatsCard stats={stats.injection} approximate={stats.approximate} /> : null}
 
       <div className="logs-tabs" role="tablist" aria-label="Log views">
         <button

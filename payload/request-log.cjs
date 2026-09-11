@@ -1150,87 +1150,14 @@ function cleanText(value, max) {
 }
 
 var INJECTION_MODE_VALUES = ["off", "dry-run", "enforce"];
-var INJECTION_FAMILY_VALUES = [
-  "l1.reply-first",
-  "l1.start-ack",
-  "l1.silence",
-  "l1.early-result",
-  "l2.reply-nudge",
-  "l3.reply-nudge",
-  "l3.closing-send",
-];
-var INJECTION_IDENTITY_VALUES = ["pass", "fail", "unknown"];
 var INJECTION_PROTOCOL_VALUES = ["chat-completions", "responses", "anthropic", "unknown"];
-var INJECTION_OUTCOME_VALUES = [
-  "not-run",
-  "second-success",
-  "valid-no-tool",
-  "fallback-original-terminal",
-  "unresolved",
-  "skipped",
-  "failed",
-  "applied",
-  "success",
-  "retry-success",
-  "unknown",
-];
-var INJECTION_NUDGE_VALUES = ["no-touch", "touch-then-tool", "none", "unknown"];
-var INJECTION_TOUCH_VALUES = ["none", "observed", "initiated-fallback", "failed", "unknown"];
-var INJECTION_HOST_EVENT_VALUES = ["available", "unavailable", "unknown"];
-var INJECTION_DEBT_STATE_VALUES = ["owed", "not-owed", "unknown"];
-var INJECTION_DEBT_SHAPE_VALUES = ["no-touch", "touch-then-tool", "touch-no-tool", "unknown"];
-var INJECTION_TERMINAL_DECISION_VALUES = [
-  "normal-release",
-  "l2-triggered",
-  "l2-fallback-original-terminal",
-  "skipped",
-  "unknown",
-];
-var INJECTION_TERMINAL_HOLD_VALUES = ["not-held", "held", "released", "unknown"];
-var INJECTION_SKIP_REASON_VALUES = [
-  "no_bot_id",
-  "missing_bot_id",
-  "missing_conversation_id",
-  "missing_epoch",
-  "unknown_identity",
-  "identity_unknown",
-  "no_identity",
-  "missing_host_context",
-  "unknown_chat_type",
-  "non_person",
-  "group_chat",
-  "internal_channel",
-  "hidden_turn",
-  "subagent_turn",
-  "routine_turn",
-  "automation",
-  "silence_allowed",
-  "terminal_tool_calls",
-  "response_has_tool_calls",
-  "debt_not_owed",
-  "l2_attempt_exhausted",
-  "budget_prompt",
-  "budget_completion",
-  "budget_cost",
-  "budget_insufficient",
-  "client_closed",
-  "lease_busy",
-  "terminal_decision_timeout",
-  "parse_error",
-  "parser_incomplete",
-  "conversion_error",
-  "classification_deadline",
-];
-var INJECTION_CLASSIFICATION_SKIP_VALUES = [
-  "parse_error",
-  "parser_incomplete",
-  "conversion_error",
-  "classification_deadline",
-  "incomplete",
-  "unsupported_protocol",
-  "deadline",
-  "unknown",
-];
+
+// The injection strategy owns its decision vocabulary (family, outcome, reason,
+// shape, hold state, ...). Those fields are validated here as short, bounded
+// tokens instead of a second copy of the vocabulary: a producer-side rename must
+// not silently blank the control page, while a bounded token still keeps prompts,
+// responses and secrets out of the log.
+var INJECTION_TOKEN_CHARS = 48;
 
 function injectionOwn(record, key) {
   return isRecord(record) && Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
@@ -1371,23 +1298,23 @@ function sanitizeInjection(value) {
   if (Array.isArray(families)) {
     var familyOut = [];
     for (var f = 0; f < families.length && familyOut.length < 10; f++) {
-      var family = injectionEnum(families[f], INJECTION_FAMILY_VALUES);
+      var family = injectionToken(families[f], INJECTION_TOKEN_CHARS);
       if (family !== undefined && familyOut.indexOf(family) < 0) familyOut.push(family);
     }
     if (familyOut.length > 0) out.injectionFamilies = familyOut;
   }
-  putEnum("identityGateResult", INJECTION_IDENTITY_VALUES, ["gateResult", "identityResult"]);
-  putEnum("skipReason", INJECTION_SKIP_REASON_VALUES, ["reason"]);
-  putEnum("classificationSkippedReason", INJECTION_CLASSIFICATION_SKIP_VALUES, ["classificationReason"]);
+  putToken("identityGateResult", INJECTION_TOKEN_CHARS, ["gateResult", "identityResult"]);
+  putToken("skipReason", INJECTION_TOKEN_CHARS, ["reason"]);
+  putToken("classificationSkippedReason", INJECTION_TOKEN_CHARS, ["classificationReason"]);
   putToken("injectionEpoch", 160, ["epoch", "epochId"]);
   putToken("injectionFingerprint", 160, ["fingerprint"]);
   putBool("injectionWouldApply", ["wouldApply"]);
   putEnum("l2SupportedProtocol", INJECTION_PROTOCOL_VALUES, ["protocol", "supportedProtocol"]);
   putBool("l2Eligible", ["eligible"]);
   putBool("l2Attempted", ["attempted"]);
-  putEnum("l2Outcome", INJECTION_OUTCOME_VALUES, ["outcome"]);
+  putToken("l2Outcome", INJECTION_TOKEN_CHARS, ["outcome"]);
   putInt("l2AdditionalRuns", 0, 8, ["additionalRuns", "extraCalls"]);
-  putEnum("l2NudgeShape", INJECTION_NUDGE_VALUES, ["nudgeShape", "shape"]);
+  putToken("l2NudgeShape", INJECTION_TOKEN_CHARS, ["nudgeShape", "shape"]);
   putNumber("l2AddedLatencyMs", 0, 86400000, ["addedLatencyMs", "extraLatencyMs"]);
   putInt("l2PromptTokensEstimated", 0, 1000000000, ["promptTokensEstimated"]);
   putInt("l2CompletionTokenCap", 0, 1000000000, ["completionTokenCap"]);
@@ -1402,14 +1329,14 @@ function sanitizeInjection(value) {
   putInt("latestRealUserMessageSequence", 0, 1000000000, ["latestUserMessageSequence", "userMessageSequence"]);
   putInt("lastTouchSequence", 0, 1000000000, ["touchSequence"]);
   putInt("toolCallsAfterLastTouch", 0, 1000000000, ["toolsAfterLastTouch"]);
-  putEnum("touchClassification", INJECTION_TOUCH_VALUES, ["touchState"]);
-  putEnum("hostDeliveryEventMode", INJECTION_HOST_EVENT_VALUES, ["deliveryEventMode", "eventMode"]);
-  putEnum("debtState", INJECTION_DEBT_STATE_VALUES, ["state"]);
-  putEnum("debtShape", INJECTION_DEBT_SHAPE_VALUES, ["shape"]);
+  putToken("touchClassification", INJECTION_TOKEN_CHARS, ["touchState"]);
+  putToken("hostDeliveryEventMode", INJECTION_TOKEN_CHARS, ["deliveryEventMode", "eventMode"]);
+  putToken("debtState", INJECTION_TOKEN_CHARS, ["state"]);
+  putToken("debtShape", INJECTION_TOKEN_CHARS, ["shape"]);
   putToken("terminalFinishReason", 80, ["finishReason"]);
-  putEnum("terminalHoldState", INJECTION_TERMINAL_HOLD_VALUES, ["holdState"]);
+  putToken("terminalHoldState", INJECTION_TOKEN_CHARS, ["holdState"]);
   putInt("heldTerminalBytes", 0, 1000000, ["terminalBytes"]);
-  putEnum("terminalDecision", INJECTION_TERMINAL_DECISION_VALUES, ["decision"]);
+  putToken("terminalDecision", INJECTION_TOKEN_CHARS, ["decision"]);
   putToken("terminalReleaseReason", 120, ["releaseReason"]);
   putTimestamp("terminalReleaseAt", ["releaseAt"]);
   putToken("firstResponseHash", 160, ["responseHash"]);
@@ -1919,18 +1846,14 @@ function aggregateInjection(rows) {
     l2Attempted: l2Attempted,
     l2Triggered: l2Triggered,
     applied: applied,
-    remediationAttempts: l2Attempted,
     remediationFailures: remediationFailures,
     fallbackOriginalTerminal: fallbackOriginalTerminal,
-    l2FallbackOriginalTerminal: fallbackOriginalTerminal,
     unresolved: unresolved,
     terminalReleased: terminalReleased,
     skipped: skipped,
     classificationSkipped: classificationSkipped,
     extraCalls: extraCalls,
-    l2AdditionalRuns: extraCalls,
     extraLatencyMs: extraLatencyMs,
-    l2AddedLatencyMs: extraLatencyMs,
     averageExtraLatencyMs: extraLatencyRows > 0 ? Math.round(extraLatencyMs / extraLatencyRows) : null,
     families: injectionFacetValues(familyCounts),
     skipReasons: injectionFacetValues(skipCounts),
@@ -1999,7 +1922,6 @@ function statsNow() {
   // telemetry existed: only expose this optional object when a row contains
   // valid injection metadata.
   var injection = aggregateInjection(scanned);
-  if (injection) injection.approximate = capped;
   var value = {
     records: rows.length,
     scanned: scanned.length,

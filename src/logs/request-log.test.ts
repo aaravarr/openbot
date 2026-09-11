@@ -594,6 +594,7 @@ test("sanitizeInjection keeps bounded decision metadata and drops body-like fiel
   const sanitized = log.sanitizeInjection({
     injectionMode: "enforce",
     injectionFamilies: ["l1.reply-first", "l2.reply-nudge", "l1.reply-first", "not-a-family"],
+    skipReason: "the model produced a plain text answer and nobody delivered it",
     identity: { gateResult: "pass", prompt: "do not persist this" },
     l2: {
       eligible: true,
@@ -614,7 +615,11 @@ test("sanitizeInjection keeps bounded decision metadata and drops body-like fiel
     unknownField: "drop",
   });
   assert.ok(sanitized);
-  assert.deepEqual(sanitized.injectionFamilies, ["l1.reply-first", "l2.reply-nudge"]);
+  // The strategy owns its decision vocabulary, so unknown-but-bounded tokens are
+  // preserved (a producer-side rename must not blank the control page) while
+  // free text in the same field is still dropped.
+  assert.deepEqual(sanitized.injectionFamilies, ["l1.reply-first", "l2.reply-nudge", "not-a-family"]);
+  assert.equal(sanitized.skipReason, undefined);
   assert.equal(sanitized.identityGateResult, "pass");
   assert.equal(sanitized.injectionWouldApply, undefined);
   assert.equal(sanitized.l2Eligible, true);
@@ -749,10 +754,8 @@ test("aggregateInjection reports gray-rollout candidates, remediations, fallback
   assert.equal(summary.l2Attempted, 1);
   assert.equal(summary.l2Triggered, 1);
   assert.equal(summary.applied, 1);
-  assert.equal(summary.remediationAttempts, 1);
   assert.equal(summary.remediationFailures, 1);
   assert.equal(summary.fallbackOriginalTerminal, 1);
-  assert.equal(summary.l2FallbackOriginalTerminal, 1);
   assert.equal(summary.unresolved, 1);
   assert.equal(summary.terminalReleased, 2);
   assert.equal(summary.skipped, 1);

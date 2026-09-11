@@ -18,6 +18,7 @@ var requestLog = require("./request-log.cjs");
 var turnLease = require("./turn-lease.cjs");
 var botModels = require("./bot-models.cjs");
 var protocolConverters = require("./protocol-converters.cjs");
+var injectionHardening = require("./injection-hardening.cjs");
 
 var TIMEOUT_MS = Number(process.env.OPENBOT_HOP_TIMEOUT || "1800000");
 var HIGH_AGENT_MAX_TOKENS = 65536;
@@ -1221,6 +1222,396 @@ function finishReasonFromRaw(raw) {
   return found;
 }
 
+
+function injectionHeader(headers, name) {
+  var value = headers && (headers[name] !== undefined ? headers[name] : headers[name.toLowerCase()]);
+  if (Array.isArray(value)) value = value[0];
+  return typeof value === "string" ? value.trim().slice(0, 256) : "";
+}
+
+function injectionObservedContext(req, body, conversationId) {
+  var headers = (req && req.headers) || {};
+  var observed = {
+    botId: isRecord(body) && typeof body.botId === "string" ? body.botId : injectionHeader(headers, "x-openbot-bot-id"),
+    conversationId: conversationId || "",
+    epochId: isRecord(body) && typeof body.epochId === "string" ? body.epochId : injectionHeader(headers, "x-openbot-epoch-id"),
+    chatType: isRecord(body) && typeof body.chatType === "string" ? body.chatType : injectionHeader(headers, "x-openbot-chat-type"),
+    directChat: isRecord(body) && (body.directChat === true || body.direct_chat === true),
+    internalLane: isRecord(body) && (body.internalLane === true || body.internal_lane === true),
+  };
+  return injectionHardening.contextFromRequest(req, body, observed);
+}
+
+function isInjectionTerminalEvent(event) {
+  if (!event || !Array.isArray(event.choices)) return false;
+  for (var i = 0; i < event.choices.length; i++) {
+    var reason = event.choices[i] && (event.choices[i].finish_reason !== undefined ? event.choices[i].finish_reason : event.choices[i].finishReason);
+    if (reason !== null && reason !== undefined && reason !== "") return true;
+  }
+  return false;
+}
+
+function parseInjectionSseData(text) {
+  var values = [];
+  var done = false;
+  var lines = String(text || "").split(/\r?\n/);
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (line.indexOf("data:") !== 0) continue;
+    var value = line.slice(5).trim();
+    if (!value) continue;
+    if (value === "[DONE]") {
+      done = true;
+      continue;
+    }
+    try {
+      var parsed = JSON.parse(value);
+      if (parsed && typeof parsed === "object") values.push(parsed);
+    } catch (err) {
+      // Split or malformed frames are classified at stream completion.
+    }
+  }
+  return { values: values, done: done };
+}
+
+
+function mappedInjectionFrame(apiType, frame) {
+  if (apiType === "responses") return protocolConverters.responsesSseToChat(frame);
+  if (apiType === "anthropic") return protocolConverters.anthropicSseToChat(frame);
+  return frame;
+}
+
+function createInjectionSseAdapter(apiType, onEvent, onDone) {
+  var pending = "";
+  var doneSeen = false;
+  var terminalSeen = false;
+  var failed = null;
+  function consume(frame) {
+    if (!frame || !frame.trim()) return;
+    var mapped;
+    try {
+      mapped = mappedInjectionFrame(apiType, frame);
+    } catch (err) {
+      failed = err;
+      return;
+    }
+    var parsed = parseInjectionSseData(mapped);
+    for (var i = 0; i < parsed.values.length; i++) {
+      var event = parsed.values[i];
+      var terminal = false;
+      try { terminal = onEvent(event); } catch (err) { failed = err; return; }
+      if (terminal) terminalSeen = true;
+    }
+    if (parsed.done) {
+      doneSeen = true;
+      try { onDone(terminalSeen); } catch (err) { failed = err; }
+    }
+  }
+  function feed(chunk) {
+    if (failed) return;
+    pending += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk || "");
+    if (pending.length > 131072) {
+      failed = new Error("openbot-hop: injection parser frame too large");
+      return;
+    }
+    while (true) {
+      var m = pending.match(/\r?\n\r?\n/);
+      if (!m || m.index === undefined) break;
+      var end = m.index + m[0].length;
+      var frame = pending.slice(0, end);
+      pending = pending.slice(end);
+      consume(frame);
+      if (failed) return;
+    }
+  }
+  function end() {
+    if (!failed && pending.trim()) {
+      consume(pending);
+      pending = "";
+    }
+    return { done: doneSeen, terminal: terminalSeen, error: failed };
+  }
+  return { feed: feed, end: end };
+}
+
+function addInjectionTerminal(observation, event, bytes) {
+  if (!observation || !isInjectionTerminalEvent(event)) return;
+  var choice = event.choices && event.choices[0];
+  var reason = choice && (choice.finish_reason !== undefined ? choice.finish_reason : choice.finishReason);
+  observation.terminalEvents.push({ sequence: observation.terminalEvents.length + 1, finishReason: String(reason || ""), bytes: Buffer.byteLength(bytes, "utf8") });
+}
+
+function writeInjectionEvent(res, bytes) {
+  if (!res || res.writableEnded) return false;
+  try { res.write(bytes); return true; } catch (err) { return false; }
+}
+
+
+function injectionStreamAttempt(urlStr, body, key, clientRes, inbound, apiType, runtime, isSecond) {
+  return new Promise(function (resolve, reject) {
+    var req;
+    try { req = openUpstream(urlStr, body, key, inbound, apiType); } catch (err) { reject(err); return; }
+    runtime.activeReq = req;
+    var settled = false;
+    function fail(err) {
+      if (settled) return;
+      settled = true;
+      if (runtime.activeReq === req) runtime.activeReq = null;
+      reject(err);
+    }
+    function ok(value) {
+      if (settled) return;
+      settled = true;
+      if (runtime.activeReq === req) runtime.activeReq = null;
+      resolve(value);
+    }
+    req.setTimeout(isSecond ? runtime.retryTimeoutMs : TIMEOUT_MS, function () {
+      req.destroy();
+      fail(new Error("openbot-hop: upstream timeout"));
+    });
+    req.on("error", fail);
+    req.on("response", function (upstreamRes) {
+      var status = upstreamRes.statusCode || 502;
+      if (status < 200 || status >= 300) {
+        collectResponse(upstreamRes).then(function (out) {
+          ok({ attemptFailed: isRetryableUpstreamStatus(status) || status === 429, status: status, headers: upstreamRes.headers, raw: out.raw, forwarded: false });
+        }, fail);
+        return;
+      }
+      if (!looksLikeEventStream(upstreamRes.headers, true)) {
+        collectResponse(upstreamRes).then(function (out) {
+          ok({ forwarded: false, status: status, headers: out.headers, raw: out.raw });
+        }, fail);
+        return;
+      }
+      if (!isSecond) {
+        clientRes.writeHead(status, { "Content-Type": headerContentType(upstreamRes.headers) || "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" });
+        if (typeof clientRes.flushHeaders === "function") clientRes.flushHeaders();
+      }
+      var observation = injectionHardening.createObservation();
+      var shouldHold = isSecond || Boolean(runtime.config && runtime.config.mode === "enforce" && runtime.config.l2 && runtime.config.l2.enabled && runtime.l2Eligible);
+      var hold = injectionHardening.createTerminalHold(function (bytes) {
+        // Always attempt replay; the hold module clears state if the socket is closed.
+        writeInjectionEvent(clientRes, bytes);
+      }, observation);
+      runtime.pendingHold = hold;
+      var adapter = createInjectionSseAdapter(apiType, function (event) {
+        var bytes = Buffer.from("data: " + JSON.stringify(event) + "\n\n", "utf8");
+        injectionHardening.observeChatEvent(observation, event, bytes);
+        var terminal = isInjectionTerminalEvent(event);
+        if (terminal) {
+          addInjectionTerminal(observation, event, bytes);
+          if (shouldHold) hold.hold(bytes); else writeInjectionEvent(clientRes, bytes);
+        } else {
+          if (!observation.firstContentAt && event.choices && event.choices[0] && event.choices[0].delta && (event.choices[0].delta.content || event.choices[0].delta.reasoning_content)) observation.firstContentAt = Date.now();
+          writeInjectionEvent(clientRes, bytes);
+        }
+        return terminal;
+      }, function (hasTerminal) {
+        var doneBytes = Buffer.from("data: [DONE]\n\n", "utf8");
+        if (hasTerminal && shouldHold) hold.hold(doneBytes); else writeInjectionEvent(clientRes, doneBytes);
+      });
+      upstreamRes.on("data", function (chunk) { adapter.feed(chunk); });
+      upstreamRes.on("end", function () {
+        var statusResult = adapter.end();
+        if (statusResult.error) {
+          try { req.destroy(); } catch (ignored) {}
+          fail(statusResult.error);
+          return;
+        }
+        injectionHardening.finalizeObservation(observation, statusResult.terminal && statusResult.done);
+        ok({ forwarded: true, status: status, headers: upstreamRes.headers, observation: observation, heldTerminal: hold, firstContentAt: observation.firstContentAt, finishReason: observation.finishReasons.length ? observation.finishReasons[observation.finishReasons.length - 1] : undefined });
+      });
+      upstreamRes.on("error", fail);
+    });
+    req.end();
+  });
+}
+
+
+function buildInjectionOutbound(baseBody, messages, route, apiType, maxCompletionTokens) {
+  var next = Object.assign({}, baseBody);
+  next.messages = Array.isArray(messages) ? messages.slice() : [];
+  if (maxCompletionTokens !== undefined) {
+    if (apiType === "responses") next.max_output_tokens = maxCompletionTokens;
+    else next.max_tokens = maxCompletionTokens;
+  }
+  applyMaxTokens(next, route.model, apiType);
+  applyMaps(next, { modelId: route.model.slug, baseUrl: route.provider.origin, maxMode: false, parameters: hopParameters(route.model) });
+  var outbound = apiType === "responses" ? protocolConverters.chatToResponses(next) : apiType === "anthropic" ? protocolConverters.chatToAnthropic(next) : next;
+  outbound.__openbot_api_type = apiType;
+  noteWireBytes(outbound);
+  return outbound;
+}
+
+
+function mergeInjectionChatResponses(first, second) {
+  var left = isRecord(first) ? first : {};
+  var right = isRecord(second) ? second : {};
+  var leftChoice = Array.isArray(left.choices) && left.choices[0] ? left.choices[0] : {};
+  var rightChoice = Array.isArray(right.choices) && right.choices[0] ? right.choices[0] : {};
+  var leftMessage = isRecord(leftChoice.message) ? leftChoice.message : {};
+  var rightMessage = isRecord(rightChoice.message) ? rightChoice.message : {};
+  var mergedMessage = Object.assign({}, rightMessage);
+  var leftContent = leftMessage.content == null ? "" : String(leftMessage.content);
+  var rightContent = rightMessage.content == null ? "" : String(rightMessage.content);
+  mergedMessage.content = leftContent + rightContent || null;
+  if (leftMessage.reasoning_content || rightMessage.reasoning_content) mergedMessage.reasoning_content = String(leftMessage.reasoning_content || "") + String(rightMessage.reasoning_content || "");
+  if (Array.isArray(leftMessage.tool_calls) || Array.isArray(rightMessage.tool_calls)) mergedMessage.tool_calls = (Array.isArray(leftMessage.tool_calls) ? leftMessage.tool_calls : []).concat(Array.isArray(rightMessage.tool_calls) ? rightMessage.tool_calls : []);
+  var merged = Object.assign({}, left, right);
+  merged.choices = [Object.assign({}, rightChoice, { index: 0, message: mergedMessage, finish_reason: rightChoice.finish_reason !== undefined ? rightChoice.finish_reason : leftChoice.finish_reason })];
+  return merged;
+}
+
+
+async function pipeInjectedStreaming(urlStr, outboundBody, key, clientRes, inbound, apiType, runtime, route, canonicalBody) {
+  var attempts = [];
+  var attemptIndex = 0;
+  var sleepSpentMs = 0;
+  var retriesSpent = 0;
+  runtime.retryTimeoutMs = runtime.config && runtime.config.l2 ? runtime.config.l2.timeoutMs : 15000;
+  clientRes.on("close", function () {
+    if (clientRes.writableEnded) return;
+    runtime.clientClosed = true;
+    try { if (runtime.abortController) runtime.abortController.abort(); } catch (ignored) {}
+    try { if (runtime.activeReq) runtime.activeReq.destroy(); } catch (ignored) {}
+    try { if (runtime.pendingHold && runtime.pendingHold.isHeld()) runtime.pendingHold.release("client_closed"); } catch (ignored) {}
+  });
+  while (true) {
+    var started = Date.now();
+    var out;
+    try {
+      out = await injectionStreamAttempt(urlStr, outboundBody, key, clientRes, inbound, apiType, runtime, false);
+    } catch (err) {
+      if (clientRes.headersSent || !canRetryUpstreamError(err, attemptIndex, clientRes, sleepSpentMs)) {
+        attempts.push({ attempt: attemptIndex + 1, status: 0, error: errorMessage(err, "hop failed"), latencyMs: Date.now() - started, decision: "final" });
+        try {
+          if (runtime.pendingHold && runtime.pendingHold.isHeld()) runtime.pendingHold.release("upstream_failure");
+          if (clientRes.headersSent && !clientRes.writableEnded) clientRes.end();
+        } catch (ignored) {}
+        throw tagHopRetries(err, attemptIndex);
+      }
+      var retryErrorDelay = delayBefore5xxRetryMs(attemptIndex, {}, Date.now(), sleepSpentMs);
+      if (retryErrorDelay === null) throw tagHopRetries(err, attemptIndex);
+      attempts.push({ attempt: attemptIndex + 1, status: 0, error: errorMessage(err, "hop failed"), latencyMs: Date.now() - started, decision: "retry" });
+      await sleepMs(retryErrorDelay); sleepSpentMs += retryErrorDelay; attemptIndex += 1; retriesSpent = attemptIndex; continue;
+    }
+    if (out.attemptFailed) {
+      if (clientRes.headersSent) throw new Error("openbot-hop: stream upstream failed after headers");
+      var delay = retryDelayMs(out.status === 429 ? "429" : "5xx", attemptIndex, out.headers, Date.now(), sleepSpentMs);
+      if (delay === null) {
+        attempts.push({ attempt: attemptIndex + 1, status: out.status || 0, latencyMs: Date.now() - started, decision: "final" });
+        return { status: out.status || 502, headers: out.headers || {}, raw: out.raw || Buffer.alloc(0), forwarded: false, attempts: attempts, attemptCount: attempts.length };
+      }
+      attempts.push({ attempt: attemptIndex + 1, status: out.status || 0, latencyMs: Date.now() - started, decision: "retry" });
+      await sleepMs(delay); sleepSpentMs += delay; attemptIndex += 1; retriesSpent = attemptIndex; continue;
+    }
+    attempts.push({ attempt: attemptIndex + 1, status: out.status, latencyMs: Date.now() - started, decision: "final" });
+    out.attempts = attempts; out.attemptCount = attempts.length;
+    if (retriesSpent > 0) out.hopRetries = retriesSpent;
+    if (!out.forwarded) {
+      out = convertBufferedResponse(out, apiType);
+      if (!clientRes.headersSent) send(clientRes, out.status, out.raw, headerContentType(out.headers) || "application/json", retryAfterForwardHeaders(out.headers));
+      return out;
+    }
+    runtime.firstObservation = out.observation;
+    runtime.firstHold = out.heldTerminal;
+    if (!out.observation.terminalEvents.length || !out.heldTerminal.isHeld()) {
+      if (!clientRes.writableEnded) clientRes.end();
+      injectionHardening.rememberResponse({ context: runtime.context, stateKey: runtime.stateKey, observation: out.observation, silent: injectionHardening.silentStop(out.observation) });
+      return out;
+    }
+    var l2 = await injectionHardening.runL2({
+      config: runtime.config,
+      context: runtime.context,
+      messages: runtime.canonicalMessages,
+      observation: out.observation,
+      heldTerminal: out.heldTerminal,
+      injection: runtime.injection,
+      stateKey: runtime.stateKey,
+      hostEvents: runtime.hostEvents,
+      hostEventContract: runtime.hostEventContract,
+      signal: runtime.signal,
+      abortSecond: function () { if (runtime.activeReq) runtime.activeReq.destroy(); },
+      runSecond: async function (second) {
+        var secondOutbound = buildInjectionOutbound(canonicalBody, second.messages, route, apiType, second.maxCompletionTokens);
+        try {
+          var secondOut = await injectionStreamAttempt(urlStr, secondOutbound, key, clientRes, inbound, apiType, runtime, true);
+          if (!secondOut.forwarded) throw new Error("l2 upstream status " + String(secondOut.status));
+          return { ok: true, observation: secondOut.observation, heldTerminal: secondOut.heldTerminal, hasValidTerminal: Boolean(secondOut.observation && secondOut.observation.terminalEvents.length) };
+        } catch (err) {
+          try { if (runtime.pendingHold && runtime.pendingHold.isHeld()) runtime.pendingHold.release("l2_second_failure"); } catch (ignored) {}
+          throw err;
+        }
+      },
+    });
+    runtime.injection = l2.injection;
+    if (!clientRes.writableEnded) clientRes.end();
+    return { status: out.status, headers: out.headers, raw: Buffer.alloc(0), forwarded: true, attempts: attempts, attemptCount: attempts.length, firstTokenMs: out.firstContentAt ? Math.max(0, out.firstContentAt - runtime.startedMs) : undefined, finishReason: l2.second && l2.second.observation && l2.second.observation.finishReasons.length ? l2.second.observation.finishReasons[l2.second.observation.finishReasons.length - 1] : out.finishReason, injection: l2.injection };
+  }
+}
+
+
+function queueInjectionResponse(runtime, status, headers, raw, contentType, extraHeaders) {
+  runtime.pendingResponse = { status: status, headers: headers || {}, raw: raw, contentType: contentType || "application/json", extraHeaders: extraHeaders };
+}
+
+async function processInjectedJson(out, apiType, runtime, res, req, route, key, upstream, canonicalBody) {
+  out = convertBufferedResponse(out, apiType);
+  if (!out || out.status < 200 || out.status >= 300) {
+    queueInjectionResponse(runtime, out.status, out.headers, out.raw, headerContentType(out.headers) || "application/json", retryAfterForwardHeaders(out.headers));
+    return out;
+  }
+  var parsed;
+  try { parsed = JSON.parse(Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw || "")); } catch (err) {
+    queueInjectionResponse(runtime, out.status, out.headers, out.raw, headerContentType(out.headers) || "application/json");
+    return out;
+  }
+  var observation = injectionHardening.observationFromChatResponse(parsed);
+  if (!runtime.config || runtime.config.mode !== "enforce" || !runtime.l2Eligible || !runtime.config.l2 || !runtime.config.l2.enabled) {
+    queueInjectionResponse(runtime, out.status, out.headers, out.raw, "application/json", retryAfterForwardHeaders(out.headers));
+    injectionHardening.rememberResponse({ context: runtime.context, stateKey: runtime.stateKey, observation: observation, silent: injectionHardening.silentStop(observation) });
+    return { status: out.status, headers: out.headers, raw: out.raw, attempts: out.attempts, attemptCount: out.attemptCount, finishReason: observation.finishReasons.length ? observation.finishReasons[observation.finishReasons.length - 1] : undefined, injection: runtime.injection };
+  }
+  if (observation.finishReasons.length) observation.terminalEvents.push({ sequence: 1, finishReason: observation.finishReasons[observation.finishReasons.length - 1], bytes: Buffer.byteLength(JSON.stringify(parsed), "utf8") });
+  var firstBytes = Buffer.from(JSON.stringify(parsed), "utf8");
+  var firstHold = injectionHardening.createTerminalHold(function (bytes) {
+    queueInjectionResponse(runtime, out.status, out.headers, bytes, "application/json");
+  }, observation);
+  firstHold.hold(firstBytes);
+  var l2 = await injectionHardening.runL2({
+    config: runtime.config,
+    context: runtime.context,
+    messages: runtime.canonicalMessages,
+    observation: observation,
+    heldTerminal: firstHold,
+    injection: runtime.injection,
+    stateKey: runtime.stateKey,
+    hostEvents: runtime.hostEvents,
+    hostEventContract: runtime.hostEventContract,
+    signal: runtime.signal,
+    runSecond: async function (second) {
+      var secondOutbound = buildInjectionOutbound(canonicalBody, second.messages, route, apiType, second.maxCompletionTokens);
+      var secondOut = await postUpstream(upstream, secondOutbound, key, req, apiType);
+      secondOut = convertBufferedResponse(secondOut, apiType);
+      if (!secondOut || secondOut.status < 200 || secondOut.status >= 300) throw new Error("l2 upstream status " + String(secondOut && secondOut.status));
+      var secondParsed;
+      try { secondParsed = JSON.parse(Buffer.isBuffer(secondOut.raw) ? secondOut.raw.toString("utf8") : String(secondOut.raw || "")); } catch (err) { throw new Error("l2 parse error"); }
+      var merged = mergeInjectionChatResponses(parsed, secondParsed);
+      var secondObservation = injectionHardening.observationFromChatResponse(merged);
+      if (secondObservation.finishReasons.length) secondObservation.terminalEvents.push({ sequence: 1, finishReason: secondObservation.finishReasons[secondObservation.finishReasons.length - 1], bytes: Buffer.byteLength(JSON.stringify(merged), "utf8") });
+      var secondBytes = Buffer.from(JSON.stringify(merged), "utf8");
+      var secondHold = injectionHardening.createTerminalHold(function (bytes) {
+        queueInjectionResponse(runtime, out.status, out.headers, bytes, "application/json");
+      }, secondObservation);
+      secondHold.hold(secondBytes);
+      return { ok: true, observation: secondObservation, heldTerminal: secondHold, hasValidTerminal: Boolean(secondObservation.terminalEvents.length) };
+    },
+  });
+  runtime.injection = l2.injection;
+  return { status: out.status, headers: out.headers, raw: firstBytes, attempts: out.attempts, attemptCount: out.attemptCount, injection: l2.injection, finishReason: observation.finishReasons.length ? observation.finishReasons[observation.finishReasons.length - 1] : undefined };
+}
+
 async function handleCompletions(req, res) {
   turnLease.beginTurn();
   var finishReason;
@@ -1247,6 +1638,7 @@ async function handleCompletionsInner(req, res) {
     requestId: "",
   };
   var recorded = false;
+  var injectionMetadata;
 
   function record(extra) {
     if (recorded) return;
@@ -1276,6 +1668,7 @@ async function handleCompletionsInner(req, res) {
       conversationId: extra.conversationId !== undefined ? extra.conversationId : clientMeta.conversationId,
       origin: extra.origin !== undefined ? extra.origin : clientMeta.origin,
       requestId: extra.requestId !== undefined ? extra.requestId : clientMeta.requestId,
+      injection: extra.injection !== undefined ? extra.injection : injectionMetadata,
     });
   }
 
@@ -1383,6 +1776,32 @@ async function handleCompletionsInner(req, res) {
       // direct /v1/chat/completions path are covered.
       body.messages = sanitizeToolCallIds(body.messages);
     }
+    var conversationId = findConversationId(body);
+    var injectionContext = injectionObservedContext(req, body, conversationId);
+    var injectionConfig = injectionHardening.readInjectionConfig();
+    var injectionPre = injectionHardening.applyPreGeneration(body.messages, {
+      config: injectionConfig,
+      context: injectionContext,
+      opening: body && body.opening === true,
+    });
+    body.messages = injectionPre.messages;
+    injectionMetadata = injectionPre.injection;
+    var injectionRuntime = {
+      config: injectionPre.config,
+      context: injectionContext,
+      canonicalMessages: Array.isArray(body.messages) ? body.messages.slice() : [],
+      stateKey: injectionPre.stateKey,
+      l2Eligible: Boolean(injectionPre.permission && injectionPre.permission.eligible),
+      injection: injectionMetadata,
+      startedMs: startedMs,
+      hostEvents: [],
+      hostEventContract: false,
+      activeReq: null,
+      abortController: new AbortController(),
+      signal: undefined,
+    };
+    injectionRuntime.signal = injectionRuntime.abortController.signal;
+    var canonicalBody = Object.assign({}, body, { messages: Array.isArray(body.messages) ? body.messages.slice() : [] });
     applyMaxTokens(body, route.model, apiType);
     applyMaps(body, {
       modelId: route.model.slug,
@@ -1395,7 +1814,6 @@ async function handleCompletionsInner(req, res) {
     noteWireBytes(outboundBody);
     fields.requestBody = outboundBody;
     fields.stream = body.stream === true;
-    var conversationId = findConversationId(body);
     fields.conversationId = conversationId || fields.conversationId;
     var requestInbound = {
       headers: req.headers || {},
@@ -1426,38 +1844,49 @@ async function handleCompletionsInner(req, res) {
     fields.upstreamEndpoint = upstream;
     var out;
     if (body.stream === true) {
-      out = await pipeOrBufferUpstream(upstream, outboundBody, key, res, req, apiType === "chat-completions" ? undefined : function (raw) {
-        var text = raw.toString("utf8");
-        return Buffer.from(apiType === "responses" ? protocolConverters.responsesSseToChat(text) : protocolConverters.anthropicSseToChat(text), "utf8");
-      });
+      if (injectionConfig.mode !== "off") {
+        out = await pipeInjectedStreaming(upstream, outboundBody, key, res, requestInbound, apiType, injectionRuntime, route, canonicalBody);
+        injectionMetadata = injectionRuntime.injection;
+      } else {
+        out = await pipeOrBufferUpstream(upstream, outboundBody, key, res, req, apiType === "chat-completions" ? undefined : function (raw) {
+          var text = raw.toString("utf8");
+          return Buffer.from(apiType === "responses" ? protocolConverters.responsesSseToChat(text) : protocolConverters.anthropicSseToChat(text), "utf8");
+        });
+      }
       record({
         status: out.status,
         error: retrySuffix(out),
-        responseRaw: Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw),
+        responseRaw: injectionConfig.mode === "off" && Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : undefined,
         attempts: out.attempts,
         attemptCount: out.attemptCount,
         firstTokenMs: out.firstTokenMs,
+        injection: injectionMetadata,
       });
-      return finishReasonFromRaw(out.raw);
+      return out.finishReason || finishReasonFromRaw(out.raw);
     } else {
       out = await postUpstream(upstream, outboundBody, key, req, apiType);
-      out = convertBufferedResponse(out, apiType);
+      if (injectionConfig.mode !== "off") {
+        out = await processInjectedJson(out, apiType, injectionRuntime, res, req, route, key, upstream, canonicalBody);
+        injectionMetadata = injectionRuntime.injection;
+      } else {
+        out = convertBufferedResponse(out, apiType);
+      }
       record({
         status: out.status,
         error: retrySuffix(out),
-        responseRaw: Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : String(out.raw),
+        responseRaw: injectionConfig.mode === "off" && Buffer.isBuffer(out.raw) ? out.raw.toString("utf8") : undefined,
         attempts: out.attempts,
         attemptCount: out.attemptCount,
         firstTokenMs: out.firstTokenMs,
+        injection: injectionMetadata,
       });
-      send(
-        res,
-        out.status,
-        out.raw,
-        headerContentType(out.headers) || "application/json",
-        retryAfterForwardHeaders(out.headers),
-      );
-      return finishReasonFromRaw(out.raw);
+      if (injectionConfig.mode === "off") {
+        send(res, out.status, out.raw, headerContentType(out.headers) || "application/json", retryAfterForwardHeaders(out.headers));
+      } else if (injectionRuntime.pendingResponse && !res.headersSent) {
+        var pendingResponse = injectionRuntime.pendingResponse;
+        send(res, pendingResponse.status, pendingResponse.raw, pendingResponse.contentType, pendingResponse.extraHeaders);
+      }
+      return out.finishReason || finishReasonFromRaw(out.raw);
     }
   } catch (err) {
     var failed = { error: { message: "hop failed" } };

@@ -249,33 +249,14 @@ code, kbd, .mono { font-family: var(--font-mono); }
 .icon-btn--danger:hover:not(:disabled) { background: var(--danger-tint); color: var(--danger-strong); }
 .icon-btn .spinner { width: 16px; height: 16px; }
 
-/* status strip */
-.status-strip {
-  /* Wraps instead of clipping. Between 769px and ~975px the five health readouts
-     are wider than the strip's content box, and #root clips x, so an unwrapped
-     row silently lost the tail of "Service ok · 10ms" (and squeezed the mode pill
-     to nothing). A single row still measures 36px. */
-  min-height: 36px;
-  display: flex; align-items: center; gap: var(--sp-4); row-gap: var(--sp-2);
-  flex-wrap: wrap;
-  padding: 0 max(var(--sp-4), env(safe-area-inset-right)) 0 max(var(--sp-4), env(safe-area-inset-left));
-  max-width: 1200px; width: 100%; margin: 0 auto;
-  border-top: 1px solid var(--hairline-soft);
-  min-width: 0;
-}
-.status-strip__right { margin-left: auto; display: flex; align-items: center; gap: var(--sp-3); flex: none; }
+/* The mode pill, the save indicator and the fault dot ride in the top nav. The
+   old status strip repeated what the Dashboard already shows — the mode sits in
+   the Mode card head and the five readouts are the Health card below it — and it
+   cost every page 36px of chrome. */
 .last-poll { font-family: var(--font-mono); font-size: 11px; color: var(--faint); }
 
-/* Shrinks and wraps so every readout stays whole; the 320px basis keeps the
-   cluster beside the mode pill while it still fits there. */
-.health-cluster { display: flex; align-items: center; gap: var(--sp-5); row-gap: var(--sp-2); flex: 1 1 320px; flex-wrap: wrap; min-width: 0; }
-/* flex: none keeps word + value on one line: a squeezed item wraps mid-phrase. */
-.health-item { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-sm); flex: none; }
-.health-item .word { color: var(--muted); }
-.health-item .val { font-family: var(--font-mono); color: var(--ink); }
-.health-item.is-fault .val { color: var(--danger); }
-
-.health-compact { display: none; align-items: center; flex: none; }
+/* Only rendered while something is actually faulting, at every width. */
+.health-compact { display: inline-flex; align-items: center; flex: none; }
 
 .health-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .health-dot--ok { background: var(--success); }
@@ -1233,7 +1214,9 @@ table.data td.cell-actions { white-space: nowrap; width: 1%; }
   .grid--12 { grid-template-columns: minmax(0, 1fr); }
   .col-8, .col-4, .col-6, .col-12 { grid-column: span 1; }
   .health-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .mode-pill__model { max-width: 16ch; }
+  /* The pill shares the top nav now, so it has less room than the full-width
+     strip had; the model name truncates rather than pushing the nav around. */
+  .topnav__right .mode-pill__model { max-width: 16ch; }
 }
 
 /* Five top-nav links (Dashboard · Bots · Models · Logs · Settings) need the
@@ -1263,30 +1246,8 @@ table.data td.cell-actions { white-space: nowrap; width: 1%; }
     padding-right: max(var(--sp-3), env(safe-area-inset-right));
   }
 
-  /* Status strip: mode pill + worst-state dot. Not a scrolling health row. */
-  .status-strip {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
-    align-items: center;
-    gap: var(--sp-2);
-    overflow: hidden;
-    height: auto;
-    min-height: 36px;
-    padding: 6px max(var(--sp-3), env(safe-area-inset-right)) 6px max(var(--sp-3), env(safe-area-inset-left));
-  }
-  .health-cluster { display: none; }
-  .health-compact { display: inline-flex; }
-  .status-strip__right { margin-left: 0; }
-  .status-strip .mode-pill {
-    display: flex;
-    width: 100%;
-    max-width: 100%;
-  }
-  .status-strip .mode-pill__model {
-    max-width: none;
-    flex: 1 1 0;
-    min-width: 0;
-  }
+  /* The status strip is gone; the mode pill truncates inside the top nav. */
+  .topnav__right .mode-pill__model { max-width: 12ch; }
 
   .blocked-banner {
     padding-left: max(var(--sp-3), env(safe-area-inset-left));

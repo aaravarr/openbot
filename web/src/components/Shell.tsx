@@ -80,6 +80,7 @@ export function Shell({ route, onNavigate }: { route: Route; onNavigate: (r: Rou
           })}
         </nav>
         <div className="topnav__right">
+          <ModePill mode={mode} model={active?.slug} />
           <span className="loopback-chip">
             <span className="dot-live" aria-hidden="true" />
             127.0.0.1:9280
@@ -87,37 +88,22 @@ export function Shell({ route, onNavigate }: { route: Route; onNavigate: (r: Rou
               <Copy aria-hidden="true" />
             </button>
           </span>
-          <IconButton
-            label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-            icon={theme === "dark" ? Moon : Sun}
-            onClick={toggleTheme}
-          />
-        </div>
-      </div>
-
-      <div className="status-strip">
-        <ModePill mode={mode} model={active?.slug} />
-        <div className="health-cluster">
-          {health.map((h) => (
-            <span className={`health-item${h.state === "fault" ? " is-fault" : ""}`} key={h.word}>
-              <HealthDot state={h.state} label={h.label} />
-              <span className="word">{h.word}</span>
-              <span className="val">{h.value}</span>
-            </span>
-          ))}
-        </div>
-        {worst ? (
-          <span className="health-compact" title={compactTitle}>
-            <HealthDot state={worst.state} label={worst.label} />
-          </span>
-        ) : null}
-        <div className="status-strip__right">
           {saving ? (
             <span className="saving-pill">
               <Spinner size={12} />
               Saving…
             </span>
           ) : null}
+          {worst && worst.state === "fault" ? (
+            <span className="health-compact" title={compactTitle}>
+              <HealthDot state={worst.state} label={worst.label} />
+            </span>
+          ) : null}
+          <IconButton
+            label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            icon={theme === "dark" ? Moon : Sun}
+            onClick={toggleTheme}
+          />
         </div>
       </div>
 

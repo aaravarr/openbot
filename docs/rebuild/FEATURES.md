@@ -338,11 +338,18 @@ current UI exposure.
 - **FR-57** [UI] `#/settings` is the one home for config-type controls; the Dashboard stays a
   status page (pause, mode, model switcher, health, recent requests) and the Logs page stays an
   observation page (a read-only recording summary links to Settings). Cards: delivery follow-up,
-  recording settings, phone access (tunnel), Grok Bot skill install. The delivery follow-up switch
-  defaults to off, offers `dry-run` ("observe only", recommended) and `enforce`, surfaces the
-  effective mode, its source, the config path, the L1/L2/L3 flags and the extra-run cap, warns when
-  an environment variable pins the mode, and rolls the draft back to the server-confirmed state when
-  a save fails. A save takes effect on the next hop request: no restart, no reconcile, no host bounce.
+  recording settings, phone access (tunnel), Grok Bot skill install. The delivery follow-up card is
+  one product sentence (a turn that ends without a SendToUser call loses its result; the follow-up
+  extends the built-in reminder so fewer replies are lost), an `Experimental` badge (info tone, never
+  the orange accent), one switch — "Enable the delivery follow-up", off by default — and one Save.
+  On + save writes `enforce` with every layer armed (`{ mode: "enforce", layers: { l1: true, l2: true,
+  l3: true } }`); off + save sends `{ mode: "off" }`. There are no mode radios, no layer flags and no
+  detail grid; `dry-run` stays reachable through the config file
+  (`skills/openbot-config/reference.md`) and simply has no UI control. Two notices appear only when
+  they apply: an environment variable pins the mode, or the box is not in custom mode (this affects
+  custom turns only). Save is disabled while the draft matches the server-confirmed state, and a
+  failed save rolls the draft back to that state. A save takes effect on the next hop request: no
+  restart, no reconcile, no host bounce.
 
 ### 4.9 Grok Bot user skills
 

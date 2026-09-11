@@ -194,3 +194,19 @@
 @media (max-width: 768px) {
   .models-head-actions { flex-wrap: wrap; }
 }
+
+/* --------------------------------------------------------------------------
+   Section: settings (owner: the settings delivery-follow-up change)
+   -------------------------------------------------------------------------- */
+
+/* The card is now a product sentence, one switch and one Save. Its only muted
+   microcopy is the sub-line under the switch: 12px --muted, the same pairing as
+   .card__hint in styles.css, without that class's 4px top margin (the switch
+   group already owns the gap). */
+.delivery-card__hint { font-size: var(--text-sm); color: var(--muted); }
+
+/* One action, and it is the primary save CTA: pinned to the right edge like the
+   Recording settings card's Save. The row is the button alone, so it never
+   wraps; below the 768px mobile floor .card__body already gives the card its
+   full width and the button stays inside it. */
+.delivery-card__actions { display: flex; justify-content: flex-end; }

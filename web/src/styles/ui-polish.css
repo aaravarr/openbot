@@ -9,6 +9,66 @@
    Section: bots (owner: the Bots page change)
    -------------------------------------------------------------------------- */
 
+/* PROPOSED-01 — denser bot rows. The identity column becomes one baseline row
+   (name + mono id + time), the 32px bot tile leaves the markup, and vertical
+   padding drops 14px -> 10px. The id stays in the DOM because users quote it;
+   below 900px only the name is shown. */
+.bot-row--dense { padding: 10px var(--sp-5); }
+.bot-row--dense .bot-row__main {
+  flex-direction: row; align-items: baseline; gap: var(--sp-2);
+}
+.bot-row--dense .bot-row__main .bot-row__id {
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; flex: 0 1 auto;
+}
+.bot-row--dense .bot-row__main .bot-row__time { white-space: nowrap; }
+@media (max-width: 900px) {
+  .bot-row--dense .bot-row__main .bot-row__id { display: none; }
+}
+/* Mobile keeps a 44px row floor so the checkbox and switch stay tappable. */
+@media (max-width: 768px) {
+  .bot-row--dense { min-height: 44px; }
+  .bot-row--dense .bot-row__main { flex-wrap: wrap; }
+}
+
+/* PROPOSED-02 — select-all moves into the card head, so the 42px
+   "Select active bots" header row disappears. The input hides exactly like
+   .checkbox's does, and keeps the same focus-visible ring on the box. */
+.bot-select-all { position: relative; display: inline-flex; align-items: center; gap: var(--sp-2); cursor: pointer; }
+.bot-select-all input {
+  position: absolute; inset: 0; width: 100%; height: 100%; margin: 0;
+  opacity: 0; cursor: pointer;
+}
+.bot-select-all .label { font-size: var(--text-sm); color: var(--muted); }
+.bot-select-all input:focus-visible + .checkbox__box { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* PROPOSED-03 — batch toolbar: the count is one 24px text pill (same height as
+   .mode-pill), "Set model" + "Apply" are one group, a 1px hairline separates
+   the pause pair, and every control in the bar is 32px. */
+.bot-batch-bar--grouped { padding: 10px var(--sp-5); gap: var(--sp-3); }
+.bot-batch-count {
+  display: inline-flex; align-items: center; height: 24px; padding: 0 10px;
+  border-radius: var(--r-pill); background: var(--surface-3); color: var(--ink);
+  font-size: var(--text-sm); font-weight: 600; white-space: nowrap;
+}
+.bot-batch-spacer { flex: 1 1 auto; min-width: 0; }
+.bot-batch-group { display: inline-flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.bot-batch-sep { width: 1px; align-self: stretch; background: var(--hairline); flex: none; }
+@media (max-width: 768px) {
+  .bot-batch-bar .btn { min-height: 44px; }
+}
+
+/* PROPOSED-09 — under 768px the per-row model selector used to drop to a
+   full-width second line, which pushed the pause switch onto a third. Keep the
+   identity line intact and cap the trigger so the row still fits at 520px. */
+@media (max-width: 768px) {
+  .bot-row { flex-wrap: nowrap; }
+  .bot-row .bot-row__model { flex: 0 1 auto; }
+  .bot-row .bot-row__model .listbox { min-width: 0; }
+  .bot-row .listbox__trigger { max-width: 132px; }
+}
+
 /* --------------------------------------------------------------------------
    Section: dashboard (owner: the Dashboard/Shell change)
    -------------------------------------------------------------------------- */

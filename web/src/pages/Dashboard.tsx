@@ -249,8 +249,8 @@ export function Dashboard() {
                     if (m) void useModel(m);
                   }}
                 />
-                <Button variant="ghost-danger" onClick={() => setConfirmOfficial(true)}>
-                  Switch to Official Grok
+                <Button variant="ink" onClick={() => setConfirmOfficial(true)}>
+                  Switch to Official
                 </Button>
               </div>
             </div>

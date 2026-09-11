@@ -94,6 +94,34 @@
    Section: dashboard (owner: the Dashboard/Shell change)
    -------------------------------------------------------------------------- */
 
+/* PROPOSED-05: the official mode switch is a strong, filled action (ink is the
+   documented "strong non-save" slot), not a red text link. Under 768px it sits
+   in a .row, so it needs an explicit touch target. */
+@media (max-width: 768px) {
+  .hero-mode .row .btn--ink { min-height: 44px; }
+}
+
+/* PROPOSED-06 (owner-corrected): centre ONLY the QR code. .card__body is a
+   column flexbox (.stack) with align-items:stretch, and .qr-code has a fixed
+   200px width, so align-self is the single declaration that centres it. The URL
+   row, "Copy URL", the notice and the button row stay exactly as on main, and
+   the encode-error fallback (.qr-code-fallback) stays left-aligned with them. */
+.qr-code { align-self: center; }
+
+/* PROPOSED-06 (owner-corrected): "Stop" keeps the destructive signal but reads
+   as a real button. ghost-danger paints colour only and leaves the base
+   button's border transparent, so it rendered as bare red text. The geometry
+   below is .btn--secondary-sm's (styles.css:460) so Stop is the same height and
+   the same 1px border as "Refresh URL"; only the colour differs. Never orange
+   (reserved for the primary save CTA). */
+.btn--outline-danger {
+  height: 28px; padding: 0 10px; font-size: var(--text-sm); font-weight: 500;
+  background: var(--surface);
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--hairline-strong));
+}
+.btn--outline-danger:hover:not(:disabled) { background: var(--danger-tint); }
+
 /* --------------------------------------------------------------------------
    Section: models (owner: the Models page change)
    -------------------------------------------------------------------------- */

@@ -81,7 +81,7 @@ export function TunnelCard() {
                 >
                   Refresh URL
                 </Button>
-                <Button variant="ghost-danger" onClick={() => setConfirm("stop")}>
+                <Button variant="outline-danger" onClick={() => setConfirm("stop")}>
                   Stop
                 </Button>
               </div>

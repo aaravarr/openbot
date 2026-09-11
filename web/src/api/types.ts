@@ -148,6 +148,115 @@ export type Command =
   | { kind: "update-provider"; providerId: string; name: string; origin: string; apiType?: "chat-completions" | "responses" | "anthropic"; secret?: string }
   | { kind: "set-expose"; expose: "cloudflare" | "off" };
 
+export type LogInjectionDelivery =
+  | string
+  | {
+      id?: string;
+      eventId?: string;
+      callId?: string;
+      toolCallId?: string;
+      toolName?: string;
+      deliveryType?: string;
+      kind?: string;
+      sequence?: number;
+      attempt?: number;
+      emittedAt?: string | number;
+      observedAt?: string | number;
+      at?: string | number;
+      success?: boolean;
+    };
+
+/**
+ * Bounded gateway decision metadata. Body capture is unrelated: these fields
+ * are safe to display even when request/response bodies are disabled.
+ */
+export type LogInjectionMetadata = {
+  injectionMode?: string;
+  injectionFamilies?: string[];
+  identityGateResult?: string;
+  skipReason?: string;
+  classificationSkippedReason?: string;
+  injectionEpoch?: string;
+  injectionFingerprint?: string;
+  injectionWouldApply?: boolean;
+  l2SupportedProtocol?: string;
+  l2Eligible?: boolean;
+  l2Attempted?: boolean;
+  l2Outcome?: string;
+  l2AdditionalRuns?: number;
+  l2NudgeShape?: string;
+  l2AddedLatencyMs?: number;
+  l2PromptTokensEstimated?: number;
+  l2CompletionTokenCap?: number;
+  l2CostReservedUsd?: number | "unknown";
+  l2PromptTokensActual?: number;
+  l2CompletionTokensActual?: number;
+  l2CostActualUsd?: number | "unknown";
+  firstByteForwardedAt?: string | number;
+  firstContentAt?: string | number;
+  currentResponseToolCallCount?: number;
+  latestRealUserMessageId?: string;
+  latestRealUserMessageSequence?: number;
+  lastTouchSequence?: number;
+  toolCallsAfterLastTouch?: number;
+  touchClassification?: string;
+  hostDeliveryEventMode?: string;
+  debtState?: string;
+  debtShape?: string;
+  terminalFinishReason?: string;
+  terminalHoldState?: string;
+  heldTerminalBytes?: number;
+  terminalDecision?: string;
+  terminalReleaseReason?: string;
+  terminalReleaseAt?: string | number;
+  firstResponseHash?: string;
+  l2BodyHash?: string;
+  deliveryCallsEmitted?: LogInjectionDelivery[];
+  deliveryObserved?: Array<string | Record<string, unknown>>;
+  deliveryObservedAt?: Array<string | number>;
+  deliveryErrorsObserved?: Array<string | Record<string, unknown>>;
+  ledgerSentMessageCount?: number | "unknown";
+  ledgerReacted?: boolean;
+  ledgerOwedAtStart?: number | "unknown";
+  ledgerOwedAtEnd?: number | "unknown";
+  awaitingUserSelection?: boolean;
+  completionReason?: string;
+  finalNoTool?: boolean;
+  l2Suppressed?: boolean;
+};
+
+export type LogInjectionFacet = { value: string; count: number };
+
+/** Gray-rollout counters computed from the bounded injection metadata rows. */
+export type LogInjectionStats = {
+  /** True when the stats scan only covered the newest bounded sample. */
+  approximate: boolean;
+  records: number;
+  candidates: number;
+  wouldApply: number;
+  l2Attempted: number;
+  l2Triggered: number;
+  applied: number;
+  remediationAttempts: number;
+  remediationFailures: number;
+  fallbackOriginalTerminal: number;
+  l2FallbackOriginalTerminal: number;
+  unresolved: number;
+  terminalReleased: number;
+  skipped: number;
+  classificationSkipped: number;
+  extraCalls: number;
+  l2AdditionalRuns: number;
+  extraLatencyMs: number;
+  l2AddedLatencyMs: number;
+  averageExtraLatencyMs: number | null;
+  families: LogInjectionFacet[];
+  skipReasons: LogInjectionFacet[];
+  classificationSkippedReasons: LogInjectionFacet[];
+  outcomes: LogInjectionFacet[];
+  modes: LogInjectionFacet[];
+};
+
 export type LogRecord = {
   id: string;
   startedAt: string;
@@ -179,6 +288,8 @@ export type LogRecord = {
   botName?: string;
   chatType?: "group" | "dm" | "routine";
   chatName?: string;
+  /** Optional; absent on legacy/off-mode rows. */
+  injection?: LogInjectionMetadata;
 };
 
 export type LogDetail = LogRecord & {
@@ -217,6 +328,8 @@ export type LogStats = {
   bodyDiskBytes: number;
   bodiesApproximate: boolean;
   diskBytes: number;
+  /** Omitted when all rows predate injection telemetry or mode is off. */
+  injection?: LogInjectionStats;
 };
 
 export type LogFacetOption = { value: string; count: number };

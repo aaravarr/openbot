@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import http from "node:http";
+import { createRequire } from "node:module";
 import test from "node:test";
 
 // Force Unix-style box paths so the supervisor's parseAbsPath accepts them on
@@ -13,6 +14,9 @@ mkdirSync("/tmp/openbot-repo/ui", { recursive: true });
 writeFileSync("/tmp/openbot-repo/ui/index.html", "<!doctype html><html><body>test ui</body></html>\n");
 
 const { handleRequest, wrapMode } = await import("./server.ts");
+const requestLog = createRequire(import.meta.url)("../../payload/request-log.cjs") as {
+  clearRequests: () => void;
+};
 
 function listen(): Promise<{ server: http.Server; port: number }> {
   return new Promise((resolve) => {
@@ -265,6 +269,58 @@ test("GET /api/logs/usage returns grouped usage with an approximate flag", async
     assert.ok(Array.isArray(body.byModel));
     assert.ok(Array.isArray(body.byProvider));
   } finally {
+    server.close();
+    server.closeAllConnections();
+  }
+});
+
+test("GET /api/logs/stats exposes optional injection aggregate", async () => {
+  requestLog.clearRequests();
+  writeFileSync(
+    "/tmp/openbot-sand-data/openbot-requests.jsonl",
+    JSON.stringify({
+      id: "stats-injection-01",
+      startedAt: new Date().toISOString(),
+      status: 200,
+      ok: true,
+      injection: {
+        injectionMode: "enforce",
+        injectionFamilies: ["l2.reply-nudge"],
+        injectionWouldApply: true,
+        l2Eligible: true,
+        l2Attempted: true,
+        l2Outcome: "second-success",
+        l2AdditionalRuns: 1,
+        l2AddedLatencyMs: 88,
+        terminalDecision: "l2-triggered",
+      },
+    }) + "\n",
+  );
+  const { server, port } = await listen();
+  try {
+    const res = await request(port, "/api/logs/stats", "GET");
+    assert.equal(res.status, 200);
+    const body = res.json as {
+      injection?: {
+        approximate: boolean;
+        records: number;
+        candidates: number;
+        applied: number;
+        extraCalls: number;
+        extraLatencyMs: number;
+        families: Array<{ value: string; count: number }>;
+      };
+    };
+    assert.ok(body.injection);
+    assert.equal(body.injection.approximate, false);
+    assert.equal(body.injection.records, 1);
+    assert.equal(body.injection.candidates, 1);
+    assert.equal(body.injection.applied, 1);
+    assert.equal(body.injection.extraCalls, 1);
+    assert.equal(body.injection.extraLatencyMs, 88);
+    assert.deepEqual(body.injection.families, [{ value: "l2.reply-nudge", count: 1 }]);
+  } finally {
+    requestLog.clearRequests();
     server.close();
     server.closeAllConnections();
   }

@@ -410,13 +410,9 @@ code, kbd, .mono { font-family: var(--font-mono); }
 .bot-row__icon svg { width: 15px; height: 15px; }
 .bot-row__main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .bot-row__main strong { color: var(--ink); font-size: var(--text-base); overflow-wrap: anywhere; }
-.bot-row__main .mono { color: var(--muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .bot-row__model { display: flex; align-items: center; gap: var(--sp-2); flex: none; }
 .bot-row__model select { height: 32px; max-width: 240px; border: 1px solid var(--hairline-strong); border-radius: var(--r-md); background: var(--surface); color: var(--ink); padding: 0 8px; font: inherit; font-size: var(--text-sm); }
-.bot-row--header { min-height: 42px; padding-top: 8px; padding-bottom: 8px; color: var(--muted); font-size: var(--text-sm); border-bottom: 1px solid var(--hairline); }
-.bot-row--header .bot-row__main { flex: 1; }
 .bot-batch-bar { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; padding: 12px 16px; border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); background: var(--surface-2); }
-.bot-batch-bar strong { margin-right: auto; font-size: var(--text-sm); }
 .bot-batch-bar .listbox { min-width: 240px; }
 .bot-batch-bar .btn { min-height: 32px; }
 @media (max-width: 768px) { .bot-row { flex-wrap: wrap; } .bot-row__model { flex: 1 1 100%; } .bot-row__model select { flex: 1; max-width: none; } }
@@ -1221,8 +1217,8 @@ table.data td.cell-actions { white-space: nowrap; width: 1%; }
   .health-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   /* The pill shares the top nav now, so it has less room than the full-width
      strip had; the model name truncates rather than pushing the nav around.
-     (In the 769-1023 compact band the slug is hidden entirely — see the 1023px
-     block above.) */
+     (In the 769-1023 compact band the slug is hidden entirely — see the
+     max-width: 1023px block further down this file.) */
   .topnav__right .mode-pill__model { max-width: 16ch; }
 }
 

@@ -721,6 +721,27 @@ function openUpstream(urlStr, body, key, inbound, apiType) {
   // no upstream provider ever sees it (same gate as __openbot_api_type).
   delete outboundBody.openbotBotId;
   delete outboundBody.openbotChatType;
+  // Explicit mirrors of the conversation identity on converted (allow-list)
+  // documents — the converted families drop body.conversationId/epochId by
+  // construction, so these mirrors exist only there and are deleted with
+  // the rest of the identity metadata.
+  delete outboundBody.openbotConversationId;
+  delete outboundBody.openbotEpochId;
+  // Conversation identity stamped by the custom wrap (runtime.cjs) for the
+  // injection gate. Same contract: it feeds findConversationId / the
+  // observable fallback and the request log, never the provider wire. This
+  // is the single serialization point for chat-completions AND the source
+  // body of both converted families, so stripping here (plus the mirror
+  // deletions on the converted documents below) keeps every outbound
+  // payload free of the mirror fields.
+  delete outboundBody.conversationId;
+  delete outboundBody.conversation_id;
+  delete outboundBody.sessionId;
+  delete outboundBody.session_id;
+  delete outboundBody.chatId;
+  delete outboundBody.chat_id;
+  delete outboundBody.epochId;
+  delete outboundBody.epoch_id;
   var payload = Buffer.from(JSON.stringify(outboundBody), "utf8");
   var wantStream = body && body.stream === true;
   var headers = {
@@ -1860,6 +1881,13 @@ async function handleCompletionsInner(req, res) {
     // too (openUpstream strips it before the upstream ever sees it).
     if (injectionContext.observed && injectionContext.observed.botId) outboundBody.openbotBotId = injectionContext.observed.botId;
     if (injectionContext.observed && injectionContext.observed.chatType) outboundBody.openbotChatType = injectionContext.observed.chatType;
+    // Same for the wrap-stamped conversation identity: chat-completions
+    // keeps it on the passthrough body and the converters drop it, so the
+    // converted documents get the explicit mirrors here to stay in sync
+    // with the openbotBotId/openbotChatType mirrors above. openUpstream
+    // deletes these before the upstream sees the request.
+    if (injectionContext.observed && injectionContext.observed.conversationId) outboundBody.openbotConversationId = injectionContext.observed.conversationId;
+    if (injectionContext.observed && injectionContext.observed.epochId) outboundBody.openbotEpochId = injectionContext.observed.epochId;
     noteWireBytes(outboundBody);
     fields.requestBody = outboundBody;
     fields.stream = body.stream === true;

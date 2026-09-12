@@ -18,6 +18,17 @@ export const DEFAULT_GUARD_INTERVAL_MINUTES = 5;
 /** The guard log stays small: past this size the next tick truncates it. */
 export const GUARD_LOG_MAX_BYTES = 1024 * 1024;
 
+/**
+ * The wrap repair is not complete until the host process has restarted on the
+ * repaired bytes: the running host keeps its own module cache, so chat only
+ * truly leaves stock when a new host starts. When the repair reconcile
+ * deferred the bounce (an armed pending marker, applied by a finalizer or a
+ * later tick), one repair cycle is granted to land it before this daemon
+ * bounces the host itself. Anything longer is the observed complaint: the
+ * files heal, the process stays stock, and the log says healthy.
+ */
+export const GUARD_BOUNCE_GRACE_TICKS = 2;
+
 export type GuardLogRow = {
   readonly ts: string;
   readonly detail: string;
@@ -26,6 +37,8 @@ export type GuardLogRow = {
   readonly wrapRepaired: boolean;
   readonly hopStatus?: string | undefined;
   readonly hopFailures?: number | undefined;
+  /** Set when the tick completed or deferred the post-repair host bounce. */
+  readonly wrapBounce?: "bounced" | "deferred" | undefined;
 };
 
 export type GuardDaemonOutcome =
@@ -98,7 +111,15 @@ function releaseOwnPidfile(deps: SupervisorDeps): void {
 
 export function appendGuardLogLine(
   deps: SupervisorDeps,
-  row: { detail: string; ok: boolean; modeRepaired: boolean; wrapRepaired: boolean; hopStatus?: string | undefined; hopFailures?: number | undefined },
+  row: {
+    detail: string;
+    ok: boolean;
+    modeRepaired: boolean;
+    wrapRepaired: boolean;
+    hopStatus?: string | undefined;
+    hopFailures?: number | undefined;
+    wrapBounce?: "bounced" | "deferred" | undefined;
+  },
 ): void {
   try {
     const entry: GuardLogRow = { ts: new Date().toISOString(), ...row };
@@ -108,6 +129,22 @@ export function appendGuardLogLine(
   } catch {
     /* the guard log is best-effort */
   }
+}
+
+/**
+ * Tick-scoped memory for the repair-bounce grace counter. A daemon is a
+ * single loop, so one module-level slot per process is enough; the one-shot
+ * CLI tick never defers past it (grace only spans ticks of the same loop).
+ */
+const repairState: { bounceDeferrals: number } = { bounceDeferrals: 0 };
+
+/**
+ * True while the repair's deferred host bounce is stranded: a marker is
+ * armed but no live finalizer owns it. The tick's normal fallback lets the
+ * finalizer win the race; only the grace counter below overrides it.
+ */
+function repairBounceStranded(deps: SupervisorDeps): boolean {
+  return pendingHostBounce(deps) && !finalizeHostRunning(deps);
 }
 
 /** One loop pass: check, repair through guardCustom, record, keep going.
@@ -131,11 +168,43 @@ export async function runGuardTickWithHopHealth(
     appendGuardLogLine(deps, { detail: "error", ok: false, modeRepaired: false, wrapRepaired: false });
     return;
   }
+  let wrapBounce: "bounced" | "deferred" | undefined;
   if (result.detail === "repaired") {
     const drifted = [result.modeRepaired ? "mode-drift" : undefined, result.wrapRepaired ? "wrap-drift" : undefined]
       .filter((part): part is string => part !== undefined)
       .join("+");
     appendGuardAudit(deps, { source: GUARD_DAEMON_SOURCE }, drifted || "drift", "custom");
+    if (result.wrapRepaired && repairBounceStranded(deps)) {
+      // The repair deferred the host bounce to a finalizer that never came.
+      // Grant GUARD_BOUNCE_GRACE_TICKS repair ticks, then force the deferred
+      // bounce through the audited applier: force expires only the quiet
+      // window and the no-lease fallback, never the marker grace window and
+      // never a request that is still in flight.
+      repairState.bounceDeferrals += 1;
+      if (repairState.bounceDeferrals >= GUARD_BOUNCE_GRACE_TICKS) {
+        const applied = applyDeferredHostBounce(deps, { source: GUARD_DAEMON_SOURCE }, { force: true });
+        wrapBounce = applied.kind === "applied" ? "bounced" : "deferred";
+        repairState.bounceDeferrals = 0;
+        if (applied.kind === "applied") {
+          io.stderr(`openbot-guard: forced the stranded wrap-repair bounce (pid ${applied.pids.join(", ")})`);
+        }
+      } else {
+        wrapBounce = "deferred";
+      }
+    } else if (result.wrapRepaired && !pendingHostBounce(deps)) {
+      // The repair bounced the host itself (immediate path) or the normal
+      // fallback applied the marker earlier in this tick.
+      repairState.bounceDeferrals = 0;
+      wrapBounce = "bounced";
+    }
+  } else {
+    // Keep counting only while a bounce is actually stranded; a tick with
+    // no marker, or with a live finalizer, resets the grace window.
+    if (repairBounceStranded(deps)) {
+      repairState.bounceDeferrals += 1;
+    } else {
+      repairState.bounceDeferrals = 0;
+    }
   }
   if (result.detail === "refused" || result.detail === "no-custom-state") {
     io.stderr(`openbot-guard: ${result.detail}; retrying on the next tick`);
@@ -178,7 +247,12 @@ export async function runGuardTickWithHopHealth(
       io.stderr(`openbot-guard: deferred host bounce failed: ${message}`);
     }
   }
-  appendGuardLogLine(deps, { ...result, hopStatus, hopFailures });
+  appendGuardLogLine(deps, {
+    ...result,
+    hopStatus,
+    hopFailures,
+    ...(wrapBounce !== undefined ? { wrapBounce } : {}),
+  });
 }
 
 function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {

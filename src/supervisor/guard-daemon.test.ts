@@ -5,6 +5,7 @@ import { type FsDeps, type ProcDeps, parseOwnedPid } from "./procs.ts";
 import { boxPathsFrom, joinAbs, type BoxPaths } from "./paths.ts";
 import {
   DEFAULT_GUARD_INTERVAL_MINUTES,
+  GUARD_BOUNCE_GRACE_TICKS,
   GUARD_LOG_MAX_BYTES,
   type GuardDaemonOutcome,
   type GuardLogRow,
@@ -16,6 +17,8 @@ import {
   stopGuardDaemon,
 } from "./guard-daemon.ts";
 import type { GuardResult } from "./guard.ts";
+import { payloadFingerprint } from "../host/payload-fingerprint.ts";
+import { armDeferredHostBounce } from "./reconcile.ts";
 
 function guardResult(overrides: Partial<GuardResult>): GuardResult {
   return {
@@ -31,6 +34,7 @@ function guardResult(overrides: Partial<GuardResult>): GuardResult {
 const HEALTHY = guardResult({});
 const REPAIRED_BOTH = guardResult({ detail: "repaired", modeRepaired: true, wrapRepaired: true });
 const REPAIRED_MODE = guardResult({ detail: "repaired", modeRepaired: true });
+const REPAIRED_WRAP = guardResult({ detail: "repaired", wrapRepaired: true });
 const REFUSED = guardResult({ detail: "refused", ok: false, reconcile: { kind: "refused", error: { kind: "foreign-hop" } } });
 const NO_CUSTOM = guardResult({ detail: "no-custom-state", ok: false });
 
@@ -458,4 +462,137 @@ test("a dark unified port with a deaf-but-listed UI pid SIGTERMs it before the r
   assert.deepEqual(ctx.procs.stopped, [4242]);
   assert.equal(ctx.fs.read(ctx.paths.uiPid), "1\n");
   assert.equal(ctx.fs.read(ctx.paths.hopPid), undefined);
+});
+
+// ---- Repair-bounce completion: the running host must actually load the
+// repaired wrap. The fake procs report live host pids only when the test
+// arms them, so a bounce shows up in procs.stopped.
+
+function withHostPids(ctx: ReturnType<typeof setup>, pids: number[]): void {
+  ctx.procs.hostPids = () => pids.map(parseOwnedPid);
+  ctx.procs.live = new Set(pids);
+}
+
+/**
+ * Arm a marker the way the box does: through the real writer, with a
+ * fingerprint that matches what currentPayloadFingerprint computes over this
+ * (empty) payload tree, then back-age it to the wanted age.
+ */
+function armPendingMarker(ctx: ReturnType<typeof setup>, ageMs: number): void {
+  const fp = payloadFingerprint({
+    payloadDir: joinAbs(ctx.paths.repoRoot, "payload"),
+    read: () => undefined,
+  });
+  const marker = armDeferredHostBounce(ctx.deps, { source: "test:install" }, fp);
+  ctx.fs.write(
+    ctx.paths.pendingBounce,
+    JSON.stringify(
+      {
+        ...marker,
+        armedAtMs: marker.armedAtMs - ageMs,
+        armedAt: new Date(marker.armedAtMs - ageMs).toISOString(),
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+}
+
+test("a wrap repair with no pending marker completes immediately (bounce done)", async () => {
+  const ctx = setup();
+  withHostPids(ctx, [670974]);
+  await runGuardTick(ctx.deps, { runOnce: async () => REPAIRED_WRAP, stderr: () => {} });
+  // No marker was armed, so reconcile's own immediate bounce already ran
+  // inside the repair: the daemon records the outcome and never double-kills.
+  assert.deepEqual(ctx.procs.stopped, []);
+  const rows = guardLogRows(ctx);
+  assert.equal(rows[0]?.wrapBounce, "bounced");
+});
+
+test("a wrap repair whose stranded bounce is forced past the grace by the daemon", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const ctx = setup();
+  withHostPids(ctx, [670974]);
+  // A pending marker without a live finalizer: the exact stranded state. The
+  // marker is old enough to pass its own grace window, and a fresh "stop"
+  // lease keeps the quiet window open so only the forced apply may land.
+  armPendingMarker(ctx, 150_000);
+  const writeQuietLease = () => {
+    const now = Date.now();
+    ctx.fs.write(
+      ctx.paths.turnLease,
+      JSON.stringify({ active: 0, lastStartAt: now - 20_000, lastEndAt: now - 10_000, lastFinishReason: "stop", updatedAt: now - 10_000 }) + "\n",
+    );
+  };
+  writeQuietLease();
+  const stderr: string[] = [];
+  const controller = new AbortController();
+  const run = runGuardDaemon(ctx.deps, {
+    intervalMinutes: DEFAULT_GUARD_INTERVAL_MINUTES,
+    signal: controller.signal,
+    runOnce: async () => REPAIRED_WRAP,
+    stderr: (line) => stderr.push(line),
+    hopHealth: false,
+  });
+  await flush();
+  // First repair tick: the finalizer still gets its grace, and the quiet
+  // window keeps the normal fallback from applying.
+  assert.deepEqual(ctx.procs.stopped, []);
+  assert.equal(ctx.fs.read(ctx.paths.pendingBounce) !== undefined, true);
+  assert.equal(guardLogRows(ctx)[0]?.wrapBounce, "deferred");
+  // Second repair tick: the daemon forces the stranded deferred bounce
+  // through the audited applier instead of leaving the host on the old wrap.
+  t.mock.timers.tick(5 * 60_000);
+  writeQuietLease();
+  await flush();
+  assert.deepEqual(ctx.procs.stopped, [670974]);
+  const rows = guardLogRows(ctx);
+  assert.equal(rows[1]?.wrapBounce, "bounced");
+  controller.abort();
+  await run;
+  // The forced completion is auditable like every reconcile write.
+  const actions = auditRows(ctx).map((row) => [row.action, row.from, row.to]);
+  assert.deepEqual(actions, [
+    ["guard", "wrap-drift", "custom"],
+    ["guard", "wrap-drift", "custom"],
+    ["wrap", "bounce:deferred+max-wait", "bounce:done"],
+  ]);
+  assert.equal(ctx.fs.read(ctx.paths.pendingBounce), undefined);
+  assert.match(stderr.join("\n"), /forced the stranded wrap-repair bounce \(pid 670974\)/);
+  assert.equal(GUARD_BOUNCE_GRACE_TICKS, 2);
+});
+
+test("a young stranded bounce is never forced through the grace window", async () => {
+  const ctx = setup();
+  withHostPids(ctx, [670974]);
+  // Freshly armed (inside its own grace window): even with the repair
+  // stranded, the daemon must wait the grace out — the install that armed it
+  // may still be writing its result.
+  armPendingMarker(ctx, 0);
+  let n = 0;
+  while (n < GUARD_BOUNCE_GRACE_TICKS) {
+    await runGuardTick(ctx.deps, { runOnce: async () => REPAIRED_WRAP, stderr: () => {} });
+    n += 1;
+  }
+  assert.deepEqual(ctx.procs.stopped, []);
+  assert.deepEqual(
+    guardLogRows(ctx).map((row) => row.wrapBounce),
+    ["deferred", "deferred"],
+  );
+  assert.equal(ctx.fs.read(ctx.paths.pendingBounce) !== undefined, true);
+});
+
+test("a wrap repair without a pending marker resets the grace counter", async () => {
+  const ctx = setup();
+  withHostPids(ctx, [670974]);
+  // Repair tick 1 defers (a marker is armed); the finalizer then applies it,
+  // and the next repair with no marker completes immediately instead of
+  // counting as a second deferral.
+  armPendingMarker(ctx, 150_000);
+  await runGuardTick(ctx.deps, { runOnce: async () => REPAIRED_WRAP, stderr: () => {} });
+  assert.equal(guardLogRows(ctx)[0]?.wrapBounce, "deferred");
+  ctx.fs.remove(ctx.paths.pendingBounce);
+  await runGuardTick(ctx.deps, { runOnce: async () => REPAIRED_WRAP, stderr: () => {} });
+  assert.deepEqual(ctx.procs.stopped, []);
+  assert.equal(guardLogRows(ctx)[1]?.wrapBounce, "bounced");
 });

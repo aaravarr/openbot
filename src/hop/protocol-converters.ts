@@ -91,7 +91,20 @@ export function chatToAnthropic(body: unknown): Obj {
       if (typeof message.content === "string") system.push(message.content);
       continue;
     }
-    if (message.role === "tool") { messages.push({ role: "user", content: [{ type: "tool_result", tool_use_id: message.tool_call_id, content: typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? "") }] }); continue; }
+    if (message.role === "tool") {
+      // Consecutive role=tool rows belong to one parallel tool-call block and
+      // must serialize as ONE user turn of tool_result blocks: Anthropic
+      // rejects a tool_use that is not immediately followed by its matching
+      // tool_result, and a second user turn between the two is exactly that
+      // (incident 2026-09-11). A previous user turn that carries anything
+      // other than tool_result blocks still gets a fresh turn.
+      const toolResult = { type: "tool_result", tool_use_id: message.tool_call_id, content: typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? "") };
+      const prev = messages.length ? messages[messages.length - 1] : undefined;
+      const prevBlocks = prev && prev.role === "user" && Array.isArray(prev.content) ? (prev.content as Obj[]) : undefined;
+      if (prevBlocks && prevBlocks.length > 0 && prevBlocks.every((b) => isObj(b) && b.type === "tool_result")) prevBlocks.push(toolResult);
+      else messages.push({ role: "user", content: [toolResult] });
+      continue;
+    }
     const blocks: unknown[] = [];
     const thinking = typeof message.reasoning_content === "string" ? message.reasoning_content : typeof message.thinking === "string" ? message.thinking : "";
     if (thinking) blocks.push({ type: "thinking", thinking });

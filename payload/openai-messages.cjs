@@ -499,6 +499,137 @@ function sanitizeToolCallIds(messages) {
   return messages;
 }
 
+// Pre-flight adjacency repair, after every other pass has assembled the
+// outbound array. OpenAI-compatible upstreams reject the request with 400 when
+// an assistant message carrying tool_calls is not followed, before any other
+// role intervenes, by the role=tool results of ALL of its calls (incident
+// 2026-09-11: an enrichment pass had slotted a role=user image message between
+// two parallel tool results). The repair is deterministic and structural:
+//
+//   1. Results separated from their calls by an interloping row are moved
+//      forward so every tool_calls block is followed by its full result run
+//      (contiguous — a second tool row after the interloper is dragged along,
+//      not left behind to trip the validator on the way back).
+//   2. A call whose result does not exist ANYWHERE gets a synthesized
+//      role=tool result stating exactly that — never a fake success, never an
+//      invented payload ("[tool call did not complete: no result recorded]").
+//   3. A belated role=tool result found inside a later block's window is kept
+//      but dragged adjacent to its block; duplicate rows for one call id are
+//      collapsed to the first. A tool result whose call is nowhere in the
+//      array is left verbatim (its id was already normalized by
+//      repairToolCallIds) — the census only stops a second, synthesized
+//      result being added for a call whose result exists elsewhere.
+//
+// Already-valid arrays come out byte-identical (single output array, no
+// reallocation). Runs after sanitizeToolCallIds in the hop pipeline so the
+// repaired ids are the final ones; the guard is idempotent.
+//
+// The synthesized row carries this reserved content. Injection hardening's
+// debt classifier deliberately ignores it: execution chronology must come
+// from the host transcript, not from a row the hop itself added — treating
+// the sentinel as a real tool result would flip a "touch-no-tool" (not
+// owed) tail into "touch-then-tool" (owed) and spawn remediation calls.
+var TOOL_CALL_INCOMPLETE_CONTENT = "[tool call did not complete: no result recorded]";
+
+function repairOrphanedToolCalls(messages) {
+  if (!Array.isArray(messages)) return messages;
+
+  var callIdsOf = function (row) {
+    var ids = [];
+    if (row && Array.isArray(row.tool_calls)) {
+      for (var c = 0; c < row.tool_calls.length; c++) {
+        var call = row.tool_calls[c];
+        if (call && typeof call.id === "string" && call.id) ids.push(call.id);
+      }
+    }
+    return ids;
+  };
+
+  // Pass 1: whole-array census — every tool_call_id that has a call anywhere.
+  var answeredIds = Object.create(null);
+  for (var s = 0; s < messages.length; s++) {
+    var scan = messages[s];
+    if (scan && scan.role === "tool" && typeof scan.tool_call_id === "string" && scan.tool_call_id) {
+      answeredIds[scan.tool_call_id] = true;
+    }
+  }
+
+  var out = [];
+  var i = 0;
+  while (i < messages.length) {
+    var row = messages[i];
+    var ids = row && row.role === "assistant" ? callIdsOf(row) : [];
+    if (!ids.length) {
+      out.push(row);
+      i += 1;
+      continue;
+    }
+    // Collect everything up to the next assistant row: tool rows that belong
+    // to this block (wherever the producing pass left them) and the non-tool
+    // rows that were interleaved between them (injected user image messages,
+    // reminders, nudges). Scanning stops at the next assistant row, so rows
+    // of a later block are only pulled in when their id matches THIS block.
+    var collected = [];
+    var interlopers = [];
+    var seen = Object.create(null);
+    var j = i + 1;
+    while (j < messages.length) {
+      var m2 = messages[j];
+      if (m2 && m2.role === "assistant") break;
+      if (m2 && m2.role === "tool") {
+        collected.push(m2);
+        var cid = m2.tool_call_id;
+        if (typeof cid === "string" && cid) seen[cid] = true;
+        j += 1;
+        continue;
+      }
+      interlopers.push(m2);
+      j += 1;
+    }
+    // Deterministic result-run order: the call order of the assistant row.
+    var byId = Object.create(null);
+    for (var b = 0; b < collected.length; b++) {
+      var bid = collected[b].tool_call_id;
+      if (typeof bid === "string" && bid && byId[bid] === undefined) byId[bid] = collected[b];
+    }
+    var ordered = [];
+    for (var oi = 0; oi < ids.length; oi++) {
+      if (byId[ids[oi]]) ordered.push(byId[ids[oi]]);
+    }
+    // Belated rows in the scan window whose id is not one of this block's
+    // calls (kept, never silently dropped, but dragged here so the tool run
+    // stays contiguous for the upstream validator). A duplicate row for an
+    // id already ordered collapses away: only the first copy is referenced
+    // by byId, so later copies fall out here.
+    for (var be = 0; be < collected.length; be++) {
+      var bRow = collected[be];
+      var bId = bRow.tool_call_id;
+      if (byId[bId] === bRow) {
+        if (ordered.indexOf(bRow) < 0) ordered.push(bRow);
+      } else if (typeof bId !== "string" || !bId) {
+        ordered.push(bRow); // id-less row: keep it in the run verbatim
+      }
+      // else: duplicate row for an id already ordered — collapses away
+    }
+    // Calls with no result anywhere get an explicit did-not-complete row —
+    // never a synthesized success, never invented payload.
+    for (var m = 0; m < ids.length; m++) {
+      if (seen[ids[m]] || answeredIds[ids[m]]) continue;
+      ordered.push({
+        role: "tool",
+        tool_call_id: ids[m],
+        content: TOOL_CALL_INCOMPLETE_CONTENT,
+      });
+      answeredIds[ids[m]] = true;
+    }
+    out.push(row);
+    for (var p = 0; p < ordered.length; p++) out.push(ordered[p]);
+    for (var q = 0; q < interlopers.length; q++) out.push(interlopers[q]);
+    i = j;
+  }
+  return out;
+}
+
 function toOpenAIMessages(msgs) {
   if (!Array.isArray(msgs)) {
     return [{ role: "user", content: String(msgs || "") }];
@@ -556,5 +687,7 @@ function dropEmptyAssistantMessages(messages) {
 exports.toOpenAIMessages = toOpenAIMessages;
 exports.dropEmptyAssistantMessages = dropEmptyAssistantMessages;
 exports.repairToolCallIds = repairToolCallIds;
+exports.repairOrphanedToolCalls = repairOrphanedToolCalls;
+exports.TOOL_CALL_INCOMPLETE_CONTENT = TOOL_CALL_INCOMPLETE_CONTENT;
 exports.toolCallIdOf = toolCallIdOf;
 exports.sanitizeToolCallIds = sanitizeToolCallIds;

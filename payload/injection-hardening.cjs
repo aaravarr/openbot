@@ -233,15 +233,19 @@ function personOpenedPermission(input, options) {
   var botId = stringValue(values && values.botId);
   var conversationId = stringValue(values && values.conversationId);
   var epochId = stringValue(values && (values.epochId || values.epoch));
-  if (!botId) return fail("no_bot_id", !trusted);
-  if (!conversationId) return fail("missing_conversation_id", !trusted);
-  if (requireEpoch && !epochId) return fail("missing_epoch", !trusted);
+  if (!botId) return fail(trusted ? "trusted_context_missing_bot_id" : "no_bot_id_in_request", !trusted);
+  if (!conversationId) return fail(trusted ? "trusted_context_missing_conversation_id" : "missing_conversation_id", !trusted);
+  if (requireEpoch && !epochId) return fail(trusted ? "trusted_context_missing_epoch" : "missing_epoch", !trusted);
   if (values && (values.groupFlag === true || values.chatType === "group" || values.isGroup === true)) return fail("group_chat", false);
   if (values && values.hidden === true) return fail("hidden_context", false);
   if (values && values.isSubagent === true) return fail("subagent_context", false);
   if (values && values.isSilenceAllowed === true) return fail("silence_allowed", false);
   if (values && (values.isRoutine === true || values.routine === true || values.automation === true || values.isAutomation === true)) return fail("routine_or_automation", false);
   if (trusted) {
+    // The early identity checks above already emit the precise
+    // trusted_context_missing_* reasons: trust covers the turn gates, not
+    // identity itself — a host context that omits botId fails closed
+    // (plan §9.1), it never borrows an untrusted id.
     if (values.hidden !== false || values.isSubagent !== false || values.isSilenceAllowed !== false || values.isRoutine !== false) return fail("unknown_identity", false);
     if (values.requestSource !== "person") return fail(values.requestSource ? "non_person" : "unknown_identity", false);
     if (!values.chatType || values.chatType === "group") return fail("unknown_chat_type", false);
@@ -756,6 +760,9 @@ function makeLogMeta(config, permission) {
     mode: config.mode,
     family: undefined,
     identityGate: permission ? permission.identityGate : undefined,
+    // The request log sanitizes the identityGateResult key (plan §12), so the
+    // gate verdict must carry that name to reach the control page.
+    identityGateResult: permission ? permission.identityGate : undefined,
     skipReason: permission && !permission.eligible ? permission.skipReason : undefined,
     l2Eligible: false,
     l2Attempted: false,

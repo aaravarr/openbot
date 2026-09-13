@@ -56,7 +56,11 @@ export async function guardCustom(deps: SupervisorDeps, opts: GuardOpts = {}): P
   if (!modeDrift && !wrapDrift) {
     return { modeRepaired: false, wrapRepaired: false, ok: true, detail: "healthy", reconcile: undefined };
   }
-  const repairOpts: ReconcileOpts = { source: opts.source ?? "guard" };
+  // keepGuard: a repair always changes the wrap bytes, and the pid in the
+  // guard pidfile is the daemon (or the one-shot tick's sibling daemon) that
+  // must survive it. Only an install/update intentionally replaces the
+  // daemon, and install.sh restarts it from the new tree.
+  const repairOpts: ReconcileOpts = { source: opts.source ?? "guard", keepGuard: true };
   const result = await reconcile(desired, deps, repairOpts);
   if (result.kind === "refused") {
     return { modeRepaired: false, wrapRepaired: false, ok: false, detail: "refused", reconcile: result };

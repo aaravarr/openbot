@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseInstallCommand } from "../parse/argv.ts";
+import { OPENBOT_MARKER } from "../domain/types.ts";
+import { customBoxFromProvider, parseInstallCommand, parseUpstreamOrigin } from "../parse/argv.ts";
 import { type FsDeps, type ProcDeps, parseOwnedPid } from "./procs.ts";
 import { boxPathsFrom, joinAbs, type BoxPaths } from "./paths.ts";
 import {
   DEFAULT_GUARD_INTERVAL_MINUTES,
   GUARD_BOUNCE_GRACE_TICKS,
+  GUARD_DAEMON_SOURCE,
   GUARD_LOG_MAX_BYTES,
   type GuardDaemonOutcome,
   type GuardLogRow,
@@ -14,9 +16,11 @@ import {
   runGuardDaemon,
   runGuardTick,
   runGuardTickWithHopHealth,
+  startGuardDaemon,
   stopGuardDaemon,
 } from "./guard-daemon.ts";
-import type { GuardResult } from "./guard.ts";
+import { guardCustom, type GuardResult } from "./guard.ts";
+import { compileCustomPlan, planToJson } from "./plan.ts";
 import { payloadFingerprint } from "../host/payload-fingerprint.ts";
 import { armDeferredHostBounce } from "./reconcile.ts";
 
@@ -596,3 +600,61 @@ test("a wrap repair without a pending marker resets the grace counter", async ()
   assert.deepEqual(ctx.procs.stopped, []);
   assert.equal(guardLogRows(ctx)[1]?.wrapBounce, "bounced");
 });
+
+const STOCK = `function createProtoSessionProvider(client) {
+  return { getSession: function () { return 1; } };
+}
+`;
+
+const ORIGIN = parseUpstreamOrigin("https://open.bigmodel.cn/api/paas/v4");
+
+/** The daemon's own pidfile content, written by runGuardDaemon itself. */
+function ownPidfile(ctx: ReturnType<typeof setup>): void {
+  ctx.fs.write(ctx.paths.guardPid, `${String(process.pid)}\n`);
+}
+
+/**
+ * A custom box whose host file is stock-unmarked, so the next tick repairs the
+ * wrap. The UI service is already ours (live pidfile plus open port) so the
+ * repair adopts it instead of restarting it: this is about the guard.
+ */
+function driftingCustomBox(ctx: ReturnType<typeof setup>): void {
+  ctx.fs.write(ctx.paths.hostMain, STOCK);
+  ctx.fs.write(ctx.paths.mode, "custom\n");
+  ctx.fs.write(
+    ctx.paths.plan,
+    planToJson(
+      compileCustomPlan(
+        customBoxFromProvider({ paths: ctx.paths, origin: ORIGIN, name: "Zhipu", modelSlug: "glm-5.3-flash" }),
+      ),
+    ),
+  );
+  ctx.fs.write(ctx.paths.uiPid, "43\n");
+  ctx.procs.live.add(43);
+}
+
+test("a wrap repair tick leaves the daemon that ran it alive", async () => {
+  // The production failure, end to end: the pidfile names this process (as it
+  // does for the real daemon), the box is custom, and the host is stock, so
+  // this tick repairs the wrap. The repair changes the wrap bytes, which used
+  // to SIGTERM that very pid -- the daemon died inside its own successful
+  // repair and the log went silent for hours.
+  const ctx = setup(true);
+  driftingCustomBox(ctx);
+  ownPidfile(ctx);
+  const stderr: string[] = [];
+  await runGuardTickWithHopHealth(ctx.deps, {
+    runOnce: (d) => guardCustom(d, { source: GUARD_DAEMON_SOURCE }),
+    stderr: (line) => stderr.push(line),
+    hopHealth: false,
+  });
+  assert.equal(ctx.procs.stopped.includes(process.pid), false);
+  assert.equal(ctx.fs.read(ctx.paths.guardPid), `${String(process.pid)}\n`);
+  assert.equal(ctx.fs.read(ctx.paths.hostMain)?.includes(OPENBOT_MARKER), true);
+  const rows = guardLogRows(ctx);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.detail, "repaired");
+  assert.equal(rows[0]?.wrapRepaired, true);
+  assert.deepEqual(stderr, []);
+});
+

@@ -1,5 +1,6 @@
 import { guardCustom, type GuardResult } from "./guard.ts";
 import { type SupervisorDeps } from "./observe.ts";
+import { joinAbs } from "./paths.ts";
 import { parseOwnedPid } from "./procs.ts";
 import { appendGuardAudit, applyDeferredHostBounce, finalizeHostRunning, pendingHostBounce } from "./reconcile.ts";
 import { DEFAULT_HOP_FAILURE_THRESHOLD, runHopHealthCheck } from "./hop-health.ts";
@@ -107,6 +108,44 @@ function releaseGuardPidfileFor(deps: SupervisorDeps, pid: number): void {
 
 function releaseOwnPidfile(deps: SupervisorDeps): void {
   releaseGuardPidfileFor(deps, process.pid);
+}
+
+/**
+ * Start the detached guard daemon the way install.sh starts it:
+ * `node --experimental-strip-types src/cli.ts guard --daemon` with this box's
+ * own --host-main/--sand-data, detached, default interval (5 minutes).
+ *
+ * The pidfile is deliberately NOT pre-written for the child. The daemon
+ * publishes its own pid and refuses to start while that pidfile names a live
+ * process, so a pid written by the parent would be read straight back as an
+ * existing daemon (itself) and the spawn would exit without patrolling; it
+ * would also overwrite the lock a concurrently starting daemon already holds.
+ * Leaving the file alone keeps that lock as the single authority, exactly as
+ * install.sh does it.
+ *
+ * Whether to start at all is the caller's decision (see guard-watch.ts); this
+ * only spawns. The child's stderr shares the service log: its structured rows
+ * go to openbot-guard.log, and keeping plain text out of that JSONL file is
+ * what lets every line of it stay parseable.
+ */
+export function startGuardDaemon(deps: SupervisorDeps): number {
+  deps.fs.mkdirp(deps.paths.sandData);
+  return deps.procs.start({
+    argv: [
+      "--experimental-strip-types",
+      joinAbs(deps.paths.repoRoot, "src/cli.ts"),
+      "guard",
+      "--daemon",
+      "--host-main",
+      deps.paths.hostMain,
+      "--sand-data",
+      deps.paths.sandData,
+    ],
+    env: { ...process.env },
+    log: deps.paths.uiLog,
+    pidFile: deps.paths.guardPid,
+    writePidFile: false,
+  });
 }
 
 export function appendGuardLogLine(

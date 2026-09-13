@@ -35,6 +35,14 @@ export type ProcDeps = {
     env: NodeJS.ProcessEnv;
     log: AbsPath;
     pidFile: AbsPath;
+    /**
+     * Whether the child's pid may be written to `pidFile` on its behalf.
+     * Defaults to true. False is for a child that publishes that same pidfile
+     * itself (the guard daemon): a pid written before the child runs makes the
+     * child read a live owner back -- itself -- and refuse to start, and it
+     * would overwrite the lock an already-running daemon holds.
+     */
+    writePidFile?: boolean;
   }): OwnedPid;
   stop(pid: OwnedPid): void;
   hostPids(hostMain: AbsPath): OwnedPid[];
@@ -275,7 +283,9 @@ export function nodeProcs(): ProcDeps {
       }
       child.unref();
       const pid = parseOwnedPid(child.pid);
-      fs.writeFileSync(input.pidFile, `${String(pid)}\n`, { encoding: "utf8", mode: 0o644 });
+      if (input.writePidFile !== false) {
+        fs.writeFileSync(input.pidFile, `${String(pid)}\n`, { encoding: "utf8", mode: 0o644 });
+      }
       return pid;
     },
     stop(pid) {

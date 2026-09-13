@@ -62,6 +62,8 @@ function fakeProcs(state: {
   opengrokHop?: boolean;
   syntaxFail?: boolean;
   guardRunning?: boolean;
+  /** Exact pid in the guard pidfile; wins over guardRunning. */
+  guardPid?: number;
 }): FakeProcs {
   let serviceOurs = state.serviceOurs === true;
   let serviceForeign = state.serviceForeign === true;
@@ -69,7 +71,7 @@ function fakeProcs(state: {
   let hopPid: number | undefined = leftoverHop ? 42 : undefined;
   let orphanHop = state.orphanHop === true;
   let uiPid: number | undefined = serviceOurs || state.staleUi === true ? 43 : undefined;
-  let guardPid: number | undefined = state.guardRunning === true ? 77 : undefined;
+  let guardPid: number | undefined = state.guardPid ?? (state.guardRunning === true ? 77 : undefined);
   const started: string[] = [];
   const stopped: number[] = [];
   const termed: number[] = [];
@@ -440,6 +442,46 @@ test("official restore stops a running guard daemon", async () => {
   assert.equal(ctx.procs.stopped.includes(77), true);
   assert.equal(ctx.fs.exists(ctx.paths.guardPid), false);
   assert.equal(ctx.fs.read(ctx.paths.mode)?.trim(), "official");
+});
+
+test("a guard repair never stops the daemon that is performing it", async () => {
+  // Regression for the production failure: a repair always rewrites the wrap,
+  // so wrapBytesChanged is true on every repair, and the pid in the guard
+  // pidfile is the daemon doing the repairing. The old unconditional SIGTERM
+  // made each successful repair the daemon's last act -- the log showed a
+  // "repaired" row and then 68 to 522 minutes of silence.
+  const ctx = setup(STOCK, { guardRunning: true });
+  const result = await reconcile(zhipu(ctx.paths), ctx.deps, { source: "guard-daemon", keepGuard: true });
+  assert.equal(result.kind, "ok");
+  if (result.kind === "ok") {
+    assert.equal(result.wrapBytesChanged, true);
+  }
+  assert.equal(ctx.procs.stopped.includes(77), false);
+  assert.equal(ctx.procs.readPidFile(ctx.paths.guardPid), 77);
+});
+
+test("an install that replaces the tree still stops the old guard daemon", async () => {
+  // The other half of the same conditional: a real install/update swaps the
+  // whole tree, so the daemon of the previous tree must go. install.sh stopped
+  // it before installing and starts a fresh one from the new tree afterwards.
+  const ctx = setup(STOCK, { guardRunning: true });
+  const result = await reconcile(zhipu(ctx.paths), ctx.deps, { source: "cli:install" });
+  assert.equal(result.kind, "ok");
+  if (result.kind === "ok") {
+    assert.equal(result.wrapBytesChanged, true);
+  }
+  assert.equal(ctx.procs.stopped.includes(77), true);
+});
+
+test("a repair never SIGTERMs a guard pidfile that names this process", async () => {
+  // Second line of defence for a caller that forgets keepGuard: the pidfile
+  // names us, and killing it would end the reconcile that is still writing.
+  const ctx = setup(STOCK, { guardPid: process.pid });
+  ctx.fs.write(ctx.paths.guardPid, `${String(process.pid)}\n`);
+  const result = await reconcile(zhipu(ctx.paths), ctx.deps, { source: "guard" });
+  assert.equal(result.kind, "ok");
+  assert.equal(ctx.procs.stopped.includes(process.pid), false);
+  assert.equal(ctx.fs.exists(ctx.paths.guardPid), true);
 });
 
 test("custom without a wrap change leaves a running guard daemon alone", async () => {

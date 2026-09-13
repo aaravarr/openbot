@@ -53,6 +53,14 @@ export type ReconcileOpts = {
    * marker is armed instead; `finalize-host` applies it once the host is idle.
    */
   readonly deferHostBounce?: boolean;
+  /**
+   * The caller IS the guard repair: the pid in the guard pidfile names the
+   * process running this reconcile, and nothing restarts it when the repair
+   * is done. Never SIGTERM it. A real install/update leaves this unset and
+   * still stops the daemon of the tree it replaces (install.sh stops it
+   * before installing and starts a fresh one from the new tree afterwards).
+   */
+  readonly keepGuard?: boolean;
 };
 
 export type SharedEnv = {
@@ -580,15 +588,43 @@ function currentPayloadFingerprint(deps: SupervisorDeps): string {
 }
 
 /**
- * A wrap change means a new tree was deployed: a guard daemon from the
- * previous tree would keep patrolling with old code. SIGTERM it here;
- * install.sh starts a fresh daemon from the new tree right after, and
- * `openbot guard --daemon` does the same for CLI-direct installs.
+ * Two very different events both end up as `wrapBytesChanged`, and only one of
+ * them orphans the daemon:
+ *
+ * - A real install/update deploys a NEW tree. A daemon from the previous tree
+ *   would keep patrolling with old code, so it is SIGTERMed here. The caller
+ *   can afford that because it owns the replacement: install.sh stops the old
+ *   daemon itself (`stop_old_guard_for_update`) and starts a fresh one from
+ *   the new tree right after, and `openbot guard --daemon` does the same for
+ *   CLI-direct installs.
+ * - A guard REPAIR rewrites the host file back to the wrap, so the bytes
+ *   change on every repair (a peeled stock host is re-wrapped, a stale payload
+ *   stamp is refreshed). The tree is the same one, and the process doing the
+ *   repair IS the daemon the pidfile names. Nobody restarts it.
+ *
+ * The bytes cannot tell those apart, so the caller must: `opts.keepGuard`
+ * marks the repair. Without it the old unconditional SIGTERM made every
+ * successful repair kill its own guard -- the production log ends each repair
+ * row and then goes silent for hours (190, 422, 68, 522 minutes) until someone
+ * restarted the box or the daemon by hand.
+ *
+ * Official is a third case and stays unconditional: an official box must never
+ * keep a custom guard patrolling (it treats official mode as drift and flips
+ * it back to custom on its next tick).
  */
-function stopStaleGuardForUpdate(deps: SupervisorDeps): void {
+function stopStaleGuardForUpdate(deps: SupervisorDeps, opts: ReconcileOpts): void {
+  if (opts.keepGuard === true) {
+    return;
+  }
   const pid = deps.procs.readPidFile(deps.paths.guardPid);
   if (pid === undefined || !deps.procs.pidAlive(pid)) {
     deps.fs.remove(deps.paths.guardPid);
+    return;
+  }
+  // Belt and braces for a caller that forgot the opt: a pidfile naming THIS
+  // process is this process, and SIGTERMing it would end the reconcile that is
+  // still writing the repair it just made. The pidfile stays ours.
+  if (pid === process.pid) {
     return;
   }
   deps.procs.stop(parseOwnedPid(pid));
@@ -821,10 +857,11 @@ async function finishOk(
   // non-empty catalog on disk the guard treats official mode as drift and
   // reconciles back to custom on the next tick. install.sh only starts the
   // daemon for custom installs, so stopping it here keeps official stable.
-  // Custom keeps the previous conditional: only a new tree (wrap change)
-  // orphans the daemon from the previous tree.
+  // Custom only stops the daemon for a new tree (wrap change) and never for
+  // the guard's own repair: see stopStaleGuardForUpdate for why the bytes
+  // alone cannot tell those apart.
   if (desired.kind === "official" || wrapBytesChanged) {
-    stopStaleGuardForUpdate(deps);
+    stopStaleGuardForUpdate(deps, opts);
   }
   // A wrap change normally bounces the stale host here. A bot self-upgrade
   // passes deferHostBounce: the caller is a bot turn living inside that very

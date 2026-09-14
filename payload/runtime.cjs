@@ -453,6 +453,26 @@ function conversationIdFromCtx(ctx) {
   return "";
 }
 
+// TEMPORARY DIAGNOSTIC (2026-09-14): the ctx-based extraction still reports
+// missing_conversation_id on production traffic, so the real shape of the turn
+// arguments has to be observed instead of assumed. Logs key NAMES plus any
+// id-shaped values (truncated) for the turn ctx and options; never message text.
+function identityProbe(value) {
+  if (value === null || value === undefined) return String(value);
+  if (typeof value !== "object") return typeof value;
+  var keys = Object.keys(value);
+  var picked = {};
+  for (var i = 0; i < keys.length && i < 40; i++) {
+    var k = keys[i];
+    if (!/id|conversation|session|transcript|chat|group/i.test(k)) continue;
+    var v = value[k];
+    if (typeof v === "string") picked[k] = v.length > 48 ? v.slice(0, 48) + "…" : v;
+    else if (typeof v === "number" || typeof v === "boolean") picked[k] = v;
+    else if (v && typeof v === "object") picked[k] = "{obj:" + Object.keys(v).slice(0, 10).join(",") + "}";
+  }
+  return { keys: keys.slice(0, 40), picked: picked };
+}
+
 // Accepts both shapes that reach the stamping site: the plain id string a
 // factory-time resolver produces, and an object ({ conversationId }).
 function conversationIdFromIdentity(identity) {
@@ -1069,6 +1089,10 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2, identity
       // ctx first: that is where the stock harness puts the conversation id.
       // The factory-time identity stays as a fallback for direct callers.
       var hopConversationId = conversationIdFromCtx(ctx) || conversationIdFromIdentity(identity);
+      if (!hopConversationId) {
+        // TEMPORARY DIAGNOSTIC: observe the real argument shapes once.
+        try { log("identity-probe ctx=" + JSON.stringify(identityProbe(ctx)) + " options=" + JSON.stringify(identityProbe(options2)) + " factory=" + JSON.stringify(identityProbe(identity))); } catch (err) { /* probe is best-effort */ }
+      }
       if (hopConversationId) {
         body.conversationId = hopConversationId;
         body.epochId = deriveEpochId(hopConversationId, body.messages);

@@ -457,7 +457,8 @@ function conversationIdFromCtx(ctx) {
 // missing_conversation_id on production traffic, so the real shape of the turn
 // arguments has to be observed instead of assumed. Logs key NAMES plus any
 // id-shaped values (truncated) for the turn ctx and options; never message text.
-function identityProbe(value) {
+function identityProbe(value, depth) {
+  depth = depth || 0;
   if (value === null || value === undefined) return String(value);
   if (typeof value !== "object") return typeof value;
   if (value instanceof Map) {
@@ -469,11 +470,24 @@ function identityProbe(value) {
     return { map: entries.slice(0, 25) };
   }
   var keys = Object.keys(value);
+  var out = { keys: keys.slice(0, 40) };
+  // The turn context is a chain of frames; the values live on one of them (the
+  // harness builds it with .with(key, value) on a parent), so walk the chain.
+  if (value.values instanceof Map) out.values = identityProbe(value.values, depth + 1);
+  else if (value.values && typeof value.values === "object") out.values = Object.keys(value.values).slice(0, 20);
+  else out.valuesType = typeof value.values;
+  if (value.parent && typeof value.parent === "object" && depth < 6) out.parent = identityProbe(value.parent, depth + 1);
+  else if (Object.prototype.hasOwnProperty.call(value, "parent")) out.parentType = typeof value.parent;
+  return out;
+}
+
+function identityProbeLegacy(value) {
+  if (value === null || value === undefined) return String(value);
+  if (typeof value !== "object") return typeof value;
+  var keys = Object.keys(value);
   var picked = {};
-  // Descend one level into a container that commonly holds the turn values.
   if (value.values instanceof Map || (value.values && typeof value.values === "object")) {
-    picked.values = identityProbe(value.values);
-    if (Object.prototype.hasOwnProperty.call(value, "parent")) picked.parent = typeof value.parent;
+    picked.values = identityProbe(value.values, 1);
     return { keys: keys.slice(0, 40), picked: picked };
   }
   for (var i = 0; i < keys.length && i < 40; i++) {
@@ -1105,7 +1119,7 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2, identity
       var hopConversationId = conversationIdFromCtx(ctx) || conversationIdFromIdentity(identity);
       if (!hopConversationId) {
         // TEMPORARY DIAGNOSTIC: observe the real argument shapes once.
-        try { log("identity-probe ctx=" + JSON.stringify(identityProbe(ctx)) + " options=" + JSON.stringify(identityProbe(options2)) + " factory=" + JSON.stringify(identityProbe(identity))); } catch (err) { /* probe is best-effort */ }
+        try { log("identity-probe ctx=" + JSON.stringify(identityProbe(ctx, 0)) + " options=" + JSON.stringify(identityProbe(options2, 0)) + " factory=" + JSON.stringify(identityProbe(identity, 0))); } catch (err) { /* probe is best-effort */ }
       }
       if (hopConversationId) {
         body.conversationId = hopConversationId;

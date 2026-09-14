@@ -460,8 +460,22 @@ function conversationIdFromCtx(ctx) {
 function identityProbe(value) {
   if (value === null || value === undefined) return String(value);
   if (typeof value !== "object") return typeof value;
+  if (value instanceof Map) {
+    var entries = [];
+    value.forEach(function (v, k) {
+      var name = typeof k === "string" ? k : String((k && (k.description || k.name || k.id)) || "");
+      entries.push(name.slice(0, 40) + "=" + (typeof v === "string" ? (v.length > 48 ? v.slice(0, 48) + "…" : v) : typeof v));
+    });
+    return { map: entries.slice(0, 25) };
+  }
   var keys = Object.keys(value);
   var picked = {};
+  // Descend one level into a container that commonly holds the turn values.
+  if (value.values instanceof Map || (value.values && typeof value.values === "object")) {
+    picked.values = identityProbe(value.values);
+    if (Object.prototype.hasOwnProperty.call(value, "parent")) picked.parent = typeof value.parent;
+    return { keys: keys.slice(0, 40), picked: picked };
+  }
   for (var i = 0; i < keys.length && i < 40; i++) {
     var k = keys[i];
     if (!/id|conversation|session|transcript|chat|group/i.test(k)) continue;

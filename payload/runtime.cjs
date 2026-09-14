@@ -443,14 +443,38 @@ function extractConversationIdentity(args) {
 // modelConfig, inferenceReason)` has no conversation field at all, which is why
 // reading only the factory args left every production turn with an empty
 // identity (and the hop reporting missing_conversation_id 272/272).
-function conversationIdFromCtx(ctx) {
-  if (!ctx || typeof ctx !== "object") return "";
-  var keys = ["conversationId", "conversation_id", "conversationGroupId", "conversation_group_id", "sessionId", "session_id", "chatId", "chat_id"];
-  for (var i = 0; i < keys.length; i++) {
-    var value = ctx[keys[i]];
-    if (typeof value === "string" && value) return value;
+var CONVERSATION_ID_KEY = /^(conversationId|conversation_id|conversationGroupId|conversation_group_id|transcriptId|transcript_id|chatId|chat_id|sessionId|session_id|roomId|room_id)$/i;
+
+// The turn ctx is a chain of frames (observed keys: parent, values, name,
+// signal) and the values live on one of them, so walk the chain rather than
+// guessing a single level. Handles both plain objects and the Map the harness
+// builds with `.with(key, value)`.
+function conversationIdFromContainer(container, depth) {
+  if (!container || depth > 6) return "";
+  if (container instanceof Map) {
+    var found = "";
+    container.forEach(function (value, key) {
+      if (found || typeof value !== "string" || !value) return;
+      var name = typeof key === "string" ? key : String((key && (key.description || key.name)) || "");
+      if (CONVERSATION_ID_KEY.test(name)) found = value;
+    });
+    return found;
+  }
+  if (typeof container !== "object") return "";
+  for (var key in container) {
+    if (!Object.prototype.hasOwnProperty.call(container, key)) continue;
+    if (CONVERSATION_ID_KEY.test(key) && typeof container[key] === "string" && container[key]) return container[key];
+  }
+  var nested = ["values", "parent", "context", "middleware"];
+  for (var i = 0; i < nested.length; i++) {
+    var found2 = conversationIdFromContainer(container[nested[i]], depth + 1);
+    if (found2) return found2;
   }
   return "";
+}
+
+function conversationIdFromCtx(ctx) {
+  return conversationIdFromContainer(ctx, 0);
 }
 
 // TEMPORARY DIAGNOSTIC (2026-09-14): the ctx-based extraction still reports

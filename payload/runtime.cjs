@@ -435,6 +435,32 @@ function extractConversationIdentity(args) {
 //   epoch; that is a redrive of the same turn, so sharing is correct.
 // - The epoch is a digest of box-owned values only (conversation id, host
 //   transcript text). It is not a secret and confers no trust.
+//
+// The turn ctx is where the identity actually shows up. The stock harness calls
+// the session's stream as `.stream(ctx, invocationId, tools, options)` and that
+// ctx carries `conversationId` (and the group it belongs to). The session
+// factory args do NOT: `createProtoSessionProvider(client, requestedModel,
+// modelConfig, inferenceReason)` has no conversation field at all, which is why
+// reading only the factory args left every production turn with an empty
+// identity (and the hop reporting missing_conversation_id 272/272).
+function conversationIdFromCtx(ctx) {
+  if (!ctx || typeof ctx !== "object") return "";
+  var keys = ["conversationId", "conversation_id", "conversationGroupId", "conversation_group_id", "sessionId", "session_id", "chatId", "chat_id"];
+  for (var i = 0; i < keys.length; i++) {
+    var value = ctx[keys[i]];
+    if (typeof value === "string" && value) return value;
+  }
+  return "";
+}
+
+// Accepts both shapes that reach the stamping site: the plain id string a
+// factory-time resolver produces, and an object ({ conversationId }).
+function conversationIdFromIdentity(identity) {
+  if (typeof identity === "string") return identity;
+  if (identity && typeof identity === "object" && typeof identity.conversationId === "string") return identity.conversationId;
+  return "";
+}
+
 function deriveEpochId(conversationId, messages) {
   var rows = Array.isArray(messages) ? messages : [];
   function text(value) {
@@ -1040,7 +1066,9 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2, identity
       // continuity). Observable only: the hop keeps these in the uncertain
       // observable-fallback lane, and openUpstream strips them before the
       // upstream provider ever sees the body.
-      var hopConversationId = identity && typeof identity.conversationId === "string" ? identity.conversationId : "";
+      // ctx first: that is where the stock harness puts the conversation id.
+      // The factory-time identity stays as a fallback for direct callers.
+      var hopConversationId = conversationIdFromCtx(ctx) || conversationIdFromIdentity(identity);
       if (hopConversationId) {
         body.conversationId = hopConversationId;
         body.epochId = deriveEpochId(hopConversationId, body.messages);
@@ -1129,6 +1157,8 @@ function wrapExecutor(exec, resolveAgentFn) {
           // with the live plan row plus the conversation id.
           var live = resolveAgentFn();
           var identity = live && live.conversationIdentity ? live.conversationIdentity : undefined;
+          // hopFullStream prefers the ctx conversationId (the real harness
+          // source) and falls back to this factory-time value.
           return hopFullStream(target, resolveAgentFn, ctx, invocationId, tools, options2, identity);
         };
       }

@@ -495,6 +495,45 @@ test("hopFullStream posts stream true and maps a JSON fallback", async () => {
   });
 });
 
+test("hopFullStream stamps the conversation identity the harness puts in ctx", async () => {
+  // The stock harness calls \.stream(ctx, invocationId, tools, options) and the
+  // ctx carries conversationId; the session factory args carry none. Reading
+  // only the factory args left every production turn with an empty identity.
+  const conversationId = "3f1c0d2e-4a5b-4c6d-8e9f-0a1b2c3d4e5f";
+  await withHopServer({
+    choices: [{ finish_reason: "stop", message: { role: "assistant", content: "ok" } }],
+  }, async (runtime, seen) => {
+    const { fullStream } = runtime.hopFullStream(
+      { getMessages: () => [{ role: "user", content: "hello" }] },
+      { modelId: "glm-5.3-flash", maxOutputTokens: 4096 },
+      { conversationId },
+      "inv",
+      [],
+    );
+    for await (const part of fullStream) void part;
+    assert.equal(seen[0]?.conversationId, conversationId);
+    assert.equal(typeof seen[0]?.epochId, "string");
+    assert.notEqual(String(seen[0]?.epochId), "");
+  });
+});
+
+test("hopFullStream stamps nothing when no conversation identity is observable", async () => {
+  await withHopServer({
+    choices: [{ finish_reason: "stop", message: { role: "assistant", content: "ok" } }],
+  }, async (runtime, seen) => {
+    const { fullStream } = runtime.hopFullStream(
+      { getMessages: () => [{ role: "user", content: "hello" }] },
+      { modelId: "glm-5.3-flash", maxOutputTokens: 4096 },
+      { conversationGroupId: "" },
+      "inv",
+      [],
+    );
+    for await (const part of fullStream) void part;
+    assert.equal(seen[0]?.conversationId, undefined);
+    assert.equal(seen[0]?.epochId, undefined);
+  });
+});
+
 test("hopFullStream leaves leftover stop text as text, not SendToUser", async () => {
   const leftover = "Got it — you're connected, and here's your account and balance.";
   await withHopServer({

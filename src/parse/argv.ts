@@ -104,7 +104,7 @@ export function parseExposeToken(raw: string | undefined): Expose | undefined {
   throw new Error("OpenBot: --tunnel is cloudflare or off");
 }
 
-/** `--interval` minutes for the guard daemon: default 5, clamped to 1-60. */
+/** `--interval` minutes for the guard daemon: default 1, clamped to 1-60. */
 export function clampGuardInterval(raw: string | undefined): number {
   if (raw === undefined) {
     return DEFAULT_GUARD_INTERVAL_MINUTES;

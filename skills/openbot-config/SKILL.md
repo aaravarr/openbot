@@ -199,6 +199,8 @@ curl -sS -X POST http://127.0.0.1:9280/api/save \
 
 Off: `"expose":"off"`. CLI: `openbot tunnel on`, `openbot tunnel off`, `openbot tunnel status`.
 
+A `cloudflare-quick` URL is bound to the cloudflared process in `openbot-tunnel.pid`: while that pid is alive the URL is stable, and reconcile never probes the public URL or rotates it. A new URL happens only when that process died (the UI service restarts it within a minute and logs `tunnel.rotate` in `openbot-events.jsonl`) or when the user turns the tunnel off and on. Do not "fix" a link by re-running on/off: that always costs a new hostname.
+
 ### Logs
 
 `openbot-logs.json`: `loggingEnabled` (default false), `logBodies` (false), `logBodiesOnError` (true), `logRetentionDays` (7; 1–365), `maxBodyCaptureBytes` (65536; 1024–1048576), `maxRecords` (2000; 1–10000).

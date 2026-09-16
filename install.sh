@@ -550,9 +550,31 @@ fi
 # daemon makes a second start a no-op (pidfile lock), so re-running install
 # stays idempotent. nohup + detached stdio keep the daemon alive after this
 # script exits.
+#
+# The patrol interval is passed explicitly. Without it every install reset the
+# daemon to the default, so a box tuned to a faster (or slower) patrol silently
+# lost that setting. Precedence, highest first: OPENBOT_GUARD_INTERVAL (minutes),
+# the value persisted in $DATA/openbot-guard-interval, the CLI default. One
+# minute is the point of the patrol: it reads two files, and the drift window it
+# closes is the time the box sits on stock Grok after a repair is due.
+guard_interval_arg() {
+  local interval="${OPENBOT_GUARD_INTERVAL:-}"
+  if ! [[ "$interval" =~ ^[0-9]+$ ]]; then
+    interval="$(tr -d '[:space:]' <"$DATA/openbot-guard-interval" 2>/dev/null || true)"
+  fi
+  if [[ "$interval" =~ ^[0-9]+$ ]] && [[ "$interval" -ge 1 ]]; then
+    printf '%s' "$interval"
+  fi
+}
 if [[ "$(tr -d '[:space:]' <"$DATA/openbot-mode" 2>/dev/null)" == "custom" ]]; then
-  nohup node --experimental-strip-types src/cli.ts guard --daemon \
-    --host-main "$HOST" --sand-data "$DATA" </dev/null >/dev/null 2>&1 &
+  GUARD_INTERVAL="$(guard_interval_arg)"
+  if [[ -n "$GUARD_INTERVAL" ]]; then
+    nohup node --experimental-strip-types src/cli.ts guard --daemon \
+      --host-main "$HOST" --sand-data "$DATA" --interval "$GUARD_INTERVAL" </dev/null >/dev/null 2>&1 &
+  else
+    nohup node --experimental-strip-types src/cli.ts guard --daemon \
+      --host-main "$HOST" --sand-data "$DATA" </dev/null >/dev/null 2>&1 &
+  fi
   disown 2>/dev/null || true
 fi
 

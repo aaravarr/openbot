@@ -23,6 +23,13 @@ export type FsDeps = {
    * marker) fall back to a plain write when it is absent.
    */
   rename?(from: AbsPath, to: AbsPath): void;
+  /**
+   * Append without rewriting the file. Optional only for test doubles: the
+   * real implementation always provides it, and callers that share a file with
+   * another writer (the events channel, a running cloudflared's log) fall back
+   * to read-then-write when it is absent.
+   */
+  append?(path: AbsPath, body: string, mode?: number): void;
 };
 
 export type ProcDeps = {
@@ -88,6 +95,9 @@ export function nodeFs(): FsDeps {
     },
     write(path, body, mode = 0o644) {
       fs.writeFileSync(path, body, { encoding: "utf8", mode });
+    },
+    append(path, body, mode = 0o644) {
+      fs.appendFileSync(path, body, { encoding: "utf8", mode });
     },
     copy(from, to) {
       fs.copyFileSync(from, to);

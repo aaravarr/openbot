@@ -560,7 +560,10 @@ fi
 guard_interval_arg() {
   local interval="${OPENBOT_GUARD_INTERVAL:-}"
   if ! [[ "$interval" =~ ^[0-9]+$ ]]; then
-    interval="$(tr -d '[:space:]' <"$DATA/openbot-guard-interval" 2>/dev/null || true)"
+    interval=""
+    if [[ -f "$DATA/openbot-guard-interval" ]]; then
+      interval="$(tr -d '[:space:]' <"$DATA/openbot-guard-interval" 2>/dev/null || true)"
+    fi
   fi
   if [[ "$interval" =~ ^[0-9]+$ ]] && [[ "$interval" -ge 1 ]]; then
     printf '%s' "$interval"

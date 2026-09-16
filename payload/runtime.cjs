@@ -446,83 +446,83 @@ function extractConversationIdentity(args) {
 var CONVERSATION_ID_KEY = /^(conversationId|conversation_id|conversationGroupId|conversation_group_id|transcriptId|transcript_id|chatId|chat_id|sessionId|session_id|roomId|room_id)$/i;
 
 // The turn ctx is a chain of frames (observed keys: parent, values, name,
-// signal) and the values live on one of them, so walk the chain rather than
-// guessing a single level. Handles both plain objects and the Map the harness
-// builds with `.with(key, value)`.
-function conversationIdFromContainer(container, depth) {
-  if (!container || depth > 6) return "";
-  if (container instanceof Map) {
-    var found = "";
-    container.forEach(function (value, key) {
-      if (found || typeof value !== "string" || !value) return;
-      var name = typeof key === "string" ? key : String((key && (key.description || key.name)) || "");
-      if (CONVERSATION_ID_KEY.test(name)) found = value;
-    });
-    return found;
-  }
-  if (typeof container !== "object") return "";
+// signal), and the identity lives on an ANCESTOR frame, never on the frame the
+// wrapped `.stream(ctx, ...)` call site receives. That is the harness
+// ContextImpl contract (../packages/context/dist/core.js):
+//
+//   - `.with(key, value)` mints a frame whose `values` Map is a copy of its
+//     DIRECT parent's values plus the new key;
+//   - `.withName(name)` mints a frame whose `values` is an EMPTY Map, so every
+//     value below it stops being visible from above;
+//   - `.get(key)` walks `parent` upwards until the key is found.
+//
+// The turn bootstrap stamps the identity with
+// `runCtx.with(conversationIdKey, host.getTranscriptId()).with(conversationGroupIdKey, conversationId)`,
+// and the key is `createKey(Symbol("conversationId"), undefined)` -- the name to
+// match is the symbol's `description`. Because the withName/createSpan frames
+// stacked above it reset `values`, the boundary frame observed on the box held
+// only `otel.span`; the id is several frames down. So read it the way the
+// harness itself reads it (`ctx.get`): walk the whole `parent` chain and take
+// the NEAREST frame that carries it.
+var CTX_FRAME_LIMIT = 128;
+var CTX_FRAME_CONTAINERS = ["values", "context", "middleware"];
+
+// One frame's own values Map. Symbol keys are the load-bearing case (the
+// harness keys); string keys are accepted for Map fixtures and simpler hosts.
+// First matching entry wins, and an empty value is never a hit.
+function conversationIdFromKeyMap(map) {
+  var found = "";
+  map.forEach(function (value, key) {
+    if (found || typeof value !== "string" || !value) return;
+    var name = typeof key === "string" ? key : String((key && (key.description || key.name)) || "");
+    if (CONVERSATION_ID_KEY.test(name)) found = value;
+  });
+  return found;
+}
+
+function conversationIdFromOwnKeys(container) {
   for (var key in container) {
     if (!Object.prototype.hasOwnProperty.call(container, key)) continue;
     if (CONVERSATION_ID_KEY.test(key) && typeof container[key] === "string" && container[key]) return container[key];
   }
-  var nested = ["values", "parent", "context", "middleware"];
-  for (var i = 0; i < nested.length; i++) {
-    var found2 = conversationIdFromContainer(container[nested[i]], depth + 1);
-    if (found2) return found2;
+  return "";
+}
+
+// One frame: its own keys / values first, then the loose containers a
+// non-harness caller may wrap the values in. Those stay SHALLOW on purpose --
+// depth is covered by the chain walk below, not by deepening the recursion.
+function conversationIdFromFrame(frame) {
+  if (!frame || typeof frame !== "object") return "";
+  if (frame instanceof Map) return conversationIdFromKeyMap(frame);
+  var own = conversationIdFromOwnKeys(frame);
+  if (own) return own;
+  for (var i = 0; i < CTX_FRAME_CONTAINERS.length; i++) {
+    var nested = frame[CTX_FRAME_CONTAINERS[i]];
+    if (!nested || typeof nested !== "object") continue;
+    var found = nested instanceof Map ? conversationIdFromKeyMap(nested) : conversationIdFromOwnKeys(nested);
+    if (found) return found;
+  }
+  return "";
+}
+
+// Full-depth `parent` walk, nearest frame first (the `ctx.get` order). Bounded
+// twice: a frame budget so a runaway chain cannot spin, and a visited set so a
+// parent cycle terminates instead of looping forever.
+function conversationIdFromContainer(container) {
+  var visited = [];
+  var frame = container;
+  for (var frames = 0; frames < CTX_FRAME_LIMIT && frame && typeof frame === "object"; frames++) {
+    if (visited.indexOf(frame) !== -1) break;
+    visited.push(frame);
+    var found = conversationIdFromFrame(frame);
+    if (found) return found;
+    frame = frame.parent;
   }
   return "";
 }
 
 function conversationIdFromCtx(ctx) {
-  return conversationIdFromContainer(ctx, 0);
-}
-
-// TEMPORARY DIAGNOSTIC (2026-09-14): the ctx-based extraction still reports
-// missing_conversation_id on production traffic, so the real shape of the turn
-// arguments has to be observed instead of assumed. Logs key NAMES plus any
-// id-shaped values (truncated) for the turn ctx and options; never message text.
-function identityProbe(value, depth) {
-  depth = depth || 0;
-  if (value === null || value === undefined) return String(value);
-  if (typeof value !== "object") return typeof value;
-  if (value instanceof Map) {
-    var entries = [];
-    value.forEach(function (v, k) {
-      var name = typeof k === "string" ? k : String((k && (k.description || k.name || k.id)) || "");
-      entries.push(name.slice(0, 40) + "=" + (typeof v === "string" ? (v.length > 48 ? v.slice(0, 48) + "…" : v) : typeof v));
-    });
-    return { map: entries.slice(0, 25) };
-  }
-  var keys = Object.keys(value);
-  var out = { keys: keys.slice(0, 40) };
-  // The turn context is a chain of frames; the values live on one of them (the
-  // harness builds it with .with(key, value) on a parent), so walk the chain.
-  if (value.values instanceof Map) out.values = identityProbe(value.values, depth + 1);
-  else if (value.values && typeof value.values === "object") out.values = Object.keys(value.values).slice(0, 20);
-  else out.valuesType = typeof value.values;
-  if (value.parent && typeof value.parent === "object" && depth < 6) out.parent = identityProbe(value.parent, depth + 1);
-  else if (Object.prototype.hasOwnProperty.call(value, "parent")) out.parentType = typeof value.parent;
-  return out;
-}
-
-function identityProbeLegacy(value) {
-  if (value === null || value === undefined) return String(value);
-  if (typeof value !== "object") return typeof value;
-  var keys = Object.keys(value);
-  var picked = {};
-  if (value.values instanceof Map || (value.values && typeof value.values === "object")) {
-    picked.values = identityProbe(value.values, 1);
-    return { keys: keys.slice(0, 40), picked: picked };
-  }
-  for (var i = 0; i < keys.length && i < 40; i++) {
-    var k = keys[i];
-    if (!/id|conversation|session|transcript|chat|group/i.test(k)) continue;
-    var v = value[k];
-    if (typeof v === "string") picked[k] = v.length > 48 ? v.slice(0, 48) + "…" : v;
-    else if (typeof v === "number" || typeof v === "boolean") picked[k] = v;
-    else if (v && typeof v === "object") picked[k] = "{obj:" + Object.keys(v).slice(0, 10).join(",") + "}";
-  }
-  return { keys: keys.slice(0, 40), picked: picked };
+  return conversationIdFromContainer(ctx);
 }
 
 // Accepts both shapes that reach the stamping site: the plain id string a
@@ -1141,10 +1141,6 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2, identity
       // ctx first: that is where the stock harness puts the conversation id.
       // The factory-time identity stays as a fallback for direct callers.
       var hopConversationId = conversationIdFromCtx(ctx) || conversationIdFromIdentity(identity);
-      if (!hopConversationId) {
-        // TEMPORARY DIAGNOSTIC: observe the real argument shapes once.
-        try { log("identity-probe ctx=" + JSON.stringify(identityProbe(ctx, 0)) + " options=" + JSON.stringify(identityProbe(options2, 0)) + " factory=" + JSON.stringify(identityProbe(identity, 0))); } catch (err) { /* probe is best-effort */ }
-      }
       if (hopConversationId) {
         body.conversationId = hopConversationId;
         body.epochId = deriveEpochId(hopConversationId, body.messages);
@@ -1505,5 +1501,6 @@ module.exports = {
   hopRetryDelayMs: hopRetryDelayMs,
   HIGH_AGENT_MAX_TOKENS: HIGH_AGENT_MAX_TOKENS,
   extractConversationIdentity: extractConversationIdentity,
+  conversationIdFromCtx: conversationIdFromCtx,
   deriveEpochId: deriveEpochId,
 };

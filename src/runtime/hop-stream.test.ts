@@ -48,6 +48,13 @@ type HopResult = {
   }>;
 };
 
+// The pure ctx extractor, loaded once for the frame-chain cases below. The
+// hop-end tests re-require the module inside withHopServer, after the env is
+// pointed at their temporary plan, so this instance never carries their state.
+const ctxRuntime = require(runtimePath) as {
+  conversationIdFromCtx: (ctx: unknown) => string;
+};
+
 const stream = require(streamPath) as {
   mapFinishReason: (reason: string | undefined, n?: number) => string;
   assistantMessageContent: (parts: HostPart[]) => AssistantPart[];
@@ -495,10 +502,11 @@ test("hopFullStream posts stream true and maps a JSON fallback", async () => {
   });
 });
 
-test("hopFullStream stamps the conversation identity the harness puts in ctx", async () => {
+test("hopFullStream stamps a flat ctx conversationId (legacy callers and fixtures)", async () => {
   // The stock harness calls \.stream(ctx, invocationId, tools, options) and the
   // ctx carries conversationId; the session factory args carry none. Reading
   // only the factory args left every production turn with an empty identity.
+  // The real harness ctx is a frame chain -- see the ContextImpl section below.
   const conversationId = "3f1c0d2e-4a5b-4c6d-8e9f-0a1b2c3d4e5f";
   await withHopServer({
     choices: [{ finish_reason: "stop", message: { role: "assistant", content: "ok" } }],
@@ -525,6 +533,168 @@ test("hopFullStream stamps nothing when no conversation identity is observable",
       { getMessages: () => [{ role: "user", content: "hello" }] },
       { modelId: "glm-5.3-flash", maxOutputTokens: 4096 },
       { conversationGroupId: "" },
+      "inv",
+      [],
+    );
+    for await (const part of fullStream) void part;
+    assert.equal(seen[0]?.conversationId, undefined);
+    assert.equal(seen[0]?.epochId, undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The harness ContextImpl turn ctx (../packages/context/dist/core.js)
+//
+// The wrapped call site receives the TOP frame of a parent chain, and the
+// identity sits on an ancestor frame:
+//   - `.with(key, value)` mints a frame whose `values` Map copies its DIRECT
+//     parent's values and adds the key;
+//   - `.withName(name)` mints a frame whose `values` is an EMPTY Map, so every
+//     value below it stops being visible from above;
+//   - `.get(key)` walks `parent` upwards.
+// The turn bootstrap stamps
+// `runCtx.with(conversationIdKey, host.getTranscriptId())...`, where the key is
+// `createKey(Symbol("conversationId"), undefined)`. Box evidence (2026-09-14):
+// the boundary frame's `values` held only `otel.span`, so a bounded walk that
+// counted two levels per frame (one frame = frame -> parent -> frame.values)
+// could never reach the identity.
+// ---------------------------------------------------------------------------
+
+type CtxFrame = {
+  parent?: CtxFrame | undefined;
+  values: Map<unknown, unknown>;
+  name?: string;
+  signal?: unknown;
+};
+
+const CONVERSATION_ID_SYMBOL = Symbol("conversationId");
+
+/** `.with(key, value)`: values = a copy of the direct parent's values + key. */
+function frameWith(parent: CtxFrame | undefined, key: unknown, value: unknown): CtxFrame {
+  const values = new Map<unknown, unknown>(parent ? parent.values : []);
+  values.set(key, value);
+  return { parent, values, name: "with" };
+}
+
+/** `.withName(name)`: the new frame's values Map is EMPTY. */
+function frameNamed(parent: CtxFrame, name: string): CtxFrame {
+  return { parent, values: new Map<unknown, unknown>(), name };
+}
+
+/**
+ * The production shape: the bootstrap frame carries the identity, the rest of
+ * the turn stacks withName frames on top of it, and the frame handed to
+ * `.stream(ctx, ...)` only adds its own span key on top of an empty Map.
+ */
+function harnessTurnCtx(conversationId: string, resets = 10): CtxFrame {
+  let frame = frameWith(undefined, CONVERSATION_ID_SYMBOL, conversationId);
+  frame = frameWith(frame, "otel.span", { traceId: "turn" });
+  for (let i = 0; i < resets; i++) frame = frameNamed(frame, "span-" + String(i));
+  return frameWith(frame, "otel.span", { traceId: "stream" });
+}
+
+function frameKeys(frame: CtxFrame): string[] {
+  return Array.from(frame.values.keys()).map((key) =>
+    typeof key === "string" ? key : String((key as symbol).description ?? ""));
+}
+
+test("the boundary frame hides the identity: only the full-chain walk finds it", () => {
+  const conversationId = "3f1c0d2e-4a5b-4c6d-8e9f-0a1b2c3d4e5f";
+  const ctx = harnessTurnCtx(conversationId);
+  // The bug's precondition: the frame the wrapped call site sees holds only the
+  // span key, and its values Map copies an EMPTY withName frame.
+  assert.deepEqual(frameKeys(ctx), ["otel.span"]);
+  assert.equal(ctxRuntime.conversationIdFromCtx(ctx), conversationId);
+});
+
+test("the identity sits further up than the old depth bound could reach", () => {
+  const ctx = harnessTurnCtx("deep-chain-id", 10);
+  // Three frame hops up (the most the old walk reached) hold no identity: the
+  // six-level bound spent two levels per frame (frame -> parent -> values).
+  let frame: CtxFrame | undefined = ctx;
+  for (let hop = 0; hop < 3 && frame; hop++) {
+    assert.equal(
+      Array.from(frame.values.keys()).some((key) => key === CONVERSATION_ID_SYMBOL),
+      false,
+      "hop " + String(hop) + " must not carry the identity",
+    );
+    frame = frame.parent;
+  }
+  assert.equal(ctxRuntime.conversationIdFromCtx(ctx), "deep-chain-id");
+});
+
+test("a cyclic parent chain terminates instead of looping forever", () => {
+  const a: CtxFrame = { values: new Map<unknown, unknown>([["otel.span", "a"]]), name: "a" };
+  const b: CtxFrame = { parent: a, values: new Map<unknown, unknown>(), name: "b" };
+  a.parent = b; // the frame points back at its own child
+  assert.equal(ctxRuntime.conversationIdFromCtx(a), "");
+  assert.equal(ctxRuntime.conversationIdFromCtx(b), "");
+});
+
+test("a cycle below a reachable identity still returns the nearest hit", () => {
+  const conversationId = "cycle-id";
+  const ctx = harnessTurnCtx(conversationId, 4);
+  let bottom: CtxFrame = ctx;
+  while (bottom.parent) bottom = bottom.parent;
+  bottom.parent = ctx; // close the chain into a cycle
+  assert.equal(ctxRuntime.conversationIdFromCtx(ctx), conversationId);
+});
+
+test("the nearest frame wins over an ancestor carrying an older identity", () => {
+  const stale = "11111111-1111-4111-8111-111111111111";
+  const fresh = "22222222-2222-4222-8222-222222222222";
+  let frame = frameWith(undefined, CONVERSATION_ID_SYMBOL, stale);
+  frame = frameNamed(frame, "boundary");
+  frame = frameWith(frame, CONVERSATION_ID_SYMBOL, fresh);
+  assert.equal(ctxRuntime.conversationIdFromCtx(frame), fresh);
+});
+
+test("no identity anywhere in a deep chain reads as empty", () => {
+  let frame = frameWith(undefined, "otel.span", { traceId: "t" });
+  for (let i = 0; i < 10; i++) frame = frameNamed(frame, "span-" + String(i));
+  assert.equal(ctxRuntime.conversationIdFromCtx(frame), "");
+  assert.equal(ctxRuntime.conversationIdFromCtx(undefined), "");
+  assert.equal(ctxRuntime.conversationIdFromCtx("nope"), "");
+});
+
+test("loose container shapes still read: flat objects, wrapped values, empty ids", () => {
+  assert.equal(ctxRuntime.conversationIdFromCtx({ conversationId: "flat-id" }), "flat-id");
+  assert.equal(ctxRuntime.conversationIdFromCtx({ values: new Map([["conversationId", "map-id"]]) }), "map-id");
+  assert.equal(ctxRuntime.conversationIdFromCtx({ context: { sessionId: "session-id" } }), "session-id");
+  assert.equal(ctxRuntime.conversationIdFromCtx({ conversationGroupId: "" }), "");
+  assert.equal(ctxRuntime.conversationIdFromCtx({ conversationId: "" }), "");
+});
+
+test("hopFullStream stamps the identity out of the deep harness ctx chain", async () => {
+  const conversationId = "3f1c0d2e-4a5b-4c6d-8e9f-0a1b2c3d4e5f";
+  await withHopServer({
+    choices: [{ finish_reason: "stop", message: { role: "assistant", content: "ok" } }],
+  }, async (runtime, seen) => {
+    const { fullStream } = runtime.hopFullStream(
+      { getMessages: () => [{ role: "user", content: "hello" }] },
+      { modelId: "glm-5.3-flash", maxOutputTokens: 4096 },
+      harnessTurnCtx(conversationId, 12),
+      "inv",
+      [],
+    );
+    for await (const part of fullStream) void part;
+    assert.equal(seen[0]?.conversationId, conversationId);
+    assert.equal(typeof seen[0]?.epochId, "string");
+    assert.notEqual(String(seen[0]?.epochId), "");
+  });
+});
+
+test("hopFullStream survives a cyclic ctx chain and stamps nothing", async () => {
+  await withHopServer({
+    choices: [{ finish_reason: "stop", message: { role: "assistant", content: "ok" } }],
+  }, async (runtime, seen) => {
+    const a: CtxFrame = { values: new Map<unknown, unknown>([["otel.span", "a"]]), name: "a" };
+    const b: CtxFrame = { parent: a, values: new Map<unknown, unknown>(), name: "b" };
+    a.parent = b;
+    const { fullStream } = runtime.hopFullStream(
+      { getMessages: () => [{ role: "user", content: "hello" }] },
+      { modelId: "glm-5.3-flash", maxOutputTokens: 4096 },
+      b,
       "inv",
       [],
     );

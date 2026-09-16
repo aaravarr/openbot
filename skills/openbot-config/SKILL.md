@@ -64,7 +64,7 @@ Configure it in `/home/box/sand-data/openbot-injection.json` (override with `OPE
 - `dry-run` records eligibility, selected family, suffix fingerprint/body hash, and would-apply metadata only. It never mutates messages, holds a terminal, dispatches a second run, or changes first-token latency.
 - `enforce` enables the selected layers. A present layer object defaults `enabled` to `true`; an explicit `enabled: false` disables that layer, and the top-level `off` gate always wins.
 - L1 defaults: `startOfTurnAckThreshold: 1` (integer ≥1), `watchingSilenceThreshold: 6` (integer ≥1), `earlyResultThreshold: 0` (integer ≥0).
-- L2 defaults/limits: `maxAdditionalRuns: 1` (0..1; hard maximum 1), `terminalDecisionTimeoutMs: 250` (1..2000), `timeoutMs: 15000` (1000..30000), `maxAdditionalPromptTokens: 131072` (8192..262144), `maxAdditionalCompletionTokens: 2048` (128..16384), and `maxAdditionalCostUsd: 0.10` (0..10).
+- L2 defaults/limits: `maxAdditionalRuns: 1` (0..1; hard maximum 1), `terminalDecisionTimeoutMs: 250` (1..2000), `timeoutMs: 120000` (1000..600000; the additional run is a full second generation, so this must cover a normal turn), `maxAdditionalPromptTokens: 131072` (8192..1048576), `maxAdditionalCompletionTokens: 2048` (128..16384), and `maxAdditionalCostUsd: 0.10` (0..10).
 - L3 defaults/limits: `maxRedrivesPerEpoch: 1` (0..3; hard maximum 3) and `ttlMs: 300000` (60000..900000).
 - There is no response-size or capture-admission setting: L2 holds only tiny host-boundary terminal/framing events, never a whole response. See [reference.md](reference.md) for exact bounds and the no-forgery/terminal-release rules.
 

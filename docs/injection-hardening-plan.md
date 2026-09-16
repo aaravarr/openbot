@@ -454,7 +454,7 @@ If the second run has already emitted some non-terminal deltas before failing, t
 ### 7.5 Bounds and outcome semantics
 
 - Default and hard maximum: maxAdditionalRuns=1. A trusted turn/epoch is remedied at most once; L2 can issue at most one second upstream request for that epoch/request.
-- If that one remediation still silently stops, mark unresolved/finalNoTool and do not compensate again in the same turn or select an L3 nudge for that tail. The second run uses a separate bounded timeout (default 15,000 ms), token caps, and worst-case cost reservation; it cannot extend the first request deadline.
+- If that one remediation still silently stops, mark unresolved/finalNoTool and do not compensate again in the same turn or select an L3 nudge for that tail. The second run is a full second generation and uses a separate bounded timeout (default 120,000 ms, covering a normal turn; observed worst case 59,196 ms), token caps, and worst-case cost reservation; it cannot extend the first request deadline.
 - One in-flight L2 attempt per trusted conversation/epoch. Client close cancels the second request and invokes the original-terminal release path.
 - A valid second response with a delivery call is recorded first as call-emitted; only a trusted host success event can upgrade it to delivery-observed. A valid second response without a delivery call that still ends in finish_reason="stop" is finalNoTool/unresolved and never causes a third run or an L3 redrive for that tail. A second response containing tool calls is forwarded as real model output, but the one-attempt cap still forbids another remediation run.
 - A first terminal released because a gate says no intervention is outcome normal-release. A first terminal held while an owed silent stop is attempted is outcome l2-triggered; a second-run failure that replays it is outcome l2-fallback-original-terminal. The selected shape (no-touch/§3.27 or touch-then-tool/§3.28) is part of the outcome. The original terminal is not counted as a second assistant turn.
@@ -474,7 +474,7 @@ L3 covers the case where the gateway cannot keep a same-request L2 run alive, bu
 
 ### 8.1 Trigger and family selection
 
-On the next eligible host request, at the fixed canonical-message stage (after structural conversion and before provider payload conversion), L3 must call the **same** debt classifier and shape selector as L2. The historical tail is anchored at the **latest real user message** in the trusted outstanding epoch; delivery from an earlier user message or an earlier epoch is never carried forward. The prior tail must have passed the silent-close condition (finish_reason="stop" and zero tools in that prior response), and the new request must pass the trusted person-opened permission gate. L3 is not allowed to replace this selector with the old `sentMessageCount === 0 && reacted === false` test.
+On the next eligible host request, at the fixed canonical-message stage (after structural conversion and before provider payload conversion), L3 must call the **same** debt classifier and shape selector as L2. The historical tail is anchored at the **latest real user message** in the trusted outstanding epoch; delivery from an earlier user message or an earlier epoch is never carried forward. The prior tail must have passed the silent-close condition (finish_reason="stop" and zero tools in that prior response), and the new request must pass the trusted person-opened permission gate. The prior tail's verdict is epoch state, so **every** terminal-hold release path must record it — the not-owed/no-op release, the reservation refusals (budget/lease), the decision watchdog, and the failed-second-run fallback — not only a completed remediation run; a verdict recorded solely on the L2 success branch leaves L3 permanently disarmed on the normal path. L3 is not allowed to replace this selector with the old `sentMessageCount === 0 && reacted === false` test.
 
 - **Shape 1 — no touch:** no SendToUser, SendMessage, or ReactToMessage touch is credited after the latest real user message. This is owed; append one new canonical `role: "user"` message whose content is **`[SAND_HIDDEN_PROMPT]` immediately followed by** the exact §3.27 body; do not insert a newline.
 - **Shape 2 — touch then tool:** a touch is credited, but a later tool call occurred after the last touch. This is owed; append one new canonical user message with `[SAND_HIDDEN_PROMPT]` directly concatenated to the exact §3.28 body.
@@ -737,7 +737,7 @@ Recommended explicit enforce shape:
       "enabled": true,
       "maxAdditionalRuns": 1,
       "terminalDecisionTimeoutMs": 250,
-      "timeoutMs": 15000,
+      "timeoutMs": 120000,
       "maxAdditionalPromptTokens": 131072,
       "maxAdditionalCompletionTokens": 2048,
       "maxAdditionalCostUsd": 0.10
@@ -764,8 +764,8 @@ Effective defaults and validation limits:
 | l1.earlyResultThreshold | 0 | Integer at least 0; default matches §3.23. |
 | l2.maxAdditionalRuns | 1 | Integer 0..1; implementation hard cap is 1. |
 | l2.terminalDecisionTimeoutMs | 250 | Integer 1..2000; hard local deadline for the terminal hold decision. |
-| l2.timeoutMs | 15000 | 1000..30000; also bounded by the existing request deadline. |
-| l2.maxAdditionalPromptTokens | 131072 | Integer 8192..262144; total estimated prompt tokens for the additional run, including the complete canonical context and nudge. Over limit releases the held terminal and skips L2. |
+| l2.timeoutMs | 120000 | Integer 1000..600000; also bounded by the existing request deadline. The additional run is a full second generation on the real upstream (observed worst case on the box: 59196 ms total, first token at 53049 ms), so the deadline must cover a normal turn; `retryBudgetMs` is a separate ceiling and the effective deadline is the smaller of the two. |
+| l2.maxAdditionalPromptTokens | 131072 | Integer 8192..1048576; total estimated prompt tokens for the additional run, including the complete canonical context and nudge. The estimate counts text at ~4 bytes/token and charges each inline image a flat per-image cost instead of its base64 byte weight (an image-heavy 1.77 MB body is ~85K real tokens, not ~443K). Over limit releases the held terminal and skips L2. |
 | l2.maxAdditionalCompletionTokens | 2048 | Integer 128..16384; hard cap for the additional run's max_tokens/max_completion_tokens. |
 | l2.maxAdditionalCostUsd | 0.10 | Number 0..10; reserve worst-case prompt + completion cost using configured model rates; unknown rate or over limit skips L2. |
 | l3.maxRedrivesPerEpoch | 1 | Integer 0..3; implementation hard cap is 3. |

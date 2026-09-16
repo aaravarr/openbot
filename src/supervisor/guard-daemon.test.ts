@@ -689,6 +689,18 @@ test("a wrap repair tick leaves the daemon that ran it alive", async () => {
 // and the scheduled interval is minutes. The poll closes that window to
 // seconds; the repair itself stays the same tick, through the same guardCustom.
 
+/**
+ * The schedule the mock-timer fast-poll tests drive. Pinned at five minutes
+ * rather than the shipped default (one minute, DEFAULT_GUARD_INTERVAL_MINUTES)
+ * on purpose: these tests walk a dozen 5s polls -- the marker-sweep window --
+ * between two scheduled ticks, which no longer fits inside a one-minute
+ * interval. The contract under test is "wake in seconds, not at the schedule",
+ * so the schedule has to be minutes away. The two real-timer tests at the end
+ * of this group keep the shipped default, so that interval stays covered.
+ */
+const FAST_POLL_INTERVAL_MINUTES = 5;
+const FAST_POLL_INTERVAL_MS = FAST_POLL_INTERVAL_MINUTES * 60_000;
+
 const WRAPPED_HOST_HEAD = `${OPENBOT_MARKER}\nvar __openbotRuntime = require('/home/box/sand-data/openbot-runtime.cjs');\n`;
 const STOCK_HOST_HEAD = `function createProtoSessionProvider(client) {
   return { getSession: function () { return 1; } };
@@ -758,7 +770,7 @@ test("a host drift wakes the daemon in seconds, not minutes", async (t) => {
   const counter: Counter = { calls: 0 };
   const controller = new AbortController();
   const run = runGuardDaemon(ctx.deps, {
-    intervalMinutes: DEFAULT_GUARD_INTERVAL_MINUTES,
+    intervalMinutes: FAST_POLL_INTERVAL_MINUTES,
     signal: controller.signal,
     driftProbe: host.probe,
     driftEvents: events.sink,
@@ -803,7 +815,7 @@ test("a host drift wakes the daemon in seconds, not minutes", async (t) => {
   // interval is polls against the bytes the repair wrote.
   await pollSteps(t, 20);
   assert.equal(counter.calls, 2);
-  t.mock.timers.tick(5 * 60_000);
+  t.mock.timers.tick(FAST_POLL_INTERVAL_MS);
   await flush();
   assert.equal(counter.calls, 3);
   assert.equal(events.rows.length, 1);
@@ -823,7 +835,7 @@ test("an unchanged host file adds no fast tick", async (t) => {
   const { runOnce, counter } = countingRunOnce([HEALTHY]);
   const controller = new AbortController();
   const run = runGuardDaemon(ctx.deps, {
-    intervalMinutes: DEFAULT_GUARD_INTERVAL_MINUTES,
+    intervalMinutes: FAST_POLL_INTERVAL_MINUTES,
     signal: controller.signal,
     runOnce,
     driftProbe: host.probe,
@@ -835,7 +847,7 @@ test("an unchanged host file adds no fast tick", async (t) => {
   // them is a tick.
   await pollSteps(t, 12);
   assert.equal(counter.calls, 1);
-  t.mock.timers.tick(5 * 60_000);
+  t.mock.timers.tick(FAST_POLL_INTERVAL_MS);
   await flush();
   assert.equal(counter.calls, 2);
   assert.equal(events.rows.length, 0);
@@ -855,7 +867,7 @@ test("official mode keeps the fast poll silent until the box is custom again", a
   const { runOnce, counter } = countingRunOnce([HEALTHY, REPAIRED_WRAP]);
   const controller = new AbortController();
   const run = runGuardDaemon(ctx.deps, {
-    intervalMinutes: DEFAULT_GUARD_INTERVAL_MINUTES,
+    intervalMinutes: FAST_POLL_INTERVAL_MINUTES,
     signal: controller.signal,
     runOnce,
     driftProbe: host.probe,
@@ -888,7 +900,7 @@ test("a zero poll interval leaves the schedule exactly as it was", async (t) => 
   const { runOnce, counter } = countingRunOnce([HEALTHY]);
   const controller = new AbortController();
   const run = runGuardDaemon(ctx.deps, {
-    intervalMinutes: DEFAULT_GUARD_INTERVAL_MINUTES,
+    intervalMinutes: FAST_POLL_INTERVAL_MINUTES,
     signal: controller.signal,
     runOnce,
     driftPollMs: 0,
@@ -900,7 +912,7 @@ test("a zero poll interval leaves the schedule exactly as it was", async (t) => 
   t.mock.timers.tick(DEFAULT_DRIFT_POLL_MS * 4);
   await flush();
   assert.equal(counter.calls, 1);
-  t.mock.timers.tick(5 * 60_000);
+  t.mock.timers.tick(FAST_POLL_INTERVAL_MS);
   await flush();
   assert.equal(counter.calls, 2);
   controller.abort();
@@ -914,7 +926,7 @@ test("a host file that keeps changing is not repaired mid-write", async (t) => {
   const { runOnce, counter } = countingRunOnce([HEALTHY, REPAIRED_WRAP]);
   const controller = new AbortController();
   const run = runGuardDaemon(ctx.deps, {
-    intervalMinutes: DEFAULT_GUARD_INTERVAL_MINUTES,
+    intervalMinutes: FAST_POLL_INTERVAL_MINUTES,
     signal: controller.signal,
     runOnce,
     driftProbe: host.probe,
@@ -945,7 +957,7 @@ test("a fast tick that finds nothing to repair does not become a poll loop", asy
   const stderr: string[] = [];
   const controller = new AbortController();
   const run = runGuardDaemon(ctx.deps, {
-    intervalMinutes: DEFAULT_GUARD_INTERVAL_MINUTES,
+    intervalMinutes: FAST_POLL_INTERVAL_MINUTES,
     signal: controller.signal,
     runOnce,
     driftProbe: host.probe,
@@ -1052,8 +1064,8 @@ test("the fast poll really re-arms on the wall clock", async () => {
     host.writeStock(77);
     assert.equal(await waitUntil(() => counter.calls === 2, 8_000), true);
     const repairedAfterMs = Date.now() - landedAt;
-    // Two 1s polls plus scheduling slack, and nowhere near the 5 minute
-    // interval this used to wait for.
+    // Two 1s polls plus scheduling slack, and nowhere near the scheduled tick
+    // a minute out: this test keeps the shipped guard interval.
     assert.equal(repairedAfterMs < 5_000, true, `drift repaired after ${String(repairedAfterMs)}ms`);
     assert.match(stderr.join("\n"), /drift detected by the 1s poll/);
   } finally {

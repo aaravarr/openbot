@@ -13,6 +13,8 @@ import {
   type GuardLogRow,
   appendGuardLogLine,
   guardDaemonPid,
+  readPersistedGuardInterval,
+  resolveGuardIntervalMinutes,
   runGuardDaemon,
   runGuardTick,
   runGuardTickWithHopHealth,
@@ -388,14 +390,33 @@ test("guard parses daemon, stop, and interval flags", () => {
     }
     return parsed.command;
   };
-  assert.deepEqual(parse(["guard"]), { kind: "guard", action: "once", intervalMinutes: 5 });
-  assert.deepEqual(parse(["guard", "--daemon"]), { kind: "guard", action: "daemon", intervalMinutes: 5 });
-  assert.deepEqual(parse(["guard", "--stop"]), { kind: "guard", action: "stop", intervalMinutes: 5 });
+  assert.deepEqual(parse(["guard"]), { kind: "guard", action: "once", intervalMinutes: 1 });
+  assert.deepEqual(parse(["guard", "--daemon"]), { kind: "guard", action: "daemon", intervalMinutes: 1 });
+  assert.deepEqual(parse(["guard", "--stop"]), { kind: "guard", action: "stop", intervalMinutes: 1 });
   assert.equal(parse(["guard", "--daemon", "--interval", "1"]).intervalMinutes, 1);
   assert.equal(parse(["guard", "--daemon", "--interval", "0"]).intervalMinutes, 1);
   assert.equal(parse(["guard", "--daemon", "--interval", "100"]).intervalMinutes, 60);
   assert.equal(parse(["guard", "--daemon", "--interval", "7"]).intervalMinutes, 7);
-  assert.equal(parse(["guard", "--daemon", "--json"]).intervalMinutes, 5);
+  assert.equal(parse(["guard", "--daemon", "--json"]).intervalMinutes, 1);
+});
+
+test("the guard interval resolves env first, then the persisted file, then the default", () => {
+  const ctx = setup();
+  assert.equal(DEFAULT_GUARD_INTERVAL_MINUTES, 1);
+  // Nothing recorded anywhere: the default. A patrol reads two files, so the
+  // five-minute window it replaces was pure drift time.
+  assert.equal(resolveGuardIntervalMinutes(ctx.deps, {}), 1);
+  ctx.fs.write(ctx.paths.guardInterval, "7\n");
+  assert.equal(readPersistedGuardInterval(ctx.deps), 7);
+  assert.equal(resolveGuardIntervalMinutes(ctx.deps, {}), 7);
+  assert.equal(resolveGuardIntervalMinutes(ctx.deps, { OPENBOT_GUARD_INTERVAL: "3" }), 3);
+  // Junk in either place falls back instead of throwing: an unreadable tuning
+  // file must not keep the guard from starting.
+  ctx.fs.write(ctx.paths.guardInterval, "later\n");
+  assert.equal(readPersistedGuardInterval(ctx.deps), undefined);
+  assert.equal(resolveGuardIntervalMinutes(ctx.deps, { OPENBOT_GUARD_INTERVAL: "" }), 1);
+  assert.equal(resolveGuardIntervalMinutes(ctx.deps, { OPENBOT_GUARD_INTERVAL: "0" }), 1);
+  assert.equal(resolveGuardIntervalMinutes(ctx.deps, { OPENBOT_GUARD_INTERVAL: "100" }), 60);
 });
 
 test("guard rejects a non-numeric interval", () => {

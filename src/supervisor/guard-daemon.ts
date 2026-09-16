@@ -14,7 +14,15 @@ import { DEFAULT_HOP_FAILURE_THRESHOLD, runHopHealthCheck } from "./hop-health.t
  */
 
 export const GUARD_DAEMON_SOURCE = "guard-daemon";
-export const DEFAULT_GUARD_INTERVAL_MINUTES = 5;
+/**
+ * Minutes between guard patrols. One minute, not five: a patrol reads two
+ * files and compares bytes, so the cost is irrelevant next to the drift window
+ * it closes -- five minutes of a host sitting on stock Grok is exactly the
+ * "it switched itself back to official" the user reports.
+ */
+export const DEFAULT_GUARD_INTERVAL_MINUTES = 1;
+/** `OPENBOT_GUARD_INTERVAL` (minutes) overrides the interval for one start. */
+export const GUARD_INTERVAL_ENV = "OPENBOT_GUARD_INTERVAL";
 
 /** The guard log stays small: past this size the next tick truncates it. */
 export const GUARD_LOG_MAX_BYTES = 1024 * 1024;
@@ -111,9 +119,44 @@ function releaseOwnPidfile(deps: SupervisorDeps): void {
 }
 
 /**
+ * The minutes recorded for this box in `$DATA/openbot-guard-interval`, when
+ * the file holds a usable number. This is the persistence half of the
+ * interval: install.sh reads the same file, so a value a human chose survives
+ * every later install instead of being reset to the default.
+ */
+export function readPersistedGuardInterval(deps: SupervisorDeps): number | undefined {
+  const raw = deps.fs.read(deps.paths.guardInterval)?.trim();
+  if (raw === undefined || raw === "") {
+    return undefined;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  return clampIntervalMinutes(value);
+}
+
+/**
+ * The interval a fresh daemon should run at, by the same precedence install.sh
+ * uses: `OPENBOT_GUARD_INTERVAL` (minutes) > the persisted file > the default.
+ * Both start paths (install.sh and guard-watch.ts) resolve it this way, so a
+ * restarted daemon patrols at the box's chosen rate, not at the default.
+ */
+export function resolveGuardIntervalMinutes(
+  deps: SupervisorDeps,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const flagged = env[GUARD_INTERVAL_ENV];
+  if (flagged !== undefined && flagged.trim() !== "" && Number.isFinite(Number(flagged))) {
+    return clampIntervalMinutes(Number(flagged));
+  }
+  return readPersistedGuardInterval(deps) ?? DEFAULT_GUARD_INTERVAL_MINUTES;
+}
+
+/**
  * Start the detached guard daemon the way install.sh starts it:
  * `node --experimental-strip-types src/cli.ts guard --daemon` with this box's
- * own --host-main/--sand-data, detached, default interval (5 minutes).
+ * own --host-main/--sand-data, detached, at the box's resolved interval.
  *
  * The pidfile is deliberately NOT pre-written for the child. The daemon
  * publishes its own pid and refuses to start while that pidfile names a live
@@ -140,6 +183,10 @@ export function startGuardDaemon(deps: SupervisorDeps): number {
       deps.paths.hostMain,
       "--sand-data",
       deps.paths.sandData,
+      // Always explicit: without it the child would fall back to the CLI
+      // default, which is not what a box with a persisted interval asked for.
+      "--interval",
+      String(resolveGuardIntervalMinutes(deps)),
     ],
     env: { ...process.env },
     log: deps.paths.uiLog,

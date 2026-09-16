@@ -149,6 +149,10 @@ test("a custom box with no live guard starts the daemon install.sh would", () =>
     ctx.paths.hostMain,
     "--sand-data",
     ctx.paths.sandData,
+    // Explicit, like install.sh: a daemon restarted here must patrol at the
+    // box's interval, not silently fall back to the CLI default.
+    "--interval",
+    "1",
   ]);
   // The daemon publishes this pidfile itself. Pre-writing the child's pid would
   // make the child read a live owner -- itself -- back and exit without
@@ -168,6 +172,34 @@ test("a custom box with no live guard starts the daemon install.sh would", () =>
   // Unconfirmed: the next check decides whether the start actually took.
   assert.equal(state.awaitingStart, true);
   assert.equal(state.failures, 0);
+});
+
+test("a persisted interval is passed through to the restarted daemon", () => {
+  const ctx = setup();
+  // The value install.sh honours too: a box tuned to a slower patrol must not
+  // silently return to the default when the service restarts its daemon.
+  ctx.fs.write(ctx.paths.guardInterval, "7\n");
+  const outcome = tick(ctx, createGuardWatchState(), { nowMs: 0 });
+  assert.equal(outcome.kind, "started");
+  assert.deepEqual(ctx.procs.spawns[0]?.argv.slice(-2), ["--interval", "7"]);
+});
+
+test("OPENBOT_GUARD_INTERVAL wins over the persisted file", () => {
+  const ctx = setup();
+  ctx.fs.write(ctx.paths.guardInterval, "7\n");
+  const saved = process.env.OPENBOT_GUARD_INTERVAL;
+  process.env.OPENBOT_GUARD_INTERVAL = "3";
+  try {
+    const outcome = tick(ctx, createGuardWatchState(), { nowMs: 0 });
+    assert.equal(outcome.kind, "started");
+    assert.deepEqual(ctx.procs.spawns[0]?.argv.slice(-2), ["--interval", "3"]);
+  } finally {
+    if (saved === undefined) {
+      delete process.env.OPENBOT_GUARD_INTERVAL;
+    } else {
+      process.env.OPENBOT_GUARD_INTERVAL = saved;
+    }
+  }
 });
 
 test("a start that has not been confirmed yet is never repeated", () => {

@@ -1,5 +1,7 @@
+import { type AbsPath } from "../domain/types.ts";
 import { guardDaemonPid, startGuardDaemon } from "./guard-daemon.ts";
 import { type SupervisorDeps } from "./observe.ts";
+import { joinAbs } from "./paths.ts";
 
 /**
  * Watch the watcher.
@@ -27,6 +29,11 @@ import { type SupervisorDeps } from "./observe.ts";
  * - Observable. Every start, recovery, and failure appends a guard.watch
  *   request-log event (and one line to the service's stderr). Events are
  *   written whether or not request recording is on.
+ * - Provably alive. Every tick also rewrites openbot-guard-watch.json in the
+ *   sand data, whether or not it had anything to do. The events above only
+ *   exist when the babysitter acts, and silence is exactly what a dead
+ *   babysitter looks like: the heartbeat is the difference between "nothing to
+ *   do" and "not running".
  *
  * The mode is an input, not read here: src/ui/server.ts already owns the
  * strict rule (wrapMode: only the literal token "official" means official) and
@@ -48,6 +55,8 @@ export const GUARD_WATCH_BACKOFF_BASE_MS = 60_000;
 export const GUARD_WATCH_BACKOFF_MAX_MS = 15 * 60_000;
 /** `OPENBOT_GUARD_WATCH=0` turns the babysitter off. install.sh still starts one. */
 export const GUARD_WATCH_DISABLE_ENV = "OPENBOT_GUARD_WATCH";
+/** Liveness file the babysitter rewrites on every tick. */
+export const GUARD_WATCH_HEARTBEAT_FILE = "openbot-guard-watch.json";
 
 export type GuardWatchMode = "official" | "custom";
 
@@ -127,6 +136,55 @@ export type GuardWatchOutcome =
   | { readonly kind: "started"; readonly pid: number }
   | { readonly kind: "failed"; readonly message: string };
 
+/**
+ * What the last check saw, for an observer outside the service process. The
+ * daemon this babysitter protects has its own log; this file is the only
+ * evidence that the babysitter itself is still running, so it is rewritten on
+ * every tick and its timestamp is the liveness signal.
+ */
+export type GuardWatchHeartbeat = {
+  /** ISO time of this tick. */
+  readonly lastTickAt: string;
+  /** The same instant in epoch ms. */
+  readonly lastTickMs: number;
+  readonly mode: GuardWatchMode;
+  /** The live daemon pid this tick found, or null when it found none. */
+  readonly guardPid: number | null;
+  /** What this tick did: "skip:running", "started:4242", "failed", ... */
+  readonly lastAction: string;
+  /** Consecutive starts that did not produce a live daemon. */
+  readonly failures: number;
+};
+
+export function guardWatchHeartbeatPath(deps: SupervisorDeps): AbsPath {
+  return joinAbs(deps.paths.sandData, GUARD_WATCH_HEARTBEAT_FILE);
+}
+
+/** One token per tick outcome, so a heartbeat reader can say what happened. */
+export function guardWatchAction(outcome: GuardWatchOutcome): string {
+  switch (outcome.kind) {
+    case "started":
+      return `started:${String(outcome.pid)}`;
+    case "failed":
+      return "failed";
+    default:
+      return `skip:${outcome.reason}`;
+  }
+}
+
+/**
+ * Best-effort liveness write. A read-only or missing sand data must never stop
+ * the babysitter, and the write is one small line (a torn read is possible in
+ * theory, which a heartbeat reader treats as "no fresh heartbeat").
+ */
+export function writeGuardWatchHeartbeat(deps: SupervisorDeps, heartbeat: GuardWatchHeartbeat): void {
+  try {
+    deps.fs.write(guardWatchHeartbeatPath(deps), `${JSON.stringify(heartbeat)}\n`, 0o644);
+  } catch {
+    /* the heartbeat is best-effort */
+  }
+}
+
 function seconds(ms: number): string {
   return `${String(Math.max(1, Math.round(ms / 1000)))}s`;
 }
@@ -148,12 +206,34 @@ function report(io: GuardWatchIo, severity: "INFO" | "WARN", message: string): v
 /**
  * One check. Synchronous on purpose: a spawn returns immediately, so the latch
  * below plus the unconfirmed-start window is the strongest single-flight
- * guarantee available, and an overlapping tick cannot exist.
+ * guarantee available, and an overlapping tick cannot exist. The heartbeat
+ * write is the only added work and is best-effort.
  */
 export function runGuardWatchTick(deps: SupervisorDeps, state: GuardWatchState, io: GuardWatchIo): GuardWatchOutcome {
   const now = io.now?.() ?? Date.now();
   const runningPid = guardDaemonPid(deps);
+  const outcome = applyGuardWatchTick(deps, state, io, now, runningPid);
+  // Every completed tick refreshes the liveness file, including the quiet
+  // "running" and "official" checks that produce no event of their own.
+  writeGuardWatchHeartbeat(deps, {
+    lastTickAt: new Date(now).toISOString(),
+    lastTickMs: now,
+    mode: io.mode,
+    guardPid: runningPid ?? null,
+    lastAction: guardWatchAction(outcome),
+    failures: state.failures,
+  });
+  return outcome;
+}
 
+/** The whole policy application for one tick, without the heartbeat. */
+function applyGuardWatchTick(
+  deps: SupervisorDeps,
+  state: GuardWatchState,
+  io: GuardWatchIo,
+  now: number,
+  runningPid: number | undefined,
+): GuardWatchOutcome {
   if (io.mode === "official") {
     // Official owns no custom patrol. Drop the streak so a box that returns to
     // custom starts from a clean slate instead of a stale cooldown.

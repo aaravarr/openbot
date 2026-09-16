@@ -5,13 +5,16 @@ import { type FsDeps, type ProcDeps, parseOwnedPid } from "./procs.ts";
 import {
   GUARD_WATCH_BACKOFF_BASE_MS,
   GUARD_WATCH_BACKOFF_MAX_MS,
+  GUARD_WATCH_HEARTBEAT_FILE,
   GUARD_WATCH_INTERVAL_MS,
   type GuardWatchEvent,
+  type GuardWatchHeartbeat,
   type GuardWatchMode,
   type GuardWatchState,
   createGuardWatchState,
   decideGuardWatch,
   guardWatchBackoffMs,
+  guardWatchHeartbeatPath,
   runGuardWatchTick,
 } from "./guard-watch.ts";
 
@@ -342,4 +345,76 @@ test("the cooldown starts at one check interval and is capped", () => {
     [60_000, 60_000, 120_000, 240_000, 480_000, GUARD_WATCH_BACKOFF_MAX_MS, GUARD_WATCH_BACKOFF_MAX_MS],
   );
   assert.equal(GUARD_WATCH_BACKOFF_MAX_MS, 15 * 60_000);
+});
+
+// ---- Liveness heartbeat. The events above only exist when the babysitter
+// acts, so a dead babysitter and a quiet one look identical from outside. The
+// heartbeat file is rewritten on every tick, quiet ticks included.
+
+function heartbeat(ctx: ReturnType<typeof setup>): GuardWatchHeartbeat | undefined {
+  const raw = ctx.fs.read(guardWatchHeartbeatPath(ctx.deps));
+  return raw === undefined ? undefined : (JSON.parse(raw) as GuardWatchHeartbeat);
+}
+
+test("a quiet tick still proves the babysitter is alive", () => {
+  const ctx = setup();
+  const state = createGuardWatchState();
+  daemonAppears(ctx);
+  const nowMs = 1_700_000_000_000;
+  // The tick that used to leave no trace at all: the daemon is running, so
+  // there is nothing to start and no event to write.
+  assert.deepEqual(tick(ctx, state, { nowMs }), { kind: "skipped", reason: "running" });
+  assert.equal(guardWatchHeartbeatPath(ctx.deps), joinAbs(ctx.paths.sandData, GUARD_WATCH_HEARTBEAT_FILE));
+  assert.deepEqual(heartbeat(ctx), {
+    lastTickAt: new Date(nowMs).toISOString(),
+    lastTickMs: nowMs,
+    mode: "custom",
+    guardPid: DAEMON_PID,
+    lastAction: "skip:running",
+    failures: 0,
+  });
+});
+
+test("starts, failures, and official ticks all refresh the heartbeat", () => {
+  const ctx = setup();
+  const state = createGuardWatchState();
+  // A start: the spawned pid is not in the pidfile yet, so the heartbeat
+  // reports the pid the tick found (none) and says what it did.
+  assert.equal(tick(ctx, state, { nowMs: 1_000 }).kind, "started");
+  assert.deepEqual(heartbeat(ctx), {
+    lastTickAt: new Date(1_000).toISOString(),
+    lastTickMs: 1_000,
+    mode: "custom",
+    guardPid: null,
+    lastAction: `started:${String(DAEMON_PID)}`,
+    failures: 0,
+  });
+  // The next check books the unconfirmed start as a failure.
+  const failed = tick(ctx, state, { nowMs: 61_000 });
+  assert.equal(failed.kind, "skipped");
+  assert.equal(heartbeat(ctx)?.failures, 1);
+  assert.equal(heartbeat(ctx)?.lastAction, "skip:backoff");
+  // Official keeps nothing alive, and still rewrites the file.
+  tick(ctx, state, { mode: "official", nowMs: 121_000 });
+  assert.deepEqual(heartbeat(ctx), {
+    lastTickAt: new Date(121_000).toISOString(),
+    lastTickMs: 121_000,
+    mode: "official",
+    guardPid: null,
+    lastAction: "skip:official",
+    failures: 0,
+  });
+});
+
+test("a heartbeat write that fails never breaks the tick", () => {
+  const ctx = setup();
+  ctx.fs.write = () => {
+    throw new Error("EROFS: read-only file system");
+  };
+  const state = createGuardWatchState();
+  // The start still happens and is still reported.
+  const events: GuardWatchEvent[] = [];
+  assert.deepEqual(tick(ctx, state, { nowMs: 0, events }), { kind: "started", pid: DAEMON_PID });
+  assert.equal(ctx.procs.spawns.length, 1);
+  assert.equal(events.length, 1);
 });

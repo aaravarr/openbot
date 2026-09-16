@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { OPENBOT_MARKER } from "../domain/types.ts";
 import { customBoxFromProvider, parseInstallCommand, parseUpstreamOrigin } from "../parse/argv.ts";
@@ -1035,6 +1038,64 @@ test("the fast poll really re-arms on the wall clock", async () => {
   } finally {
     controller.abort();
     await run;
+  }
+});
+
+test("the production probe catches a real host file replaced on disk", async () => {
+  // The last gap the fake-probe tests leave: the shipped probe (node:fs) on a
+  // real file, replaced the way Grok's updater does it -- write beside the host
+  // file, then rename over it. Everything else (timers, drift, repair) is the
+  // production path too.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openbot-guard-host-"));
+  const hostFile = path.join(dir, "host-main.cjs");
+  fs.writeFileSync(hostFile, WRAPPED_HOST_HEAD);
+  const ctx = setup();
+  const deps = { ...ctx.deps, paths: { ...ctx.paths, hostMain: hostFile as unknown as typeof ctx.paths.hostMain } };
+  const stderr: string[] = [];
+  const counter: Counter = { calls: 0 };
+  const controller = new AbortController();
+  const run = runGuardDaemon(deps, {
+    intervalMinutes: DEFAULT_GUARD_INTERVAL_MINUTES,
+    signal: controller.signal,
+    driftPollMs: 1_000,
+    stderr: (line) => stderr.push(line),
+    hopHealth: false,
+    runOnce: async () => {
+      counter.calls += 1;
+      if (counter.calls === 1) {
+        return HEALTHY;
+      }
+      fs.writeFileSync(hostFile, WRAPPED_HOST_HEAD);
+      return REPAIRED_WRAP;
+    },
+  });
+  const waitUntil = async (predicate: () => boolean, budgetMs: number): Promise<boolean> => {
+    const deadline = Date.now() + budgetMs;
+    while (Date.now() < deadline) {
+      if (predicate()) {
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return predicate();
+  };
+  try {
+    assert.equal(
+      await waitUntil(() => (ctx.fs.read(ctx.paths.guardLog) ?? "").includes(`"detail":"healthy"`), 5_000),
+      true,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    // Grok Bot's idle auto-update: stock bytes written beside the host file,
+    // then renamed over it. Same path, new inode.
+    const beside = path.join(dir, "host-main.cjs.tmp");
+    fs.writeFileSync(beside, STOCK_HOST_HEAD);
+    fs.renameSync(beside, hostFile);
+    assert.equal(await waitUntil(() => counter.calls === 2, 8_000), true);
+    assert.match(stderr.join("\n"), /drift detected by the 1s poll \(changed\+marker-missing\)/);
+  } finally {
+    controller.abort();
+    await run;
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

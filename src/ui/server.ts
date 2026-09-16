@@ -24,6 +24,13 @@ import { nodeFs, nodeProcs } from "../supervisor/procs.ts";
 import { reconcile } from "../supervisor/reconcile.ts";
 import { loadSecrets, parseSecretBytes, saveSecrets, upsertSecret } from "../supervisor/secrets.ts";
 import { readExposeFile } from "../supervisor/tunnel.ts";
+import {
+  TUNNEL_WATCH_DISABLE_ENV,
+  TUNNEL_WATCH_INTERVAL_MS,
+  TUNNEL_WATCH_STARTUP_DELAY_MS,
+  createTunnelWatchState,
+  runTunnelWatchTick,
+} from "../supervisor/tunnel-watch.ts";
 import { completeOpenAIOAuth, startOpenAIOAuth } from "../supervisor/openai-oauth.ts";
 import { handleBotModelsApi } from "./bot-models.ts";
 import { isInjectionMode, parseInjectionLayers, readDeliverySettings, writeDeliverySettings } from "./delivery-settings.ts";
@@ -1149,10 +1156,60 @@ export function stopGuardWatch(): void {
   }
 }
 
+// Keep the public link alive: reconcile starts cloudflared when there is none
+// to adopt, but nothing restarted it when the process died, so the user's
+// trycloudflare URL went dark until they ran `openbot tunnel on` by hand. This
+// service is the one long-lived process on the box, so it owns the same kind
+// of bounded babysitter the guard has. Full policy: tunnel-watch.ts.
+let tunnelWatchTimer: ReturnType<typeof setInterval> | undefined;
+const tunnelWatchState = createTunnelWatchState();
+
+function runScheduledTunnelWatch(): void {
+  try {
+    const current = deps();
+    // The tick waits for cloudflared's hostname, so it is a promise; a slow
+    // start must never surface as an unhandled rejection on the service.
+    void runTunnelWatchTick(current, tunnelWatchState, {
+      // Same rule as the guard watch: only a literal "official" token counts.
+      mode: wrapMode(current.fs.read(current.paths.mode)),
+      expose: readExposeFile(current.fs, current.paths.expose),
+      event: (entry) => {
+        try {
+          requestLog.appendEvent(entry);
+        } catch {
+          /* event write is best-effort */
+        }
+      },
+      log: (line) => process.stderr.write(line),
+    }).catch(() => {
+      /* best-effort: a failed restart is retried on a later tick */
+    });
+  } catch {
+    /* best-effort: the babysitter must never take down the control service */
+  }
+}
+
+export function scheduleTunnelWatch(env: NodeJS.ProcessEnv = process.env): void {
+  if (env[TUNNEL_WATCH_DISABLE_ENV] === "0") return;
+  if (tunnelWatchTimer !== undefined) return;
+  const startup = setTimeout(runScheduledTunnelWatch, TUNNEL_WATCH_STARTUP_DELAY_MS);
+  if (typeof startup.unref === "function") startup.unref();
+  tunnelWatchTimer = setInterval(runScheduledTunnelWatch, TUNNEL_WATCH_INTERVAL_MS);
+  if (typeof tunnelWatchTimer.unref === "function") tunnelWatchTimer.unref();
+}
+
+export function stopTunnelWatch(): void {
+  if (tunnelWatchTimer !== undefined) {
+    clearInterval(tunnelWatchTimer);
+    tunnelWatchTimer = undefined;
+  }
+}
+
 function startServer(): void {
   registerProcessFallbacks();
   scheduleLogCleanup();
   scheduleGuardWatch();
+  scheduleTunnelWatch();
   server.listen(port, host, () => {
     const box = paths();
     fs.mkdirSync(box.sandData, { recursive: true });

@@ -103,7 +103,7 @@ The following is the complete recommended shape. Keep `mode` at `off` until a co
       "enabled": true,
       "maxAdditionalRuns": 1,
       "terminalDecisionTimeoutMs": 250,
-      "timeoutMs": 15000,
+      "timeoutMs": 120000,
       "maxAdditionalPromptTokens": 131072,
       "maxAdditionalCompletionTokens": 2048,
       "maxAdditionalCostUsd": 0.10
@@ -134,8 +134,8 @@ A layer object may be omitted to disable that layer. Explicit `enabled: false` a
 | `layers.l1.earlyResultThreshold` | `0` | Integer at least 0 (official §3.23). |
 | `layers.l2.maxAdditionalRuns` | `1` | Integer 0..1; hard maximum is 1. |
 | `layers.l2.terminalDecisionTimeoutMs` | `250` | Integer 1..2000; hard local terminal-decision deadline. |
-| `layers.l2.timeoutMs` | `15000` | Integer 1000..30000; also bounded by the existing request deadline. |
-| `layers.l2.maxAdditionalPromptTokens` | `131072` | Integer 8192..262144; includes complete canonical context plus nudge. |
+| `layers.l2.timeoutMs` | `120000` | Integer 1000..600000; also bounded by the existing request deadline. The additional run is a full second generation, so the deadline covers a normal turn (observed worst case: 59196 ms). `retryBudgetMs`, when set, caps it. |
+| `layers.l2.maxAdditionalPromptTokens` | `131072` | Integer 8192..1048576; includes complete canonical context plus nudge. The estimate charges each inline image a flat per-image cost, not its base64 byte weight. |
 | `layers.l2.maxAdditionalCompletionTokens` | `2048` | Integer 128..16384; hard cap for the additional run. |
 | `layers.l2.maxAdditionalCostUsd` | `0.10` | Number 0..10; unknown model rate or over-budget reservation skips L2. |
 | `layers.l3.maxRedrivesPerEpoch` | `1` | Integer 0..3; hard maximum is 3. |

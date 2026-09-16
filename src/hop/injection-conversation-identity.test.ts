@@ -47,9 +47,49 @@ const hardening = require(hardeningModule) as {
 const runtimeModule = path.join(here, "../../payload/runtime.cjs");
 const runtime = require(runtimeModule) as {
   deriveEpochId: (conversationId: string, messages: Array<Record<string, unknown>>) => string;
+  conversationIdFromCtx: (ctx: unknown) => string;
 };
 
 const CONVERSATION_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+// ---------------------------------------------------------------------------
+// The harness ContextImpl turn ctx (../packages/context/dist/core.js)
+//
+// The wrap (payload/runtime.cjs) has to read the conversation identity out of
+// the frame chain the harness hands to `.stream(ctx, ...)`: `.with(key, value)`
+// copies the direct parent's values, `.withName(name)` mints a frame with an
+// EMPTY values Map, and the identity sits on an ancestor frame under a
+// `createKey(Symbol("conversationId"), undefined)` key. Every other test in
+// this file hand-writes the id into the body, which is exactly why an extractor
+// that could not reach an ancestor frame passed CI.
+// ---------------------------------------------------------------------------
+
+type CtxFrame = {
+  parent?: CtxFrame | undefined;
+  values: Map<unknown, unknown>;
+  name?: string;
+  signal?: unknown;
+};
+
+const CONVERSATION_ID_SYMBOL = Symbol("conversationId");
+
+function frameWith(parent: CtxFrame | undefined, key: unknown, value: unknown): CtxFrame {
+  const values = new Map<unknown, unknown>(parent ? parent.values : []);
+  values.set(key, value);
+  return { parent: parent, values: values, name: "with" };
+}
+
+function frameNamed(parent: CtxFrame, name: string): CtxFrame {
+  return { parent: parent, values: new Map<unknown, unknown>(), name: name };
+}
+
+/** Bootstrap frame with the identity, then >6 empty-values withName frames. */
+function harnessTurnCtx(conversationId: string, resets = 10): CtxFrame {
+  let frame = frameWith(undefined, CONVERSATION_ID_SYMBOL, conversationId);
+  frame = frameWith(frame, "otel.span", { traceId: "turn" });
+  for (let i = 0; i < resets; i++) frame = frameNamed(frame, "span-" + String(i));
+  return frameWith(frame, "otel.span", { traceId: "stream" });
+}
 
 /** Non-silent first response: a current-response tool call never earns a second run. */
 const NON_SILENT_REPLY = JSON.stringify({
@@ -376,7 +416,7 @@ test("same conversation + same latest user message derive the same epoch (L3 con
   assert.notEqual(runtime.deriveEpochId("other-conversation", messages), runtime.deriveEpochId(CONVERSATION_ID, messages), "epochs do not collide across conversations");
 });
 
-test("wrap-stamped identity arms L3: a later silent request in the same turn is redriven", async () => {
+test("wrap-stamped identity arms L3: the next request of the turn is redriven BEFORE generation", async () => {
   hardening.resetForTests();
   const env = await fixture({ mode: "enforce" });
   try {
@@ -393,18 +433,57 @@ test("wrap-stamped identity arms L3: a later silent request in the same turn is 
     assert.equal(first.status, 200);
     assert.equal(env.hits.length, 1, "request 1: silent but not owed -- no second run");
     // Request 2: same conversation, same latest user message => same epoch.
-    // The classifier now sees an owed no-touch tail and L3 redrives once
-    // with the exact hidden nudge body. The reply hook stays silent for the
-    // first call so the run is silent-and-owed (L2/L3 territory).
+    // L3 is a PRE-GENERATION layer, so its nudge rides the FIRST upstream call
+    // of this request. L2's remediation nudge is byte-identical for the
+    // no-touch shape (HIDDEN_MARKER + REPLY_NUDGE_PROMPT), so the discriminator
+    // is POSITION, never the nudge text: a call whose outgoing messages already
+    // carry the nudge proves the next-request redrive, while a nudge that only
+    // shows up on a later call of the same request would be L2's second run.
+    const before = env.hits.length;
     env.reply = SILENT_REPLY;
     const second = await env.post(wrapDmBody());
     assert.equal(second.status, 200);
-    assert.equal(env.hits.length, 3, "request 2 first call + exactly one L3 redrive");
-    const redriveMessages = env.hits[2]!.body.messages as Array<{ role: string; content: string }>;
-    const last = redriveMessages[redriveMessages.length - 1]!;
-    assert.equal(last.role, "user");
-    assert.equal(last.content, hardening.HIDDEN_MARKER + hardening.REPLY_NUDGE_PROMPT, "exact hidden L3 nudge on the redrive call");
-    assertNoMirrorFields(env.hits[2]!.body, "redrive wire");
+    assert.ok(env.hits.length > before, "request 2 reached the upstream");
+    const firstCall = env.hits[before]!.body.messages as Array<{ role: string; content: string }>;
+    assert.equal(
+      firstCall[firstCall.length - 1]!.content,
+      hardening.HIDDEN_MARKER + hardening.REPLY_NUDGE_PROMPT,
+      "the L3 redrive is pre-generation: the nudge is already on request 2's FIRST upstream call",
+    );
+    assertNoMirrorFields(env.hits[before]!.body, "l3 redrive wire");
+  } finally {
+    await env.close();
+  }
+});
+
+test("the harness ctx chain is the real identity source: deep-chain extraction arms the wrap path", async () => {
+  hardening.resetForTests();
+  const env = await fixture({ mode: "enforce" });
+  try {
+    // End to end over the REAL wrap extractor: the frame chain the harness
+    // hands to `.stream(ctx, ...)` is the only production source of the
+    // conversation id, and a >6-frame walk is what reaches it.
+    const extracted = runtime.conversationIdFromCtx(harnessTurnCtx(CONVERSATION_ID, 12));
+    assert.equal(extracted, CONVERSATION_ID, "the deep chain walk finds the bootstrap frame");
+    const messages = [
+      { role: "system", content: "Profile: /home/box/agent-data/agents/b8783b54-0ab5-42ec-ac3b-3c838bc528bd/profile.json" },
+      { role: "user", content: "<user_query>please do the thing</user_query>" },
+    ];
+    const out = await env.post(wrapDmBody({
+      messages,
+      conversationId: extracted,
+      epochId: runtime.deriveEpochId(extracted, messages),
+    }));
+    assert.equal(out.status, 200);
+    assert.equal(env.hits.length, 1);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const row = readRows(env.dir).find((r) => r.channel === "hop");
+    assert.ok(row, "a hop row was recorded");
+    assert.equal(row.injection.identityGateResult, "pass", "the chain-extracted id arms the observable fallback");
+    assert.equal(row.injection.l2Eligible, true);
+    assert.equal(row.botId, "b8783b54-0ab5-42ec-ac3b-3c838bc528bd");
+    assert.equal(row.conversationId, CONVERSATION_ID);
+    assertNoMirrorFields(env.hits[0]!.body, "chain-identity wire");
   } finally {
     await env.close();
   }

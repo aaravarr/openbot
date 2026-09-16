@@ -33,6 +33,10 @@ export type BoxPaths = {
   readonly tunnelBin: AbsPath;
   readonly guardPid: AbsPath;
   readonly guardLog: AbsPath;
+  /** Minutes between guard patrols, as chosen for this box. Read by install.sh too. */
+  readonly guardInterval: AbsPath;
+  /** Events channel read by the control page; also written by the tunnel. */
+  readonly eventsLog: AbsPath;
   readonly pause: AbsPath;
   readonly pauseBots: AbsPath;
   /** Marker written when a payload upgrade defers the host bounce. */
@@ -91,6 +95,8 @@ export function boxPathsFrom(input: {
     tunnelBin: joinAbs(sandData, "bin/cloudflared"),
     guardPid: joinAbs(sandData, "openbot-guard.pid"),
     guardLog: joinAbs(sandData, "openbot-guard.log"),
+    guardInterval: joinAbs(sandData, "openbot-guard-interval"),
+    eventsLog: joinAbs(sandData, "openbot-events.jsonl"),
     pause: joinAbs(sandData, "openbot-pause.json"),
     pauseBots: joinAbs(sandData, "openbot-pause-bots.json"),
     pendingBounce: joinAbs(sandData, "openbot-pending-bounce.json"),

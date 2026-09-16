@@ -1,9 +1,19 @@
 import { guardCustom, type GuardResult } from "./guard.ts";
+import { appendWrapDriftEvent, nodeGuardEventSink, type GuardEventSink, type GuardTickTrigger } from "./guard-events.ts";
 import { type SupervisorDeps } from "./observe.ts";
 import { joinAbs } from "./paths.ts";
 import { parseOwnedPid } from "./procs.ts";
 import { appendGuardAudit, applyDeferredHostBounce, finalizeHostRunning, pendingHostBounce } from "./reconcile.ts";
 import { DEFAULT_HOP_FAILURE_THRESHOLD, runHopHealthCheck } from "./hop-health.ts";
+import {
+  clampDriftPollMs,
+  createWrapDriftDetector,
+  driftPollMsFromEnv,
+  type WrapDriftDetector,
+  type WrapDriftFinding,
+  type WrapDriftProbe,
+  type WrapDriftVerdict,
+} from "./wrap-drift.ts";
 
 /**
  * The scheduled custom-state guard. It reuses guardCustom for every check and
@@ -11,6 +21,11 @@ import { DEFAULT_HOP_FAILURE_THRESHOLD, runHopHealthCheck } from "./hop-health.t
  * mode token, never reconciles an official desired state, and never removes
  * the wrap. The official channel has zero quota, so drift always heals back
  * to custom or is refused — never fallen back to official.
+ *
+ * Between two scheduled ticks the loop also watches the host file with a cheap
+ * stat poll (wrap-drift.ts). A drift finding repairs nothing by itself: it
+ * wakes the loop early and runs the identical tick, so every rail above applies
+ * unchanged. Only the recorded trigger differs (schedule vs drift-poll).
  */
 
 export const GUARD_DAEMON_SOURCE = "guard-daemon";
@@ -40,6 +55,8 @@ export type GuardLogRow = {
   readonly hopFailures?: number | undefined;
   /** Set when the tick completed or deferred the post-repair host bounce. */
   readonly wrapBounce?: "bounced" | "deferred" | undefined;
+  /** Which path ran the tick: the schedule, the fast poll, or a one-shot. */
+  readonly trigger?: GuardTickTrigger | undefined;
 };
 
 export type GuardDaemonOutcome =
@@ -56,12 +73,28 @@ export type GuardDaemonOpts = {
   /** Probe-and-restart patrol for the runtime's hop address. Default on. */
   readonly hopHealth?: boolean;
   readonly hopFailureThreshold?: number;
+  /**
+   * Fast wrap-drift poll cadence in ms. `0` disables it. Defaults to
+   * OPENBOT_GUARD_DRIFT_POLL_MS, then DEFAULT_DRIFT_POLL_MS. See wrap-drift.ts.
+   */
+  readonly driftPollMs?: number;
+  /** Overridable stat/head probe. Defaults to node:fs (wrap-drift.ts). */
+  readonly driftProbe?: WrapDriftProbe;
+  /** Overridable wrap-drift event sink. Defaults to the shared events JSONL. */
+  readonly driftEvents?: GuardEventSink;
 };
 
 export type GuardTickIo = {
   readonly runOnce: (deps: SupervisorDeps) => Promise<GuardResult>;
   readonly stderr: (line: string) => void;
+  readonly trigger?: GuardTickTrigger | undefined;
+  /** The fast-poll verdict, recorded on the drift event. */
+  readonly driftReason?: string | undefined;
+  readonly events?: GuardEventSink | undefined;
 };
+
+/** Production event sink: append to the events JSONL the control page reads. */
+const defaultEvents: GuardEventSink = nodeGuardEventSink();
 
 export function clampIntervalMinutes(raw: number): number {
   if (!Number.isFinite(raw)) {
@@ -158,6 +191,7 @@ export function appendGuardLogLine(
     hopStatus?: string | undefined;
     hopFailures?: number | undefined;
     wrapBounce?: "bounced" | "deferred" | undefined;
+    trigger?: GuardTickTrigger | undefined;
   },
 ): void {
   try {
@@ -189,7 +223,7 @@ function repairBounceStranded(deps: SupervisorDeps): boolean {
 /** One loop pass: check, repair through guardCustom, record, keep going.
  * Kept for the CLI one-shot path: no hop patrol, log rows unchanged. */
 export async function runGuardTick(deps: SupervisorDeps, io: GuardTickIo): Promise<void> {
-  await runGuardTickWithHopHealth(deps, { ...io, hopHealth: false });
+  await runGuardTickWithHopHealth(deps, { ...io, trigger: "manual", hopHealth: false });
 }
 
 /** All tick work: custom-state repair plus the hop patrol, kept independent
@@ -213,6 +247,21 @@ export async function runGuardTickWithHopHealth(
       .filter((part): part is string => part !== undefined)
       .join("+");
     appendGuardAudit(deps, { source: GUARD_DAEMON_SOURCE }, drifted || "drift", "custom");
+    if (result.wrapRepaired) {
+      // Visible in the control page's event list, whichever path found the
+      // drift. Best-effort: the audit line and the guard log row above already
+      // carry the repair (see guard-events.ts).
+      appendWrapDriftEvent(
+        deps,
+        {
+          hostMain: deps.paths.hostMain,
+          trigger: io.trigger ?? "schedule",
+          modeRepaired: result.modeRepaired,
+          ...(io.driftReason !== undefined ? { reason: io.driftReason } : {}),
+        },
+        io.events ?? defaultEvents,
+      );
+    }
     if (result.wrapRepaired && repairBounceStranded(deps)) {
       // The repair deferred the host bounce to a finalizer that never came.
       // Grant GUARD_BOUNCE_GRACE_TICKS repair ticks, then force the deferred
@@ -291,6 +340,7 @@ export async function runGuardTickWithHopHealth(
     hopStatus,
     hopFailures,
     ...(wrapBounce !== undefined ? { wrapBounce } : {}),
+    ...(io.trigger !== undefined ? { trigger: io.trigger } : {}),
   });
 }
 
@@ -310,11 +360,87 @@ function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
   });
 }
 
+export type GuardWakeOutcome =
+  | { readonly kind: "interval" }
+  | { readonly kind: "aborted" }
+  | { readonly kind: "drift"; readonly drift: WrapDriftFinding };
+
+/**
+ * Wait out the rest of the interval, but wake early the moment the fast poll
+ * reports drift. Two timers, one clock: the interval timer is armed once, and a
+ * poll timer re-arms itself until one of them fires.
+ *
+ * The poll runs synchronously inside its timer callback (stat plus, only when
+ * the fingerprint moved, one short read), so a poll costs no promises and the
+ * whole wait stays at one microtask per wake -- the scheduled tick's cadence is
+ * unchanged, and so is every test that drives it with mock timers.
+ */
+export function waitForGuardWake(input: {
+  readonly intervalMs: number;
+  readonly pollMs: number;
+  readonly detector: WrapDriftDetector;
+  readonly signal?: AbortSignal | undefined;
+}): Promise<GuardWakeOutcome> {
+  return new Promise((resolve) => {
+    if (input.signal?.aborted === true) {
+      resolve({ kind: "aborted" });
+      return;
+    }
+    let settled = false;
+    let intervalTimer: ReturnType<typeof setTimeout> | undefined;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    const done = (outcome: GuardWakeOutcome): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (intervalTimer !== undefined) {
+        clearTimeout(intervalTimer);
+      }
+      if (pollTimer !== undefined) {
+        clearTimeout(pollTimer);
+      }
+      input.signal?.removeEventListener("abort", onAbort);
+      resolve(outcome);
+    };
+    function onAbort(): void {
+      done({ kind: "aborted" });
+    }
+    const schedulePoll = (): void => {
+      pollTimer = setTimeout(() => {
+        let verdict: WrapDriftVerdict;
+        try {
+          verdict = input.detector.poll();
+        } catch {
+          // A probe failure is not drift: the scheduled tick still runs.
+          verdict = { kind: "none" };
+        }
+        if (verdict.kind === "drift") {
+          done({ kind: "drift", drift: verdict });
+          return;
+        }
+        schedulePoll();
+      }, input.pollMs);
+    };
+    input.signal?.addEventListener("abort", onAbort, { once: true });
+    intervalTimer = setTimeout(() => {
+      done({ kind: "interval" });
+    }, input.intervalMs);
+    schedulePoll();
+  });
+}
+
 /**
  * Run the guard loop until the abort signal fires. One tick runs immediately,
  * the next is scheduled only after the previous one settles, so slow repairs
  * never overlap. Refused and no-custom-state ticks log to stderr and keep the
  * loop alive; the loop never reconciles an official desired state.
+ *
+ * Between two scheduled ticks a stat poll watches the host file (wrap-drift.ts).
+ * Grok Bot's idle auto-update rewrites it every few hours and the scheduled
+ * interval is minutes, so the poll is what turns a multi-minute stock fallback
+ * into a few seconds. A poll verdict does not repair anything by itself: it runs
+ * the very same tick, through the same guardCustom, with every rail intact.
  */
 export async function runGuardDaemon(deps: SupervisorDeps, opts: GuardDaemonOpts): Promise<GuardDaemonOutcome> {
   const owner = guardDaemonPid(deps);
@@ -326,17 +452,62 @@ export async function runGuardDaemon(deps: SupervisorDeps, opts: GuardDaemonOpts
   const stderr = opts.stderr ?? ((line: string) => console.error(line));
   const intervalMs = clampIntervalMinutes(opts.intervalMinutes) * 60_000;
   const signal = opts.signal;
+  const driftPollMs = clampDriftPollMs(opts.driftPollMs ?? driftPollMsFromEnv(process.env));
+  // A poll that cannot fire between two scheduled ticks buys nothing.
+  const pollMs = driftPollMs > 0 && driftPollMs < intervalMs ? driftPollMs : 0;
+  const detector =
+    pollMs > 0
+      ? createWrapDriftDetector({
+          hostMain: deps.paths.hostMain,
+          mode: () => deps.fs.read(deps.paths.mode),
+          ...(opts.driftProbe !== undefined ? { probe: opts.driftProbe } : {}),
+        })
+      : undefined;
+  const tickIo: GuardTickIo & {
+    hopHealth?: boolean | undefined;
+    hopFailureThreshold?: number | undefined;
+  } = {
+    runOnce,
+    stderr,
+    hopHealth: opts.hopHealth,
+    hopFailureThreshold: opts.hopFailureThreshold,
+    ...(opts.driftEvents !== undefined ? { events: opts.driftEvents } : {}),
+  };
   try {
-    while (signal?.aborted !== true) {
+    // The wait comes after every tick, whichever tick it was: a drift repair is
+    // not followed by the scheduled tick it would have replaced, and a slow
+    // repair never overlaps the next one. `next` is therefore exactly the tick
+    // that is due, and undefined only when the abort ended the wait.
+    let next: { readonly trigger: GuardTickTrigger; readonly reason?: string } | undefined = { trigger: "schedule" };
+    while (next !== undefined && signal?.aborted !== true) {
+      const due = next;
       await runGuardTickWithHopHealth(deps, {
-        runOnce,
-        stderr,
-        hopHealth: opts.hopHealth,
-        hopFailureThreshold: opts.hopFailureThreshold,
+        ...tickIo,
+        trigger: due.trigger,
+        ...(due.reason !== undefined ? { driftReason: due.reason } : {}),
       });
-      // If the signal fired during the tick, sleep resolves immediately and
-      // the while condition ends the loop without scheduling real work.
-      await sleep(intervalMs, signal);
+      // Adopt whatever the tick left on disk. Without this the repair's own
+      // write would read back as a new drift, and every repair would re-arm
+      // itself in a loop.
+      detector?.rebaseline();
+      if (detector === undefined) {
+        // If the signal fired during the tick, sleep resolves immediately and
+        // the while condition ends the loop without scheduling real work.
+        await sleep(intervalMs, signal);
+        next = { trigger: "schedule" };
+        continue;
+      }
+      const wake = await waitForGuardWake({ intervalMs, pollMs, detector, signal });
+      if (wake.kind === "interval") {
+        next = { trigger: "schedule" };
+      } else if (wake.kind === "drift") {
+        stderr(
+          `openbot-guard: host wrap drift detected by the ${String(Math.round(pollMs / 1000))}s poll (${wake.drift.reason}); repairing now`,
+        );
+        next = { trigger: "drift-poll", reason: wake.drift.reason };
+      } else {
+        next = undefined;
+      }
     }
   } finally {
     releaseOwnPidfile(deps);

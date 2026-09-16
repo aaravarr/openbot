@@ -13,10 +13,24 @@ import { renderQrAscii } from "../qrcode.ts";
 import { boxPathsFrom, joinAbs } from "../supervisor/paths.ts";
 import { catalogFromPlanJson } from "../supervisor/plan.ts";
 import { observe, type SupervisorDeps } from "../supervisor/observe.ts";
+import {
+  GUARD_WATCH_DISABLE_ENV,
+  GUARD_WATCH_INTERVAL_MS,
+  GUARD_WATCH_STARTUP_DELAY_MS,
+  createGuardWatchState,
+  runGuardWatchTick,
+} from "../supervisor/guard-watch.ts";
 import { nodeFs, nodeProcs } from "../supervisor/procs.ts";
 import { reconcile } from "../supervisor/reconcile.ts";
 import { loadSecrets, parseSecretBytes, saveSecrets, upsertSecret } from "../supervisor/secrets.ts";
 import { readExposeFile } from "../supervisor/tunnel.ts";
+import {
+  TUNNEL_WATCH_DISABLE_ENV,
+  TUNNEL_WATCH_INTERVAL_MS,
+  TUNNEL_WATCH_STARTUP_DELAY_MS,
+  createTunnelWatchState,
+  runTunnelWatchTick,
+} from "../supervisor/tunnel-watch.ts";
 import { completeOpenAIOAuth, startOpenAIOAuth } from "../supervisor/openai-oauth.ts";
 import { handleBotModelsApi } from "./bot-models.ts";
 import { isInjectionMode, parseInjectionLayers, readDeliverySettings, writeDeliverySettings } from "./delivery-settings.ts";
@@ -1097,9 +1111,105 @@ export function stopLogCleanup(): void {
   }
 }
 
+// Watch the watcher: the guard daemon is the only thing that heals host wrap
+// drift, and nothing restarts it -- install.sh starts it once and reconcile
+// only ever stops it. This service is the one long-lived process on the box,
+// so it checks the daemon's pidfile on a timer and starts one the way
+// install.sh does when a custom box has none. Full policy: guard-watch.ts.
+let guardWatchTimer: ReturnType<typeof setInterval> | undefined;
+const guardWatchState = createGuardWatchState();
+
+function runScheduledGuardWatch(): void {
+  try {
+    const current = deps();
+    runGuardWatchTick(current, guardWatchState, {
+      // wrapMode owns the mode rule: only a literal "official" token is
+      // official, so an unreadable mode file never hides a custom box's guard.
+      mode: wrapMode(current.fs.read(current.paths.mode)),
+      event: (entry) => {
+        try {
+          requestLog.appendEvent(entry);
+        } catch {
+          /* event write is best-effort */
+        }
+      },
+      log: (line) => process.stderr.write(line),
+    });
+  } catch {
+    /* best-effort: the babysitter must never take down the control service */
+  }
+}
+
+export function scheduleGuardWatch(env: NodeJS.ProcessEnv = process.env): void {
+  if (env[GUARD_WATCH_DISABLE_ENV] === "0") return;
+  if (guardWatchTimer !== undefined) return;
+  const startup = setTimeout(runScheduledGuardWatch, GUARD_WATCH_STARTUP_DELAY_MS);
+  if (typeof startup.unref === "function") startup.unref();
+  guardWatchTimer = setInterval(runScheduledGuardWatch, GUARD_WATCH_INTERVAL_MS);
+  if (typeof guardWatchTimer.unref === "function") guardWatchTimer.unref();
+}
+
+export function stopGuardWatch(): void {
+  if (guardWatchTimer !== undefined) {
+    clearInterval(guardWatchTimer);
+    guardWatchTimer = undefined;
+  }
+}
+
+// Keep the public link alive: reconcile starts cloudflared when there is none
+// to adopt, but nothing restarted it when the process died, so the user's
+// trycloudflare URL went dark until they ran `openbot tunnel on` by hand. This
+// service is the one long-lived process on the box, so it owns the same kind
+// of bounded babysitter the guard has. Full policy: tunnel-watch.ts.
+let tunnelWatchTimer: ReturnType<typeof setInterval> | undefined;
+const tunnelWatchState = createTunnelWatchState();
+
+function runScheduledTunnelWatch(): void {
+  try {
+    const current = deps();
+    // The tick waits for cloudflared's hostname, so it is a promise; a slow
+    // start must never surface as an unhandled rejection on the service.
+    void runTunnelWatchTick(current, tunnelWatchState, {
+      // Same rule as the guard watch: only a literal "official" token counts.
+      mode: wrapMode(current.fs.read(current.paths.mode)),
+      expose: readExposeFile(current.fs, current.paths.expose),
+      event: (entry) => {
+        try {
+          requestLog.appendEvent(entry);
+        } catch {
+          /* event write is best-effort */
+        }
+      },
+      log: (line) => process.stderr.write(line),
+    }).catch(() => {
+      /* best-effort: a failed restart is retried on a later tick */
+    });
+  } catch {
+    /* best-effort: the babysitter must never take down the control service */
+  }
+}
+
+export function scheduleTunnelWatch(env: NodeJS.ProcessEnv = process.env): void {
+  if (env[TUNNEL_WATCH_DISABLE_ENV] === "0") return;
+  if (tunnelWatchTimer !== undefined) return;
+  const startup = setTimeout(runScheduledTunnelWatch, TUNNEL_WATCH_STARTUP_DELAY_MS);
+  if (typeof startup.unref === "function") startup.unref();
+  tunnelWatchTimer = setInterval(runScheduledTunnelWatch, TUNNEL_WATCH_INTERVAL_MS);
+  if (typeof tunnelWatchTimer.unref === "function") tunnelWatchTimer.unref();
+}
+
+export function stopTunnelWatch(): void {
+  if (tunnelWatchTimer !== undefined) {
+    clearInterval(tunnelWatchTimer);
+    tunnelWatchTimer = undefined;
+  }
+}
+
 function startServer(): void {
   registerProcessFallbacks();
   scheduleLogCleanup();
+  scheduleGuardWatch();
+  scheduleTunnelWatch();
   server.listen(port, host, () => {
     const box = paths();
     fs.mkdirSync(box.sandData, { recursive: true });

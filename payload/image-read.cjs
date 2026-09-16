@@ -1052,10 +1052,29 @@ async function enrichImageReads(messages) {
 
   var imageCalls = collectImageReadCalls(messages);
   var out = [];
+  // Injections are held until the RUN of consecutive tool results ends. An
+  // assistant turn with several parallel tool calls emits one tool result per
+  // call, back to back; dropping a user message between two of them splits
+  // the run and the upstream rejects the whole array with 400 ("assistant
+  // message with 'tool_calls' must be followed by tool messages" — incident
+  // 2026-09-11, requests 4a36eb35 / d3c53902 / 2c2ca0cc: two parallel Read
+  // calls, the injection for the first landed between the results). Held
+  // injections are flushed, in original order, right after the last tool
+  // result of the run — still immediately after "its" tool result whenever
+  // the result run is a single row, which is every previously-tested shape.
+  var pendingInjections = [];
+  var flushInjections = function () {
+    for (var f = 0; f < pendingInjections.length; f++) out.push(pendingInjections[f]);
+    pendingInjections = [];
+  };
+  var lastWasTool = false;
   for (var i = 0; i < messages.length; i++) {
     var msg = messages[i];
+    var isToolRow = isRecord(msg) && msg.role === "tool";
+    if (lastWasTool && !isToolRow) flushInjections();
     out.push(msg);
-    if (!isRecord(msg) || msg.role !== "tool") continue;
+    lastWasTool = isToolRow;
+    if (!isToolRow) continue;
     // Image data already present in the result text means nothing is injected:
     // neither harness bytes nor a disk read (never double-inject).
     if (contentHasImageData(msg.content)) continue;
@@ -1066,7 +1085,7 @@ async function enrichImageReads(messages) {
         ? "[Image attached from Read: " + call.filePath + "]"
         : "[Image attached from tool result]";
       for (var k = 0; k < provided.length; k++) {
-        out.push(imageMessageFor(label, provided[k].url));
+        pendingInjections.push(imageMessageFor(label, provided[k].url));
       }
       logLine("image-read mapped " + provided.length + " harness image byte(s) after a tool result");
       continue; // harness bytes win; never read the file from disk here
@@ -1078,9 +1097,10 @@ async function enrichImageReads(messages) {
       logLine("image-read skipped: " + hit.filePath + " (" + read.reason + ")");
       continue;
     }
-    out.push(imageMessageFor("[Image attached from Read: " + hit.filePath + "]", read.dataUrl));
+    pendingInjections.push(imageMessageFor("[Image attached from Read: " + hit.filePath + "]", read.dataUrl));
     logLine("image-read enriched: " + hit.filePath);
   }
+  flushInjections();
   return out;
 }
 

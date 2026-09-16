@@ -64,7 +64,7 @@ Configure it in `/home/box/sand-data/openbot-injection.json` (override with `OPE
 - `dry-run` records eligibility, selected family, suffix fingerprint/body hash, and would-apply metadata only. It never mutates messages, holds a terminal, dispatches a second run, or changes first-token latency.
 - `enforce` enables the selected layers. A present layer object defaults `enabled` to `true`; an explicit `enabled: false` disables that layer, and the top-level `off` gate always wins.
 - L1 defaults: `startOfTurnAckThreshold: 1` (integer ≥1), `watchingSilenceThreshold: 6` (integer ≥1), `earlyResultThreshold: 0` (integer ≥0).
-- L2 defaults/limits: `maxAdditionalRuns: 1` (0..1; hard maximum 1), `terminalDecisionTimeoutMs: 250` (1..2000), `timeoutMs: 15000` (1000..30000), `maxAdditionalPromptTokens: 131072` (8192..262144), `maxAdditionalCompletionTokens: 2048` (128..16384), and `maxAdditionalCostUsd: 0.10` (0..10).
+- L2 defaults/limits: `maxAdditionalRuns: 1` (0..1; hard maximum 1), `terminalDecisionTimeoutMs: 250` (1..2000), `timeoutMs: 120000` (1000..600000; the additional run is a full second generation, so this must cover a normal turn), `maxAdditionalPromptTokens: 131072` (8192..1048576), `maxAdditionalCompletionTokens: 2048` (128..16384), and `maxAdditionalCostUsd: 0.10` (0..10).
 - L3 defaults/limits: `maxRedrivesPerEpoch: 1` (0..3; hard maximum 3) and `ttlMs: 300000` (60000..900000).
 - There is no response-size or capture-admission setting: L2 holds only tiny host-boundary terminal/framing events, never a whole response. See [reference.md](reference.md) for exact bounds and the no-forgery/terminal-release rules.
 
@@ -198,6 +198,14 @@ curl -sS -X POST http://127.0.0.1:9280/api/save \
 ```
 
 Off: `"expose":"off"`. CLI: `openbot tunnel on`, `openbot tunnel off`, `openbot tunnel status`.
+
+A `cloudflare-quick` URL is bound to the cloudflared process in `openbot-tunnel.pid`: while that pid is alive the URL is stable, and reconcile never probes the public URL or rotates it. A new URL happens only when that process died (the UI service restarts it within a minute and logs `tunnel.rotate` in `openbot-events.jsonl`) or when the user turns the tunnel off and on. Do not "fix" a link by re-running on/off: that always costs a new hostname.
+
+### Guard, fast drift, and the watcher
+
+A custom box runs a guard daemon that heals host wrap drift — the host file Grok Bot's own idle auto-update rewrites back to stock. It patrols once a minute (`openbot-guard-interval`, minutes 1–60; `OPENBOT_GUARD_INTERVAL` overrides it for one start) and, between patrols, stats the host file every 5 s (`OPENBOT_GUARD_DRIFT_POLL_MS`, 1000–60000 ms, `0` disables), so drift is repaired in seconds instead of waiting for the next patrol. A repair appends a WARN `wrap-drift` row to `openbot-events.jsonl` (`metadata.trigger` is `drift-poll` when the poll found it, with `metadata.reason` such as `changed+marker-missing`), one row to `openbot-guard.log`, and an audit line to `openbot-audit.jsonl`. On official nothing fires: a stock host file there is the desired state, not drift.
+
+The UI service babysits the daemon: every 60 s it starts one when `openbot-guard.pid` names no live process (`OPENBOT_GUARD_WATCH=0` disables; failures back off up to 15 minutes) and always rewrites `openbot-guard-watch.json` with `{lastTickAt, lastTickMs, mode, guardPid, lastAction, failures}`. A missing or minutes-old `lastTickAt` means the babysitter itself is not running — read that file when drift is not being repaired. Do not hand-edit the heartbeat, `openbot-guard.log`, or `openbot-events.jsonl`. Details: [reference.md](reference.md) § "Guard patrol, fast wrap drift, and the babysitter".
 
 ### Logs
 

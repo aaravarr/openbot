@@ -95,6 +95,16 @@ test("install.sh vendors compression deps, retries npmmirror, and warns loudly w
   assert.match(body, /OPENBOT_SKIP_NPM_INSTALL/);
 });
 
+test("install.sh passes the guard interval instead of resetting it to the default", () => {
+  const body = readFileSync(installSh, "utf8");
+  // A hand-tuned interval must survive every later install: the environment
+  // wins, then the value persisted in sand-data, then the CLI default.
+  assert.match(body, /guard_interval_arg/);
+  assert.match(body, /OPENBOT_GUARD_INTERVAL/);
+  assert.match(body, /openbot-guard-interval/);
+  assert.match(body, /guard --daemon[\s\S]{0,200}--interval/);
+});
+
 test("bot-mode falls back from a 403 codeload source to the GitHub archive", async (t) => {
   if (skipOnWindows(t)) return;
   const data = mkdtempSync(path.join(os.tmpdir(), "openbot-download-fallback-"));

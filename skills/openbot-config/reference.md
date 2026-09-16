@@ -58,11 +58,16 @@ Default root: `/home/box/sand-data/` (see env below).
 | `secrets.json` | JSON, **0600** | `{ "providers": { "<providerId>": "<stored locally>" } }` |
 | `openbot-pause.json` | JSON | Global gateway pause flag (see below). Missing or corrupt = not paused (fail open). Trailing newline. |
 | `openbot-bot-models.json` | JSON | Optional per-bot overrides: { "assignments": { "<botId>": "<catalog modelId>" } }; missing/corrupt = empty. OPENBOT_BOT_MODELS overrides the path. |
-| `openbot-expose` | text | `loopback` or `cloudflare-quick` plus newline. Written by reconcile. |
+| `openbot-expose` | text | `loopback` or `cloudflare-quick` plus newline. Written by reconcile when the token differs. |
+| `openbot-guard-interval` | text | Optional guard patrol tuning, minutes 1-60 plus newline. `install.sh` and the guard babysitter pass it as `--interval`; `OPENBOT_GUARD_INTERVAL` overrides it for one start. Default 1. |
+| `openbot-events.jsonl` | JSONL, append-only | Events channel (`{id, at, type, severity, message, metadata}`, newest last). The tunnel writes `tunnel.start` / `tunnel.rotate` here with the old and new URL; the service writes `guard.watch` / `tunnel.watch`; the guard daemon writes `wrap-drift` when it repairs host wrap drift. Written whether or not request recording is on. Do not hand-edit. |
+| `openbot-guard-watch.json` | JSON | Guard-babysitter heartbeat, rewritten by the service on every 60 s check: `{lastTickAt, lastTickMs, mode, guardPid, lastAction, failures}`; `lastAction` is `skip:<reason>`, `started:<pid>`, or `failed`. Missing, or `lastTickAt` minutes old, means the **babysitter** is not running — the daemon being alive is not proof it is. Diagnostics only; do not hand-edit. |
+| `openbot-guard.log` | JSONL, append-only | One row per guard tick (`{ts, detail, ok, modeRepaired, wrapRepaired, hopStatus, hopFailures, wrapBounce, trigger}`); `trigger` is `schedule`, `drift-poll`, or `manual`. Truncated past 1 MiB. Diagnostics only; do not hand-edit. |
 | `openbot-logs.json` | JSON | LogSettings (see below). Trailing newline. |
 | `openbot-injection.json` | JSON | Optional named injection strategy (see below); absent/invalid = mode off; trailing newline. |
 | `openbot-model-catalog.json` | JSON | Source B cache — **do not hand-edit**; `POST /api/model-catalog/refresh` |
-| `openbot-tunnel.json` | JSON | Cached public tunnel URL — do not fake a URL; use `set-expose` / `openbot tunnel on` |
+| `openbot-tunnel.json` | JSON | Cached public tunnel URL and the pid that owns it — do not fake a URL; use `set-expose` / `openbot tunnel on`. The URL is valid while that pid is alive |
+| `openbot-tunnel.log` (+ `.1`) | log | cloudflared output, appended across restarts and rotated to `.1` past 4 MiB. OpenBot markers `--- openbot: … ---` name each start, its reason and its URL |
 | `openbot-requests.jsonl` + `openbot-request-bodies/` | logs | Not config |
 | `host-main.cjs.pre-openbot` | backup | Read-only dump; do not patch as the source of wrap |
 | `openbot-hop.pid`, `openbot-ui.pid`, `openbot-tunnel.pid` | pids | Supervisor-owned; do not impersonate |
@@ -100,7 +105,7 @@ The following is the complete recommended shape. Keep `mode` at `off` until a co
       "enabled": true,
       "maxAdditionalRuns": 1,
       "terminalDecisionTimeoutMs": 250,
-      "timeoutMs": 15000,
+      "timeoutMs": 120000,
       "maxAdditionalPromptTokens": 131072,
       "maxAdditionalCompletionTokens": 2048,
       "maxAdditionalCostUsd": 0.10
@@ -131,8 +136,8 @@ A layer object may be omitted to disable that layer. Explicit `enabled: false` a
 | `layers.l1.earlyResultThreshold` | `0` | Integer at least 0 (official §3.23). |
 | `layers.l2.maxAdditionalRuns` | `1` | Integer 0..1; hard maximum is 1. |
 | `layers.l2.terminalDecisionTimeoutMs` | `250` | Integer 1..2000; hard local terminal-decision deadline. |
-| `layers.l2.timeoutMs` | `15000` | Integer 1000..30000; also bounded by the existing request deadline. |
-| `layers.l2.maxAdditionalPromptTokens` | `131072` | Integer 8192..262144; includes complete canonical context plus nudge. |
+| `layers.l2.timeoutMs` | `120000` | Integer 1000..600000; also bounded by the existing request deadline. The additional run is a full second generation, so the deadline covers a normal turn (observed worst case: 59196 ms). `retryBudgetMs`, when set, caps it. |
+| `layers.l2.maxAdditionalPromptTokens` | `131072` | Integer 8192..1048576; includes complete canonical context plus nudge. The estimate charges each inline image a flat per-image cost, not its base64 byte weight. |
 | `layers.l2.maxAdditionalCompletionTokens` | `2048` | Integer 128..16384; hard cap for the additional run. |
 | `layers.l2.maxAdditionalCostUsd` | `0.10` | Number 0..10; unknown model rate or over-budget reservation skips L2. |
 | `layers.l3.maxRedrivesPerEpoch` | `1` | Integer 0..3; hard maximum is 3. |
@@ -249,6 +254,19 @@ For OpenAI OAuth, the stored value remains a redacted string under `providers.op
 
 - Mode file: `official\n` or `custom\n`. Source of truth for wrap mode. Reconcile writes it (`writeMode`). Do not flip this file to wrap or unwrap. The UI reads it **strictly**: only the literal token `official` (after trimming) means official; missing, empty, or garbage resolves to **custom** — never official (users own custom state and often have zero official quota, so an unreadable mode file must never reconcile chat back to official). Repair a corrupted token by writing `custom` and reconciling from the control page (`POST /api/save`); check `openbot-audit.jsonl` to see what changed it.
 - Expose file: `loopback\n` or `cloudflare-quick\n`. Tokens `cloudflare` / `on` / `cf` parse to `cloudflare-quick`; `off` / `loopback` / `no` / `false` parse to `loopback`. Tailscale is not in this release.
+- Keep the URL stable: a quick-tunnel hostname belongs to the cloudflared process recorded in `openbot-tunnel.json` (`pid`), so reconcile adopts the cached URL whenever that pid is alive — it never probes the public URL and never restarts a live tunnel. A new URL is minted only when the pid is dead, when the cache is missing/corrupt, or when the user turns the tunnel off and on. The UI service babysits it (`OPENBOT_TUNNEL_WATCH=0` disables): every 60 s it restarts a dead cloudflared, backs off up to 15 minutes on repeated failures, and does nothing on official or on a `loopback` expose.
+- Rotation is recorded, never silent: `openbot-events.jsonl` gets a `tunnel.rotate` row with `metadata.previousUrl`, `metadata.url` and `metadata.reason` (`pid-dead`, `cache-unreadable`, `no-cache`), and the same information lands in `openbot-tunnel.log` markers. Report a changed URL to the user from there instead of guessing.
+
+## Guard patrol, fast wrap drift, and the babysitter
+
+The guard daemon is the only thing that heals host wrap drift — the host file rewritten back to stock Grok by Grok Bot's own idle auto-update. Every tick reuses `guardCustom`, so the daemon never writes the official token, never reconciles an official desired state, and never removes the wrap.
+
+- Cadence: one patrol per minute by default. The box's chosen interval lives in `openbot-guard-interval` (minutes 1-60) and is passed as `--interval` by `install.sh` and by the babysitter; `OPENBOT_GUARD_INTERVAL` overrides it for one start.
+- Fast drift poll: between two patrols the daemon stats the host file every 5 s and reads its first 4 KB only when the fingerprint moved (`ino`, `size`, `mtimeMs`, `ctimeMs`) or a periodic marker sweep is due. A change must hold for two identical polls, so a writer still streaming bytes is left alone; the sweep runs every 12 polls for the pathological "marker gone, stat unchanged" case. `OPENBOT_GUARD_DRIFT_POLL_MS` sets the cadence (1000-60000 ms) and `0` disables the fast poll. A missing host file is not drift — the scheduled tick owns that.
+- A drift finding repairs nothing by itself: it wakes the same tick, through the same `guardCustom`, so every rail above applies unchanged and a repair that is refused is retried by the schedule, never by the poll.
+- Official suppresses the fast path: a stock host file on an official box is the desired state. Only the literal `official` token counts (same strict rule as the UI).
+- `wrap-drift` event: each repaired drift appends one WARN row to `openbot-events.jsonl` with `metadata.source` = `guard-daemon`, `metadata.trigger` (`schedule` | `drift-poll` | `manual`), `metadata.reason` when the poll fired (`changed`, `changed+marker-missing`, `marker-missing`), `metadata.modeRepaired`, and `metadata.hostMain`. The same repair also lands in `openbot-guard.log` (its `trigger` field) and in `openbot-audit.jsonl` (`from` = `mode-drift`, `wrap-drift`, or `mode-drift+wrap-drift`).
+- Babysitter: the UI service checks every 60 s that the daemon named by `openbot-guard.pid` is alive and starts one the way `install.sh` does (`OPENBOT_GUARD_WATCH=0` disables). It never starts one on official, never runs two at once, and backs off 1 → 2 → 4 → 8 → 15 minutes on consecutive failures. It appends `guard.watch` to `openbot-events.jsonl` only when it acts, and always rewrites `openbot-guard-watch.json`: that heartbeat is the difference between "nothing to do" and "not running".
 
 ## `openbot-audit.jsonl`
 
@@ -373,7 +391,7 @@ On each `POST /v1/chat/completions`, after `toOpenAIMessages` converts host part
 
 - **Detect**: an assistant `tool_calls` entry whose `function.name` is case-insensitively `read` or a `read_image`-style variant (`read_image`, `read-image`, `read image`, `readImage`, …), and whose `function.arguments` (JSON) has a `path` or `file_path` value ending in `.png`, `.jpg`, `.jpeg`, `.webp`, or `.gif` (case-insensitive).
 - **Match**: the `role: "tool"` result with the same `tool_call_id`. If that result already contains image data (`image_url` or a `data:` URI), do nothing (no double-inject).
-- **Inject**: read the file from disk and insert a follow-up `role: "user"` message **immediately after that tool result**:
+- **Inject**: read the file from disk and insert a follow-up `role: "user"` message **directly after that tool's result run** — after a run of consecutive `role: "tool"` rows ends, never inside it:
 
   ```json
   {
@@ -385,7 +403,7 @@ On each `POST /v1/chat/completions`, after `toOpenAIMessages` converts host part
   }
   ```
 
-  MIME comes from the extension. Multiple images in one turn each get their own user message, each placed right after its own tool result.
+  MIME comes from the extension. Multiple images in one turn each get their own user message, queued in order and placed after the run of consecutive tool results ends — one assistant turn may carry several parallel calls whose results arrive back to back, and a user message between two of them would split the run and get the whole array rejected with 400 (incident 2026-09-11).
 - **Guards**: missing / unreadable / non-file / over **20 MB** → skip that image, log a warning to stderr, and leave the tool result as-is. Never throw, never block the chat request. Text reads (non-image paths) and non-Read tools pass through untouched.
 
 ### Harness image bytes on tool results (`experimental_content`)
@@ -393,7 +411,7 @@ On each `POST /v1/chat/completions`, after `toOpenAIMessages` converts host part
 The official Read tool returns inline base64 image bytes on the tool result under `experimental_content` (aliases `experimentalContent` and plural forms are probed; entries may be a single object or an array, shaped roughly like `{ "type": "image", "data": "<base64>", "mimeType": … }`; a `data:` URI or raw bytes under `image` are accepted too). Behavior:
 
 - **Carry**: the conversion carries that raw value verbatim on the emitted `role: "tool"` row so it survives the runtime → hop round-trip. `enrichImageReads` then strips every carried alias from every row before anything can reach upstream — the harness's own field is never forwarded as an invented upstream field.
-- **Map**: harness image bytes win. The same injected `role: "user"` message shape as a disk Read is inserted right after the tool result (label `[Image attached from Read: <path>]` when the tool call is a Read of an image file, else `[Image attached from tool result]`). This applies to **any** tool result that carries image bytes, not only Read calls — the model sees exactly what the harness produced, and the file is never re-read from disk (short-circuit).
+- **Map**: harness image bytes win. The same injected `role: "user"` message shape as a disk Read is inserted after that tool result's run ends (label `[Image attached from Read: <path>]` when the tool call is a Read of an image file, else `[Image attached from tool result]`). This applies to **any** tool result that carries image bytes, not only Read calls — the model sees exactly what the harness produced, and the file is never re-read from disk (short-circuit).
 - **Never double-inject**: if the tool result text already contains image data (`image_url` / a `data:` URI), nothing is injected. A second conversion pass over already-injected messages does not duplicate the image. Identical duplicate URLs inside one `experimental_content` value are collapsed to one image.
 - **Fallback**: `experimental_content` present but with no usable image entries (e.g. only text items, or undecodable bytes) → normal behavior resumes: a Read-style call still gets the disk-read injection, other tools are untouched.
 - **Guards**: entries whose own `type` is not `image` are skipped; decoded bytes over **20 MB** are skipped; remote `http(s)` URLs are passed through only when a sibling mime or the file extension says image — the hop never fetches.
@@ -406,6 +424,10 @@ The upstream limit was pinned in three on-the-box rounds: the fusion gateway edg
 2. **Per-image history quota**: every **history-turn** image is held under `HISTORY_IMAGE_TARGET_BYTES` (**88 KB decoded**; calibrated against the 4.2 MB worst-case target for the incident shape: 26 distinct history images at the target ≈ 3.1 MB of data-URL + ~0.6 MB text + ~0.23 MB tools + the small current-turn image ≈ 4.0 MB, itself >0.2 MB under the proven 4.43 MB success sample; real screenshots usually land far below on the first ladder rung). Images above the target step down the ladder (q85→q70→q50, then 1568→1024→768) until they fit or the ladder bottoms out. The **current turn** — the last user message that is not one of the hop's own `[Image attached from …]` injections, plus everything after it, so several same-turn Read injections all count — keeps the pre-existing behavior (≤600 KB passes through untouched).
 3. **Current-turn cap**: `CURRENT_TURN_IMAGE_BUDGET_BYTES` (**3 MiB**, the summed data-URL bytes of the current turn's live images). Over the cap, the turn's own images step down the existing degrade chain oldest-first inside the turn; still over, they are omitted oldest-first — and the **last live current-turn image is never dropped**: a fresh screenshot is the model's evidence, so a single-image turn always keeps exactly one copy (squeezed, if the ladder helps). Calibration: a maxed-out turn (3 MiB) plus ~0.84 MB of text/tools/envelope stays ≈3.9 MB, under the 4.43 MB success sample before any history is counted; the wire net below then trims history (never the current turn, short of the last resort) to close the remaining gap. Placeholder: `[image omitted: current turn over image budget]`.
 4. **4 MiB wire budget** (final net): the hop measures the **full outbound wire** — serialized messages **plus** `tools` plus the rest of the request envelope (`outboundEnvelopeBytes`) plus 4 KiB of headroom for the envelope fields applied after governance (`max_tokens`, provider parameter maps) — and passes the difference to `enforceImageBudget` as `extraWireBytes`. Over budget, images degrade **oldest history first** (each rung at most once), then are omitted oldest-first as `[image omitted: budget]` — the newest/current-turn image is dropped last; the request never 413s. If the post-governance wire is still over 4 MiB (non-image content too large), one advisory stderr line names it.
+
+### Pre-flight tool-call adjacency guard (all api types)
+
+After id sanitization and injection prep, the dispatch runs `repairOrphanedToolCalls` (`payload/openai-messages.cjs`) on the wire array for **every** api type. It runs after injection prep on purpose: the remediation-debt classifier must judge the transcript as the host emitted it, not as the repaired wire reshapes it (the synthesized sentinel row is excluded there). An assistant `tool_calls` block must be followed by ALL of its `role: "tool"` results before any other role intervenes; results separated from the block (e.g. by an injected user image) are made contiguous, a call with no result anywhere gets an explicit `[tool call did not complete: no result recorded]` row (never a synthesized success), and an already-valid array is returned byte-identical. Covers chat-completions, Responses and Anthropic, whose converters serialize this same repaired array (born from incident 2026-09-11, where an injected image between two parallel tool results 400'd every attempt for three turns).
 
 **Compress** (shared by the passes): images ≤ **600 KB** pass through untouched (keeps small PNGs sharp). Larger png/jpeg are re-encoded to **JPEG q≈85, long edge ≤1568** (alpha flattened onto white). webp/gif cannot be decoded in pure JS: the box is probed once for ImageMagick `convert` / `ffmpeg` and used if present, otherwise they pass through (stderr note). The compressed result is used only when smaller than the original. Re-encode results are cached across requests by source bytes + ladder rung, so the same history images are not re-encoded every round.
 

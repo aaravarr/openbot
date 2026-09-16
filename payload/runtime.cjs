@@ -1,6 +1,7 @@
 "use strict";
 
 var fs = require("fs");
+var crypto = require("crypto");
 var http = require("http");
 var https = require("https");
 var net = require("net");
@@ -340,6 +341,218 @@ function collectIds(args) {
   }
   for (var i = 0; i < args.length; i++) walk(args[i], 0);
   return ids;
+}
+
+// ---- Conversation identity for the hop body. ----
+//
+// The custom wrap builds the hop body from host messages alone, so the
+// generic hop had no conversation identity to gate the delivery-follow-up
+// strategy on. The identity IS available where the session factory is
+// wrapped: the stock factory args carry the conversation id (an explicit
+// `conversationId` field when present, otherwise the first UUID collected
+// from the args -- the same walk resolveAgent uses to find the agent).
+// Stamping it on the body is enough: hop-handler findConversationId() reads
+// body.conversationId and injectionObservedContext reads body.epochId.
+// These stay OBSERVABLE values on the hop side (uncertain fallback), never
+// authenticated identity, and openUpstream strips them before the upstream
+// provider ever sees the request.
+function extractConversationIdentity(args) {
+  var firstUuid = "";
+  var explicit = "";
+  var seen = Object.create(null);
+  function idShape(s) {
+    return typeof s === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+  }
+  function walk(v, depth) {
+    if (depth > 5 || v == null) return;
+    if (typeof v === "string") {
+      if (idShape(v)) {
+        var k = v.toLowerCase();
+        if (!seen[k]) {
+          seen[k] = true;
+          if (!firstUuid) firstUuid = v;
+        }
+      }
+      return;
+    }
+    if (typeof v !== "object") return;
+    var keys = ["conversationId", "conversation_id", "sessionId", "session_id", "chatId", "chat_id", "agentId", "id", "provenanceAgentId", "botId"];
+    for (var i = 0; i < keys.length; i++) {
+      if (v[keys[i]] != null) walk(v[keys[i]], depth + 1);
+    }
+  }
+  function prefer(v, depth) {
+    if (explicit || depth > 5 || v == null || typeof v !== "object") return;
+    var keys = ["conversationId", "conversation_id", "sessionId", "session_id", "chatId", "chat_id"];
+    for (var j = 0; j < keys.length; j++) {
+      var value = v[keys[j]];
+      if (typeof value === "string" && value && value.length <= 128) {
+        explicit = value;
+        return;
+      }
+    }
+    var own = Object.keys(v);
+    for (var k2 = 0; k2 < own.length; k2++) prefer(v[own[k2]], depth + 1);
+  }
+  for (var a = 0; a < args.length; a++) walk(args[a], 0);
+  if (!firstUuid) return { conversationId: "" };
+  // An explicit conversationId-shaped field wins over an incidental UUID
+  // (e.g. the agent id) that merely appears first in the args walk.
+  for (var b = 0; b < args.length; b++) prefer(args[b], 0);
+  return { conversationId: explicit || firstUuid };
+}
+
+// Turn epoch: STABILITY WITHIN A TURN over a fresh UUID per request. The
+// delivery-follow-up strategy needs two things from an epoch id:
+//
+// 1. Both upstream calls INSIDE one hop request (the first run and the L2
+//    remediation second run) must share one epoch, or the epoch-scoped state
+//    (l2AdditionalRuns cap, finalNoTool, terminal leases) would not bound
+//    the second call.
+// 2. A LATER hop request in the SAME turn (the host re-prompts after the
+//    streamed turn ends; L3 is next-request only) must still land on the
+//    same state key, or the closing-send / reply-nudge redrive could never
+//    see what the previous request decided.
+//
+// A per-request UUID satisfies (1) trivially but kills (2): every request
+// would mint a new epochStates entry and L3 would redrive nothing. The host
+// protocol exposes no turn id on the factory args, so the stable unit we
+// actually have is (conversation, latest real user message). Deriving the
+// epoch as sha256(conversationId NUL lastUserText) gives:
+//
+// - the same epoch for both runs of one request (the body is stamped once);
+// - the same epoch for follow-up requests in the same turn (the transcript
+//   tail is still that user message);
+// - a NEW epoch the moment the user sends the next message -- the intended
+//   turn boundary, which is exactly when a redrive must not fire.
+//
+// Known limits, accepted deliberately:
+// - Two user messages with byte-identical text in the same conversation map
+//   to the same epoch (an id-less host makes this undetectable). Harm is
+//   bounded: worst case the new turn starts with the previous turn's
+//   l2AdditionalRuns/finalNoTool counters, i.e. slightly fewer reminders.
+// - A mid-turn host bounce replays the same user message and shares the
+//   epoch; that is a redrive of the same turn, so sharing is correct.
+// - The epoch is a digest of box-owned values only (conversation id, host
+//   transcript text). It is not a secret and confers no trust.
+//
+// The turn ctx is where the identity actually shows up. The stock harness calls
+// the session's stream as `.stream(ctx, invocationId, tools, options)` and that
+// ctx carries `conversationId` (and the group it belongs to). The session
+// factory args do NOT: `createProtoSessionProvider(client, requestedModel,
+// modelConfig, inferenceReason)` has no conversation field at all, which is why
+// reading only the factory args left every production turn with an empty
+// identity (and the hop reporting missing_conversation_id 272/272).
+var CONVERSATION_ID_KEY = /^(conversationId|conversation_id|conversationGroupId|conversation_group_id|transcriptId|transcript_id|chatId|chat_id|sessionId|session_id|roomId|room_id)$/i;
+
+// The turn ctx is a chain of frames (observed keys: parent, values, name,
+// signal), and the identity lives on an ANCESTOR frame, never on the frame the
+// wrapped `.stream(ctx, ...)` call site receives. That is the harness
+// ContextImpl contract (../packages/context/dist/core.js):
+//
+//   - `.with(key, value)` mints a frame whose `values` Map is a copy of its
+//     DIRECT parent's values plus the new key;
+//   - `.withName(name)` mints a frame whose `values` is an EMPTY Map, so every
+//     value below it stops being visible from above;
+//   - `.get(key)` walks `parent` upwards until the key is found.
+//
+// The turn bootstrap stamps the identity with
+// `runCtx.with(conversationIdKey, host.getTranscriptId()).with(conversationGroupIdKey, conversationId)`,
+// and the key is `createKey(Symbol("conversationId"), undefined)` -- the name to
+// match is the symbol's `description`. Because the withName/createSpan frames
+// stacked above it reset `values`, the boundary frame observed on the box held
+// only `otel.span`; the id is several frames down. So read it the way the
+// harness itself reads it (`ctx.get`): walk the whole `parent` chain and take
+// the NEAREST frame that carries it.
+var CTX_FRAME_LIMIT = 128;
+var CTX_FRAME_CONTAINERS = ["values", "context", "middleware"];
+
+// One frame's own values Map. Symbol keys are the load-bearing case (the
+// harness keys); string keys are accepted for Map fixtures and simpler hosts.
+// First matching entry wins, and an empty value is never a hit.
+function conversationIdFromKeyMap(map) {
+  var found = "";
+  map.forEach(function (value, key) {
+    if (found || typeof value !== "string" || !value) return;
+    var name = typeof key === "string" ? key : String((key && (key.description || key.name)) || "");
+    if (CONVERSATION_ID_KEY.test(name)) found = value;
+  });
+  return found;
+}
+
+function conversationIdFromOwnKeys(container) {
+  for (var key in container) {
+    if (!Object.prototype.hasOwnProperty.call(container, key)) continue;
+    if (CONVERSATION_ID_KEY.test(key) && typeof container[key] === "string" && container[key]) return container[key];
+  }
+  return "";
+}
+
+// One frame: its own keys / values first, then the loose containers a
+// non-harness caller may wrap the values in. Those stay SHALLOW on purpose --
+// depth is covered by the chain walk below, not by deepening the recursion.
+function conversationIdFromFrame(frame) {
+  if (!frame || typeof frame !== "object") return "";
+  if (frame instanceof Map) return conversationIdFromKeyMap(frame);
+  var own = conversationIdFromOwnKeys(frame);
+  if (own) return own;
+  for (var i = 0; i < CTX_FRAME_CONTAINERS.length; i++) {
+    var nested = frame[CTX_FRAME_CONTAINERS[i]];
+    if (!nested || typeof nested !== "object") continue;
+    var found = nested instanceof Map ? conversationIdFromKeyMap(nested) : conversationIdFromOwnKeys(nested);
+    if (found) return found;
+  }
+  return "";
+}
+
+// Full-depth `parent` walk, nearest frame first (the `ctx.get` order). Bounded
+// twice: a frame budget so a runaway chain cannot spin, and a visited set so a
+// parent cycle terminates instead of looping forever.
+function conversationIdFromContainer(container) {
+  var visited = [];
+  var frame = container;
+  for (var frames = 0; frames < CTX_FRAME_LIMIT && frame && typeof frame === "object"; frames++) {
+    if (visited.indexOf(frame) !== -1) break;
+    visited.push(frame);
+    var found = conversationIdFromFrame(frame);
+    if (found) return found;
+    frame = frame.parent;
+  }
+  return "";
+}
+
+function conversationIdFromCtx(ctx) {
+  return conversationIdFromContainer(ctx);
+}
+
+// Accepts both shapes that reach the stamping site: the plain id string a
+// factory-time resolver produces, and an object ({ conversationId }).
+function conversationIdFromIdentity(identity) {
+  if (typeof identity === "string") return identity;
+  if (identity && typeof identity === "object" && typeof identity.conversationId === "string") return identity.conversationId;
+  return "";
+}
+
+function deriveEpochId(conversationId, messages) {
+  var rows = Array.isArray(messages) ? messages : [];
+  function text(value) {
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) return value.map(text).join("\n");
+    if (value && typeof value === "object") return text(value.text !== undefined ? value.text : value.content);
+    return "";
+  }
+  var last = "";
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    if (!row || row.role !== "user") continue;
+    var value = text(row.content);
+    if (value) last = value;
+  }
+  if (!last) return "";
+  return crypto.createHash("sha256")
+    .update(String(conversationId || "") + String.fromCharCode(0) + last, "utf8")
+    .digest("hex")
+    .slice(0, 32);
 }
 
 function loadPlan() {
@@ -798,7 +1011,12 @@ function swallow(p) {
   return p;
 }
 
-function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
+// identity carries the conversation identity resolved once at session
+// factory time ({ conversationId } from the factory args, via
+// extractConversationIdentity). Direct callers (and older tests) may omit
+// it: the hop body then carries no identity fields and the hop-side
+// injection gate reports its honest missing-identity skip reasons.
+function hopFullStream(exec, agent, ctx, invocationId, tools, options2, identity) {
   var settled = { u: false, e: false, m: false, i: false, r: false };
   var resU, rejU, resE, rejE, resM, rejM, resI, rejI, resR, rejR;
   var usage = swallow(new Promise(function (res, rej) { resU = res; rejU = rej; }));
@@ -912,6 +1130,21 @@ function hopFullStream(exec, agent, ctx, invocationId, tools, options2) {
         stream: true,
         max_tokens: defaultMaxTokens(options2 && options2.maxTokens, agent.maxOutputTokens),
       };
+      // Conversation identity for the delivery-follow-up gate. Stamped once
+      // per hop request, so BOTH upstream calls of one request (the first
+      // run and an L2 remediation run) share the epoch; the epoch itself is
+      // derived from (conversation, latest user message), so a later request
+      // inside the same turn lands on the same strategy state key (L3
+      // continuity). Observable only: the hop keeps these in the uncertain
+      // observable-fallback lane, and openUpstream strips them before the
+      // upstream provider ever sees the body.
+      // ctx first: that is where the stock harness puts the conversation id.
+      // The factory-time identity stays as a fallback for direct callers.
+      var hopConversationId = conversationIdFromCtx(ctx) || conversationIdFromIdentity(identity);
+      if (hopConversationId) {
+        body.conversationId = hopConversationId;
+        body.epochId = deriveEpochId(hopConversationId, body.messages);
+      }
       var openaiTools = unwrapJsonSchemaTools(tools, effectiveModelId);
       if (openaiTools) body.tools = openaiTools;
       var voiceTool = findVoiceTool(tools) || findVoiceTool(openaiTools);
@@ -991,7 +1224,14 @@ function wrapExecutor(exec, resolveAgentFn) {
     get: function (target, prop, receiver) {
       if (prop === "stream") {
         return function (ctx, invocationId, tools, options2) {
-          return hopFullStream(target, resolveAgentFn, ctx, invocationId, tools, options2);
+          // The resolver also carries the factory-time conversation identity
+          // (resolveLiveWithIdentity), so the hop body is stamped per turn
+          // with the live plan row plus the conversation id.
+          var live = resolveAgentFn();
+          var identity = live && live.conversationIdentity ? live.conversationIdentity : undefined;
+          // hopFullStream prefers the ctx conversationId (the real harness
+          // source) and falls back to this factory-time value.
+          return hopFullStream(target, resolveAgentFn, ctx, invocationId, tools, options2, identity);
         };
       }
       var val = Reflect.get(target, prop, receiver);
@@ -1196,10 +1436,20 @@ function wrapHopSession(stockFn, args) {
   if (!agent || !agent.modelId) {
     throw new Error("openbot: no model binding for this turn (set a wildcard or matching agent in the control UI)");
   }
+  // Conversation identity is resolved once at factory time from the same
+  // args resolveAgent reads. One session object serves one conversation, so
+  // the id cannot rotate underneath a live session; re-walking the args on
+  // every stream would only risk flipping between equally-ranked UUIDs.
+  var conversationIdentity = extractConversationIdentity(arr);
   function resolveLive() {
     return resolveAgent(arr);
   }
-  return wrapProvider(callStock(stockFn, arr), resolveLive, agent);
+  function resolveLiveWithIdentity() {
+    var live = resolveAgent(arr);
+    if (live) live.conversationIdentity = conversationIdentity;
+    return live;
+  }
+  return wrapProvider(callStock(stockFn, arr), resolveLiveWithIdentity, agent);
 }
 
 function wrapSession(stockFn, args) {
@@ -1250,4 +1500,7 @@ module.exports = {
   isRetryableHopError: isRetryableHopError,
   hopRetryDelayMs: hopRetryDelayMs,
   HIGH_AGENT_MAX_TOKENS: HIGH_AGENT_MAX_TOKENS,
+  extractConversationIdentity: extractConversationIdentity,
+  conversationIdFromCtx: conversationIdFromCtx,
+  deriveEpochId: deriveEpochId,
 };

@@ -1,21 +1,35 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { parseInstallCommand } from "../parse/argv.ts";
+import { OPENBOT_MARKER } from "../domain/types.ts";
+import { customBoxFromProvider, parseInstallCommand, parseUpstreamOrigin } from "../parse/argv.ts";
 import { type FsDeps, type ProcDeps, parseOwnedPid } from "./procs.ts";
 import { boxPathsFrom, joinAbs, type BoxPaths } from "./paths.ts";
 import {
   DEFAULT_GUARD_INTERVAL_MINUTES,
+  GUARD_BOUNCE_GRACE_TICKS,
+  GUARD_DAEMON_SOURCE,
   GUARD_LOG_MAX_BYTES,
   type GuardDaemonOutcome,
   type GuardLogRow,
   appendGuardLogLine,
   guardDaemonPid,
+  readPersistedGuardInterval,
+  resolveGuardIntervalMinutes,
   runGuardDaemon,
   runGuardTick,
   runGuardTickWithHopHealth,
+  startGuardDaemon,
   stopGuardDaemon,
 } from "./guard-daemon.ts";
-import type { GuardResult } from "./guard.ts";
+import { guardCustom, type GuardResult } from "./guard.ts";
+import { compileCustomPlan, planToJson } from "./plan.ts";
+import { payloadFingerprint } from "../host/payload-fingerprint.ts";
+import { armDeferredHostBounce } from "./reconcile.ts";
+import { type GuardEventSink } from "./guard-events.ts";
+import { DEFAULT_DRIFT_POLL_MS, type WrapDriftProbe } from "./wrap-drift.ts";
 
 function guardResult(overrides: Partial<GuardResult>): GuardResult {
   return {
@@ -31,6 +45,7 @@ function guardResult(overrides: Partial<GuardResult>): GuardResult {
 const HEALTHY = guardResult({});
 const REPAIRED_BOTH = guardResult({ detail: "repaired", modeRepaired: true, wrapRepaired: true });
 const REPAIRED_MODE = guardResult({ detail: "repaired", modeRepaired: true });
+const REPAIRED_WRAP = guardResult({ detail: "repaired", wrapRepaired: true });
 const REFUSED = guardResult({ detail: "refused", ok: false, reconcile: { kind: "refused", error: { kind: "foreign-hop" } } });
 const NO_CUSTOM = guardResult({ detail: "no-custom-state", ok: false });
 
@@ -380,14 +395,33 @@ test("guard parses daemon, stop, and interval flags", () => {
     }
     return parsed.command;
   };
-  assert.deepEqual(parse(["guard"]), { kind: "guard", action: "once", intervalMinutes: 5 });
-  assert.deepEqual(parse(["guard", "--daemon"]), { kind: "guard", action: "daemon", intervalMinutes: 5 });
-  assert.deepEqual(parse(["guard", "--stop"]), { kind: "guard", action: "stop", intervalMinutes: 5 });
+  assert.deepEqual(parse(["guard"]), { kind: "guard", action: "once", intervalMinutes: 1 });
+  assert.deepEqual(parse(["guard", "--daemon"]), { kind: "guard", action: "daemon", intervalMinutes: 1 });
+  assert.deepEqual(parse(["guard", "--stop"]), { kind: "guard", action: "stop", intervalMinutes: 1 });
   assert.equal(parse(["guard", "--daemon", "--interval", "1"]).intervalMinutes, 1);
   assert.equal(parse(["guard", "--daemon", "--interval", "0"]).intervalMinutes, 1);
   assert.equal(parse(["guard", "--daemon", "--interval", "100"]).intervalMinutes, 60);
   assert.equal(parse(["guard", "--daemon", "--interval", "7"]).intervalMinutes, 7);
-  assert.equal(parse(["guard", "--daemon", "--json"]).intervalMinutes, 5);
+  assert.equal(parse(["guard", "--daemon", "--json"]).intervalMinutes, 1);
+});
+
+test("the guard interval resolves env first, then the persisted file, then the default", () => {
+  const ctx = setup();
+  assert.equal(DEFAULT_GUARD_INTERVAL_MINUTES, 1);
+  // Nothing recorded anywhere: the default. A patrol reads two files, so the
+  // five-minute window it replaces was pure drift time.
+  assert.equal(resolveGuardIntervalMinutes(ctx.deps, {}), 1);
+  ctx.fs.write(ctx.paths.guardInterval, "7\n");
+  assert.equal(readPersistedGuardInterval(ctx.deps), 7);
+  assert.equal(resolveGuardIntervalMinutes(ctx.deps, {}), 7);
+  assert.equal(resolveGuardIntervalMinutes(ctx.deps, { OPENBOT_GUARD_INTERVAL: "3" }), 3);
+  // Junk in either place falls back instead of throwing: an unreadable tuning
+  // file must not keep the guard from starting.
+  ctx.fs.write(ctx.paths.guardInterval, "later\n");
+  assert.equal(readPersistedGuardInterval(ctx.deps), undefined);
+  assert.equal(resolveGuardIntervalMinutes(ctx.deps, { OPENBOT_GUARD_INTERVAL: "" }), 1);
+  assert.equal(resolveGuardIntervalMinutes(ctx.deps, { OPENBOT_GUARD_INTERVAL: "0" }), 1);
+  assert.equal(resolveGuardIntervalMinutes(ctx.deps, { OPENBOT_GUARD_INTERVAL: "100" }), 60);
 });
 
 test("guard rejects a non-numeric interval", () => {
@@ -459,3 +493,642 @@ test("a dark unified port with a deaf-but-listed UI pid SIGTERMs it before the r
   assert.equal(ctx.fs.read(ctx.paths.uiPid), "1\n");
   assert.equal(ctx.fs.read(ctx.paths.hopPid), undefined);
 });
+
+// ---- Repair-bounce completion: the running host must actually load the
+// repaired wrap. The fake procs report live host pids only when the test
+// arms them, so a bounce shows up in procs.stopped.
+
+function withHostPids(ctx: ReturnType<typeof setup>, pids: number[]): void {
+  ctx.procs.hostPids = () => pids.map(parseOwnedPid);
+  ctx.procs.live = new Set(pids);
+}
+
+/**
+ * Arm a marker the way the box does: through the real writer, with a
+ * fingerprint that matches what currentPayloadFingerprint computes over this
+ * (empty) payload tree, then back-age it to the wanted age.
+ */
+function armPendingMarker(ctx: ReturnType<typeof setup>, ageMs: number): void {
+  const fp = payloadFingerprint({
+    payloadDir: joinAbs(ctx.paths.repoRoot, "payload"),
+    read: () => undefined,
+  });
+  const marker = armDeferredHostBounce(ctx.deps, { source: "test:install" }, fp);
+  ctx.fs.write(
+    ctx.paths.pendingBounce,
+    JSON.stringify(
+      {
+        ...marker,
+        armedAtMs: marker.armedAtMs - ageMs,
+        armedAt: new Date(marker.armedAtMs - ageMs).toISOString(),
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+}
+
+test("a wrap repair with no pending marker completes immediately (bounce done)", async () => {
+  const ctx = setup();
+  withHostPids(ctx, [670974]);
+  await runGuardTick(ctx.deps, { runOnce: async () => REPAIRED_WRAP, stderr: () => {} });
+  // No marker was armed, so reconcile's own immediate bounce already ran
+  // inside the repair: the daemon records the outcome and never double-kills.
+  assert.deepEqual(ctx.procs.stopped, []);
+  const rows = guardLogRows(ctx);
+  assert.equal(rows[0]?.wrapBounce, "bounced");
+});
+
+test("a wrap repair whose stranded bounce is forced past the grace by the daemon", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const ctx = setup();
+  withHostPids(ctx, [670974]);
+  // A pending marker without a live finalizer: the exact stranded state. The
+  // marker is old enough to pass its own grace window, and a fresh "stop"
+  // lease keeps the quiet window open so only the forced apply may land.
+  armPendingMarker(ctx, 150_000);
+  const writeQuietLease = () => {
+    const now = Date.now();
+    ctx.fs.write(
+      ctx.paths.turnLease,
+      JSON.stringify({ active: 0, lastStartAt: now - 20_000, lastEndAt: now - 10_000, lastFinishReason: "stop", updatedAt: now - 10_000 }) + "\n",
+    );
+  };
+  writeQuietLease();
+  const stderr: string[] = [];
+  const controller = new AbortController();
+  const run = runGuardDaemon(ctx.deps, {
+    intervalMinutes: DEFAULT_GUARD_INTERVAL_MINUTES,
+    signal: controller.signal,
+    runOnce: async () => REPAIRED_WRAP,
+    stderr: (line) => stderr.push(line),
+    hopHealth: false,
+  });
+  await flush();
+  // First repair tick: the finalizer still gets its grace, and the quiet
+  // window keeps the normal fallback from applying.
+  assert.deepEqual(ctx.procs.stopped, []);
+  assert.equal(ctx.fs.read(ctx.paths.pendingBounce) !== undefined, true);
+  assert.equal(guardLogRows(ctx)[0]?.wrapBounce, "deferred");
+  // Second repair tick: the daemon forces the stranded deferred bounce
+  // through the audited applier instead of leaving the host on the old wrap.
+  t.mock.timers.tick(5 * 60_000);
+  writeQuietLease();
+  await flush();
+  assert.deepEqual(ctx.procs.stopped, [670974]);
+  const rows = guardLogRows(ctx);
+  assert.equal(rows[1]?.wrapBounce, "bounced");
+  controller.abort();
+  await run;
+  // The forced completion is auditable like every reconcile write.
+  const actions = auditRows(ctx).map((row) => [row.action, row.from, row.to]);
+  assert.deepEqual(actions, [
+    ["guard", "wrap-drift", "custom"],
+    ["guard", "wrap-drift", "custom"],
+    ["wrap", "bounce:deferred+max-wait", "bounce:done"],
+  ]);
+  assert.equal(ctx.fs.read(ctx.paths.pendingBounce), undefined);
+  assert.match(stderr.join("\n"), /forced the stranded wrap-repair bounce \(pid 670974\)/);
+  assert.equal(GUARD_BOUNCE_GRACE_TICKS, 2);
+});
+
+test("a young stranded bounce is never forced through the grace window", async () => {
+  const ctx = setup();
+  withHostPids(ctx, [670974]);
+  // Freshly armed (inside its own grace window): even with the repair
+  // stranded, the daemon must wait the grace out — the install that armed it
+  // may still be writing its result.
+  armPendingMarker(ctx, 0);
+  let n = 0;
+  while (n < GUARD_BOUNCE_GRACE_TICKS) {
+    await runGuardTick(ctx.deps, { runOnce: async () => REPAIRED_WRAP, stderr: () => {} });
+    n += 1;
+  }
+  assert.deepEqual(ctx.procs.stopped, []);
+  assert.deepEqual(
+    guardLogRows(ctx).map((row) => row.wrapBounce),
+    ["deferred", "deferred"],
+  );
+  assert.equal(ctx.fs.read(ctx.paths.pendingBounce) !== undefined, true);
+});
+
+test("a wrap repair without a pending marker resets the grace counter", async () => {
+  const ctx = setup();
+  withHostPids(ctx, [670974]);
+  // Repair tick 1 defers (a marker is armed); the finalizer then applies it,
+  // and the next repair with no marker completes immediately instead of
+  // counting as a second deferral.
+  armPendingMarker(ctx, 150_000);
+  await runGuardTick(ctx.deps, { runOnce: async () => REPAIRED_WRAP, stderr: () => {} });
+  assert.equal(guardLogRows(ctx)[0]?.wrapBounce, "deferred");
+  ctx.fs.remove(ctx.paths.pendingBounce);
+  await runGuardTick(ctx.deps, { runOnce: async () => REPAIRED_WRAP, stderr: () => {} });
+  assert.deepEqual(ctx.procs.stopped, []);
+  assert.equal(guardLogRows(ctx)[1]?.wrapBounce, "bounced");
+});
+
+const STOCK = `function createProtoSessionProvider(client) {
+  return { getSession: function () { return 1; } };
+}
+`;
+
+const ORIGIN = parseUpstreamOrigin("https://open.bigmodel.cn/api/paas/v4");
+
+/** The daemon's own pidfile content, written by runGuardDaemon itself. */
+function ownPidfile(ctx: ReturnType<typeof setup>): void {
+  ctx.fs.write(ctx.paths.guardPid, `${String(process.pid)}\n`);
+}
+
+/**
+ * A custom box whose host file is stock-unmarked, so the next tick repairs the
+ * wrap. The UI service is already ours (live pidfile plus open port) so the
+ * repair adopts it instead of restarting it: this is about the guard.
+ */
+function driftingCustomBox(ctx: ReturnType<typeof setup>): void {
+  ctx.fs.write(ctx.paths.hostMain, STOCK);
+  ctx.fs.write(ctx.paths.mode, "custom\n");
+  ctx.fs.write(
+    ctx.paths.plan,
+    planToJson(
+      compileCustomPlan(
+        customBoxFromProvider({ paths: ctx.paths, origin: ORIGIN, name: "Zhipu", modelSlug: "glm-5.3-flash" }),
+      ),
+    ),
+  );
+  ctx.fs.write(ctx.paths.uiPid, "43\n");
+  ctx.procs.live.add(43);
+}
+
+test("a wrap repair tick leaves the daemon that ran it alive", async () => {
+  // The production failure, end to end: the pidfile names this process (as it
+  // does for the real daemon), the box is custom, and the host is stock, so
+  // this tick repairs the wrap. The repair changes the wrap bytes, which used
+  // to SIGTERM that very pid -- the daemon died inside its own successful
+  // repair and the log went silent for hours.
+  const ctx = setup(true);
+  driftingCustomBox(ctx);
+  ownPidfile(ctx);
+  const stderr: string[] = [];
+  await runGuardTickWithHopHealth(ctx.deps, {
+    runOnce: (d) => guardCustom(d, { source: GUARD_DAEMON_SOURCE }),
+    stderr: (line) => stderr.push(line),
+    hopHealth: false,
+  });
+  assert.equal(ctx.procs.stopped.includes(process.pid), false);
+  assert.equal(ctx.fs.read(ctx.paths.guardPid), `${String(process.pid)}\n`);
+  assert.equal(ctx.fs.read(ctx.paths.hostMain)?.includes(OPENBOT_MARKER), true);
+  const rows = guardLogRows(ctx);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.detail, "repaired");
+  assert.equal(rows[0]?.wrapRepaired, true);
+  assert.deepEqual(stderr, []);
+});
+
+// ---- Fast wrap-drift polling. Grok Bot's idle auto-update rewrites the host
+// file between two scheduled ticks (observed every 5-10 hours on a live box),
+// and the scheduled interval is minutes. The poll closes that window to
+// seconds; the repair itself stays the same tick, through the same guardCustom.
+
+/**
+ * The schedule the mock-timer fast-poll tests drive. Pinned at five minutes
+ * rather than the shipped default (one minute, DEFAULT_GUARD_INTERVAL_MINUTES)
+ * on purpose: these tests walk a dozen 5s polls -- the marker-sweep window --
+ * between two scheduled ticks, which no longer fits inside a one-minute
+ * interval. The contract under test is "wake in seconds, not at the schedule",
+ * so the schedule has to be minutes away. The two real-timer tests at the end
+ * of this group keep the shipped default, so that interval stays covered.
+ */
+const FAST_POLL_INTERVAL_MINUTES = 5;
+const FAST_POLL_INTERVAL_MS = FAST_POLL_INTERVAL_MINUTES * 60_000;
+
+const WRAPPED_HOST_HEAD = `${OPENBOT_MARKER}\nvar __openbotRuntime = require('/home/box/sand-data/openbot-runtime.cjs');\n`;
+const STOCK_HOST_HEAD = `function createProtoSessionProvider(client) {
+  return { getSession: function () { return 1; } };
+}
+`;
+
+/** The host file the injected probe reports: bytes and head, one writer each. */
+function driftHost() {
+  let file = { size: 900, mtimeMs: 1_000, ino: 41, ctimeMs: 1_000, head: WRAPPED_HOST_HEAD };
+  const probe: WrapDriftProbe = {
+    stamp() {
+      const { size, mtimeMs, ino, ctimeMs } = file;
+      return { size, mtimeMs, ino, ctimeMs };
+    },
+    head() {
+      return file.head;
+    },
+  };
+  return {
+    probe,
+    /** What Grok's updater leaves behind: stock bytes, a fresh inode. */
+    writeStock(ino: number): void {
+      file = { size: 640, mtimeMs: 2_000 + ino, ino, ctimeMs: 2_000 + ino, head: STOCK_HOST_HEAD };
+    },
+    /** What our own repair leaves behind. */
+    writeWrapped(ino: number): void {
+      file = { size: 900, mtimeMs: 3_000 + ino, ino, ctimeMs: 3_000 + ino, head: WRAPPED_HOST_HEAD };
+    },
+  };
+}
+
+function eventSink(): { sink: GuardEventSink; rows: Record<string, unknown>[] } {
+  const rows: Record<string, unknown>[] = [];
+  return {
+    rows,
+    sink: {
+      append(_path, line) {
+        rows.push(JSON.parse(line) as Record<string, unknown>);
+      },
+    },
+  };
+}
+
+function eventMetadata(row: Record<string, unknown> | undefined): Record<string, unknown> {
+  return (row?.metadata ?? {}) as Record<string, unknown>;
+}
+
+/**
+ * One poll's worth of mocked clock. Node's mock timers only fire the timers
+ * that existed when the tick call started, so a self-re-arming chain advances
+ * one poll per call: tests step the clock by one poll interval at a time, which
+ * is also the readable way to describe the cadence.
+ */
+async function pollSteps(t: { mock: { timers: { tick: (ms: number) => void } } }, steps: number): Promise<void> {
+  for (let i = 0; i < steps; i += 1) {
+    t.mock.timers.tick(DEFAULT_DRIFT_POLL_MS);
+    await flush();
+  }
+}
+
+test("a host drift wakes the daemon in seconds, not minutes", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const ctx = setup();
+  const host = driftHost();
+  const events = eventSink();
+  const stderr: string[] = [];
+  const counter: Counter = { calls: 0 };
+  const controller = new AbortController();
+  const run = runGuardDaemon(ctx.deps, {
+    intervalMinutes: FAST_POLL_INTERVAL_MINUTES,
+    signal: controller.signal,
+    driftProbe: host.probe,
+    driftEvents: events.sink,
+    stderr: (line) => stderr.push(line),
+    hopHealth: false,
+    runOnce: async () => {
+      counter.calls += 1;
+      if (counter.calls !== 2) {
+        // The boot tick, and the scheduled tick that follows the fast repair
+        // against the bytes it wrote.
+        return HEALTHY;
+      }
+      host.writeWrapped(90);
+      return REPAIRED_WRAP;
+    },
+  });
+  await flush();
+  assert.equal(counter.calls, 1);
+  // Grok Bot's idle auto-update lands.
+  host.writeStock(77);
+  await pollSteps(t, 1);
+  // The first poll only saw the change: the file has not settled yet.
+  assert.equal(counter.calls, 1);
+  await pollSteps(t, 1);
+  // Two identical polls: the drift is real, and the repair runs 10s in rather
+  // than at the scheduled tick five minutes out.
+  assert.equal(counter.calls, 2);
+  assert.match(stderr.join("\n"), /host wrap drift detected by the 5s poll \(changed\+marker-missing\); repairing now/);
+  assert.deepEqual(
+    guardLogRows(ctx).map((row) => [row.detail, row.trigger, row.wrapRepaired]),
+    [
+      ["healthy", "schedule", false],
+      ["repaired", "drift-poll", true],
+    ],
+  );
+  assert.equal(events.rows.length, 1);
+  assert.equal(events.rows[0]?.type, "wrap-drift");
+  assert.equal(events.rows[0]?.severity, "WARN");
+  assert.equal(eventMetadata(events.rows[0]).trigger, "drift-poll");
+  assert.equal(eventMetadata(events.rows[0]).reason, "changed+marker-missing");
+  // One repair per drift: the drift tick is the only one, and the rest of the
+  // interval is polls against the bytes the repair wrote.
+  await pollSteps(t, 20);
+  assert.equal(counter.calls, 2);
+  t.mock.timers.tick(FAST_POLL_INTERVAL_MS);
+  await flush();
+  assert.equal(counter.calls, 3);
+  assert.equal(events.rows.length, 1);
+  assert.deepEqual(
+    guardLogRows(ctx).map((row) => row.trigger),
+    ["schedule", "drift-poll", "schedule"],
+  );
+  controller.abort();
+  await run;
+});
+
+test("an unchanged host file adds no fast tick", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const ctx = setup();
+  const host = driftHost();
+  const events = eventSink();
+  const { runOnce, counter } = countingRunOnce([HEALTHY]);
+  const controller = new AbortController();
+  const run = runGuardDaemon(ctx.deps, {
+    intervalMinutes: FAST_POLL_INTERVAL_MINUTES,
+    signal: controller.signal,
+    runOnce,
+    driftProbe: host.probe,
+    driftEvents: events.sink,
+    hopHealth: false,
+  });
+  await flush();
+  // A dozen polls of an unchanged file, crossing the marker sweep: none of
+  // them is a tick.
+  await pollSteps(t, 12);
+  assert.equal(counter.calls, 1);
+  t.mock.timers.tick(FAST_POLL_INTERVAL_MS);
+  await flush();
+  assert.equal(counter.calls, 2);
+  assert.equal(events.rows.length, 0);
+  assert.deepEqual(
+    guardLogRows(ctx).map((row) => row.trigger),
+    ["schedule", "schedule"],
+  );
+  controller.abort();
+  await run;
+});
+
+test("official mode keeps the fast poll silent until the box is custom again", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const ctx = setup();
+  const host = driftHost();
+  const stderr: string[] = [];
+  const { runOnce, counter } = countingRunOnce([HEALTHY, REPAIRED_WRAP]);
+  const controller = new AbortController();
+  const run = runGuardDaemon(ctx.deps, {
+    intervalMinutes: FAST_POLL_INTERVAL_MINUTES,
+    signal: controller.signal,
+    runOnce,
+    driftProbe: host.probe,
+    stderr: (line) => stderr.push(line),
+    hopHealth: false,
+  });
+  await flush();
+  // A stock host file on an official box is the desired state, not drift.
+  ctx.fs.write(ctx.paths.mode, "official\n");
+  host.writeStock(77);
+  await pollSteps(t, 6);
+  assert.equal(counter.calls, 1);
+  assert.doesNotMatch(stderr.join("\n"), /drift detected/);
+  // The same bytes on a custom box are drift: only the mode file changed.
+  ctx.fs.write(ctx.paths.mode, "custom\n");
+  host.writeStock(78);
+  await pollSteps(t, 1);
+  assert.equal(counter.calls, 1);
+  await pollSteps(t, 1);
+  assert.equal(counter.calls, 2);
+  assert.match(stderr.join("\n"), /drift detected/);
+  controller.abort();
+  await run;
+});
+
+test("a zero poll interval leaves the schedule exactly as it was", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const ctx = setup();
+  const host = driftHost();
+  const { runOnce, counter } = countingRunOnce([HEALTHY]);
+  const controller = new AbortController();
+  const run = runGuardDaemon(ctx.deps, {
+    intervalMinutes: FAST_POLL_INTERVAL_MINUTES,
+    signal: controller.signal,
+    runOnce,
+    driftPollMs: 0,
+    driftProbe: host.probe,
+    hopHealth: false,
+  });
+  await flush();
+  host.writeStock(77);
+  t.mock.timers.tick(DEFAULT_DRIFT_POLL_MS * 4);
+  await flush();
+  assert.equal(counter.calls, 1);
+  t.mock.timers.tick(FAST_POLL_INTERVAL_MS);
+  await flush();
+  assert.equal(counter.calls, 2);
+  controller.abort();
+  await run;
+});
+
+test("a host file that keeps changing is not repaired mid-write", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const ctx = setup();
+  const host = driftHost();
+  const { runOnce, counter } = countingRunOnce([HEALTHY, REPAIRED_WRAP]);
+  const controller = new AbortController();
+  const run = runGuardDaemon(ctx.deps, {
+    intervalMinutes: FAST_POLL_INTERVAL_MINUTES,
+    signal: controller.signal,
+    runOnce,
+    driftProbe: host.probe,
+    hopHealth: false,
+  });
+  await flush();
+  host.writeStock(51);
+  await pollSteps(t, 1);
+  assert.equal(counter.calls, 1);
+  // A different fingerprint again: the writer is still going, so the half-
+  // written file is left alone even though it differs from the baseline.
+  host.writeStock(52);
+  await pollSteps(t, 1);
+  assert.equal(counter.calls, 1);
+  // The writer stopped: the same bytes on two polls is the settle.
+  await pollSteps(t, 1);
+  assert.equal(counter.calls, 2);
+  controller.abort();
+  await run;
+});
+
+test("a fast tick that finds nothing to repair does not become a poll loop", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const ctx = setup();
+  const host = driftHost();
+  const events = eventSink();
+  const { runOnce, counter } = countingRunOnce([HEALTHY, NO_CUSTOM]);
+  const stderr: string[] = [];
+  const controller = new AbortController();
+  const run = runGuardDaemon(ctx.deps, {
+    intervalMinutes: FAST_POLL_INTERVAL_MINUTES,
+    signal: controller.signal,
+    runOnce,
+    driftProbe: host.probe,
+    driftEvents: events.sink,
+    stderr: (line) => stderr.push(line),
+    hopHealth: false,
+  });
+  await flush();
+  host.writeStock(77);
+  await pollSteps(t, 2);
+  assert.equal(counter.calls, 2);
+  assert.match(stderr.join("\n"), /no-custom-state; retrying on the next tick/);
+  // The unrepaired file is the baseline now, marker sweep included: a dozen
+  // more polls bring no more ticks. The scheduled tick keeps retrying; the fast
+  // path does not stampede.
+  await pollSteps(t, 12);
+  assert.equal(counter.calls, 2);
+  assert.equal(events.rows.length, 0);
+  controller.abort();
+  await run;
+});
+
+test("a scheduled repair and a one-shot repair both record a drift event", async () => {
+  const ctx = setup();
+  const scheduled = eventSink();
+  await runGuardTickWithHopHealth(ctx.deps, {
+    runOnce: async () => REPAIRED_WRAP,
+    stderr: () => {},
+    hopHealth: false,
+    trigger: "schedule",
+    events: scheduled.sink,
+  });
+  const manual = eventSink();
+  await runGuardTick(ctx.deps, { runOnce: async () => REPAIRED_WRAP, stderr: () => {}, events: manual.sink });
+  const healthy = eventSink();
+  await runGuardTick(ctx.deps, { runOnce: async () => HEALTHY, stderr: () => {}, events: healthy.sink });
+  assert.deepEqual(
+    guardLogRows(ctx).map((row) => [row.detail, row.trigger]),
+    [
+      ["repaired", "schedule"],
+      ["repaired", "manual"],
+      ["healthy", "manual"],
+    ],
+  );
+  assert.deepEqual(
+    scheduled.rows.map((row) => eventMetadata(row).trigger),
+    ["schedule"],
+  );
+  assert.deepEqual(
+    manual.rows.map((row) => eventMetadata(row).trigger),
+    ["manual"],
+  );
+  // A tick that repairs nothing writes no drift event.
+  assert.equal(healthy.rows.length, 0);
+});
+
+test("the fast poll really re-arms on the wall clock", async () => {
+  // The other tests drive mock timers, which only fire the timers that existed
+  // when each tick call started -- so they cannot prove the poll chain
+  // re-arms. Real timers can: a drift is repaired about two poll intervals
+  // after it lands, with no clock faking anywhere.
+  const ctx = setup();
+  const host = driftHost();
+  const stderr: string[] = [];
+  const counter: Counter = { calls: 0 };
+  const controller = new AbortController();
+  const run = runGuardDaemon(ctx.deps, {
+    intervalMinutes: DEFAULT_GUARD_INTERVAL_MINUTES,
+    signal: controller.signal,
+    driftPollMs: 1_000,
+    driftProbe: host.probe,
+    stderr: (line) => stderr.push(line),
+    hopHealth: false,
+    runOnce: async () => {
+      counter.calls += 1;
+      if (counter.calls === 1) {
+        return HEALTHY;
+      }
+      host.writeWrapped(90);
+      return REPAIRED_WRAP;
+    },
+  });
+  const waitUntil = async (predicate: () => boolean, budgetMs: number): Promise<boolean> => {
+    const deadline = Date.now() + budgetMs;
+    while (Date.now() < deadline) {
+      if (predicate()) {
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return predicate();
+  };
+  try {
+    // Wait for the boot tick to be fully recorded. The rebaseline that follows
+    // it is what makes a later write a change: writing into that window would
+    // be adopted as the baseline, exactly as a drift during a real repair would.
+    assert.equal(
+      await waitUntil(() => (ctx.fs.read(ctx.paths.guardLog) ?? "").includes(`"detail":"healthy"`), 5_000),
+      true,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(counter.calls, 1);
+    const landedAt = Date.now();
+    host.writeStock(77);
+    assert.equal(await waitUntil(() => counter.calls === 2, 8_000), true);
+    const repairedAfterMs = Date.now() - landedAt;
+    // Two 1s polls plus scheduling slack, and nowhere near the scheduled tick
+    // a minute out: this test keeps the shipped guard interval.
+    assert.equal(repairedAfterMs < 5_000, true, `drift repaired after ${String(repairedAfterMs)}ms`);
+    assert.match(stderr.join("\n"), /drift detected by the 1s poll/);
+  } finally {
+    controller.abort();
+    await run;
+  }
+});
+
+test("the production probe catches a real host file replaced on disk", async () => {
+  // The last gap the fake-probe tests leave: the shipped probe (node:fs) on a
+  // real file, replaced the way Grok's updater does it -- write beside the host
+  // file, then rename over it. Everything else (timers, drift, repair) is the
+  // production path too.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openbot-guard-host-"));
+  const hostFile = path.join(dir, "host-main.cjs");
+  fs.writeFileSync(hostFile, WRAPPED_HOST_HEAD);
+  const ctx = setup();
+  const deps = { ...ctx.deps, paths: { ...ctx.paths, hostMain: hostFile as unknown as typeof ctx.paths.hostMain } };
+  const stderr: string[] = [];
+  const counter: Counter = { calls: 0 };
+  const controller = new AbortController();
+  const run = runGuardDaemon(deps, {
+    intervalMinutes: DEFAULT_GUARD_INTERVAL_MINUTES,
+    signal: controller.signal,
+    driftPollMs: 1_000,
+    stderr: (line) => stderr.push(line),
+    hopHealth: false,
+    runOnce: async () => {
+      counter.calls += 1;
+      if (counter.calls === 1) {
+        return HEALTHY;
+      }
+      fs.writeFileSync(hostFile, WRAPPED_HOST_HEAD);
+      return REPAIRED_WRAP;
+    },
+  });
+  const waitUntil = async (predicate: () => boolean, budgetMs: number): Promise<boolean> => {
+    const deadline = Date.now() + budgetMs;
+    while (Date.now() < deadline) {
+      if (predicate()) {
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return predicate();
+  };
+  try {
+    assert.equal(
+      await waitUntil(() => (ctx.fs.read(ctx.paths.guardLog) ?? "").includes(`"detail":"healthy"`), 5_000),
+      true,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    // Grok Bot's idle auto-update: stock bytes written beside the host file,
+    // then renamed over it. Same path, new inode.
+    const beside = path.join(dir, "host-main.cjs.tmp");
+    fs.writeFileSync(beside, STOCK_HOST_HEAD);
+    fs.renameSync(beside, hostFile);
+    assert.equal(await waitUntil(() => counter.calls === 2, 8_000), true);
+    assert.match(stderr.join("\n"), /drift detected by the 1s poll \(changed\+marker-missing\)/);
+  } finally {
+    controller.abort();
+    await run;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+

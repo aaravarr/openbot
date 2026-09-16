@@ -6,6 +6,7 @@
 var fs = require("fs");
 var path = require("path");
 var crypto = require("crypto");
+var { TOOL_CALL_INCOMPLETE_CONTENT } = require("./openai-messages.cjs");
 
 var HIDDEN_MARKER = "[SAND_HIDDEN_PROMPT]";
 var TEMPLATE_VERSION = "2026-09-11";
@@ -32,8 +33,14 @@ var DEFAULT_CONFIG = {
     enabled: false,
     maxAdditionalRuns: 1,
     terminalDecisionTimeoutMs: 250,
-    retryBudgetMs: 15000,
-    timeoutMs: 15000,
+    // The remediation run is a FULL second generation on the real upstream, so
+    // its deadline has to cover a normal turn, not a fast retry. The former
+    // 15000 ms default is far below the latency measured on the box (2026-09-14
+    // stamp): first token at 53049 ms, 59196 ms total. Every L2 second run timed
+    // out and fell back to the original terminal. 120 s keeps a 2x margin over
+    // that observed worst case while still bounding the turn.
+    retryBudgetMs: 120000,
+    timeoutMs: 120000,
     maxAdditionalPromptTokens: 131072,
     maxAdditionalCompletionTokens: 2048,
     maxAdditionalCostUsd: 0.10,
@@ -110,9 +117,9 @@ function normalizeConfig(raw) {
       enabled: l2Raw ? boolValue(l2Raw.enabled, true) : false,
       maxAdditionalRuns: intIn(l2Raw && l2Raw.maxAdditionalRuns, 0, 1, 1),
       terminalDecisionTimeoutMs: intIn(l2Raw && l2Raw.terminalDecisionTimeoutMs, 1, 2000, 250),
-      retryBudgetMs: intIn(l2Raw && (l2Raw.retryBudgetMs !== undefined ? l2Raw.retryBudgetMs : l2Raw.timeoutMs), 1000, 30000, 15000),
-      timeoutMs: intIn(l2Raw && l2Raw.timeoutMs, 1000, 30000, 15000),
-      maxAdditionalPromptTokens: intIn(l2Raw && l2Raw.maxAdditionalPromptTokens, 8192, 262144, 131072),
+      retryBudgetMs: intIn(l2Raw && (l2Raw.retryBudgetMs !== undefined ? l2Raw.retryBudgetMs : l2Raw.timeoutMs), 1000, 600000, 120000),
+      timeoutMs: intIn(l2Raw && l2Raw.timeoutMs, 1000, 600000, 120000),
+      maxAdditionalPromptTokens: intIn(l2Raw && l2Raw.maxAdditionalPromptTokens, 8192, 1048576, 131072),
       maxAdditionalCompletionTokens: intIn(l2Raw && l2Raw.maxAdditionalCompletionTokens, 128, 16384, 2048),
       maxAdditionalCostUsd: numberIn(l2Raw && l2Raw.maxAdditionalCostUsd, 0, 10, 0.10),
     },
@@ -232,15 +239,19 @@ function personOpenedPermission(input, options) {
   var botId = stringValue(values && values.botId);
   var conversationId = stringValue(values && values.conversationId);
   var epochId = stringValue(values && (values.epochId || values.epoch));
-  if (!botId) return fail("no_bot_id", !trusted);
-  if (!conversationId) return fail("missing_conversation_id", !trusted);
-  if (requireEpoch && !epochId) return fail("missing_epoch", !trusted);
+  if (!botId) return fail(trusted ? "trusted_context_missing_bot_id" : "no_bot_id_in_request", !trusted);
+  if (!conversationId) return fail(trusted ? "trusted_context_missing_conversation_id" : "missing_conversation_id", !trusted);
+  if (requireEpoch && !epochId) return fail(trusted ? "trusted_context_missing_epoch" : "missing_epoch", !trusted);
   if (values && (values.groupFlag === true || values.chatType === "group" || values.isGroup === true)) return fail("group_chat", false);
   if (values && values.hidden === true) return fail("hidden_context", false);
   if (values && values.isSubagent === true) return fail("subagent_context", false);
   if (values && values.isSilenceAllowed === true) return fail("silence_allowed", false);
   if (values && (values.isRoutine === true || values.routine === true || values.automation === true || values.isAutomation === true)) return fail("routine_or_automation", false);
   if (trusted) {
+    // The early identity checks above already emit the precise
+    // trusted_context_missing_* reasons: trust covers the turn gates, not
+    // identity itself — a host context that omits botId fails closed
+    // (plan §9.1), it never borrows an untrusted id.
     if (values.hidden !== false || values.isSubagent !== false || values.isSilenceAllowed !== false || values.isRoutine !== false) return fail("unknown_identity", false);
     if (values.requestSource !== "person") return fail(values.requestSource ? "non_person" : "unknown_identity", false);
     if (!values.chatType || values.chatType === "group") return fail("unknown_chat_type", false);
@@ -413,9 +424,16 @@ function classifyDebt(options) {
     }
     // A paired role=tool row is an execution observation, not another call.
     // It establishes chronology only when no assistant call row was available.
+    // The hop's own repair sentinel ("tool call did not complete") is NOT an
+    // execution observation: it is a wire-shape fix the hop added because the
+    // real result never arrived. Counting it would flip a not-owed
+    // touch-no-tool tail into touch-then-tool and spawn a remediation call.
     if (row && row.role === "tool" && calls.length === 0) {
-      toolEvents.push({ sequence: ++eventSeq, name: "tool-result", id: callIdOf(row, ""), isDelivery: false });
-      nonDelivery += 1;
+      var rowText = valueText(row.content);
+      if (rowText.indexOf(TOOL_CALL_INCOMPLETE_CONTENT) !== 0) {
+        toolEvents.push({ sequence: ++eventSeq, name: "tool-result", id: callIdOf(row, ""), isDelivery: false });
+        nonDelivery += 1;
+      }
     }
   }
   for (var k = 0; k < currentResponseCalls.length; k++) {
@@ -706,7 +724,12 @@ function createTerminalHold(writer, observation) {
 function buildNudgeMessages(messages, shape) {
   var base = Array.isArray(messages) ? messages.slice() : [];
   var body = shape === "touch-then-tool" ? CLOSING_SEND_PROMPT : REPLY_NUDGE_PROMPT;
-  base.push({ role: "user", content: HIDDEN_MARKER + body });
+  var text = HIDDEN_MARKER + body;
+  // Idempotent on purpose: when L3 already pre-injected this exact nudge on the
+  // current request (its release branches arm L3, so an L2 second run in the
+  // same request is normal), the wire must carry the hidden nudge ONCE.
+  var last = base.length ? valueText(base[base.length - 1].content) : "";
+  if (last !== text) base.push({ role: "user", content: text });
   return base;
 }
 
@@ -715,11 +738,45 @@ function fingerprint(permission, family) {
   return crypto.createHash("sha256").update(value, "utf8").digest("hex").slice(0, 24);
 }
 
+// Prompt-token estimate for the additional run. maxAdditionalPromptTokens is
+// documented as the ADDITIONAL RUN's total prompt, so the whole canonical
+// context is counted -- but at a TEXT rate only. The canonical body carries
+// inline images as base64 data URIs (payload/image-read.cjs inlines them as
+// OpenAI `image_url` parts, multi-hundred-KB each), and dividing those bytes by
+// 4 over-estimates an image by two orders of magnitude. Production evidence
+// (2026-09-14): a 1773603-byte body whose real prompt was ~85K tokens
+// (cached-token ratio in the incident sample) estimated as ~443K and tripped
+// budget_prompt on every single turn, which is why L2 never ran. Images are
+// charged a flat per-image token cost instead.
+var IMAGE_TOKEN_ESTIMATE = 1600;
+var TEXT_BYTES_PER_TOKEN = 4;
+
+function estimateValueTokens(value, depth) {
+  if (typeof value === "string") return Math.ceil(Buffer.byteLength(value, "utf8") / TEXT_BYTES_PER_TOKEN);
+  if (Array.isArray(value)) {
+    var items = 0;
+    for (var i = 0; i < value.length; i++) items += estimateValueTokens(value[i], depth);
+    return items;
+  }
+  if (!isRecord(value)) return 0;
+  // An OpenAI image part ({ type: "image_url", image_url: { url } }) is one
+  // image to the provider, whatever its base64 payload weighs.
+  if (value.image_url !== undefined || value.input_image !== undefined) return IMAGE_TOKEN_ESTIMATE;
+  if (depth >= 12) return 0;
+  var total = 0;
+  var keys = Object.keys(value);
+  for (var k = 0; k < keys.length; k++) total += estimateValueTokens(value[keys[k]], depth + 1);
+  return total;
+}
+
+// A supplied count always wins: the hop knows the real prompt size when the
+// upstream reports usage, and an explicit estimate is never second-guessed.
 function estimatePromptTokens(messages, shape, supplied) {
   var explicit = finiteNumber(supplied);
   if (explicit !== undefined && explicit >= 0) return Math.ceil(explicit);
-  var body = shape === "touch-then-tool" ? CLOSING_SEND_PROMPT : REPLY_NUDGE_PROMPT;
-  try { return Math.ceil(Buffer.byteLength(JSON.stringify(buildNudgeMessages(messages, shape)), "utf8") / 4) + Math.ceil(Buffer.byteLength(body, "utf8") / 4); } catch (err) { return Number.POSITIVE_INFINITY; }
+  // buildNudgeMessages already appends the nudge text, so the shape body is
+  // counted once by this walk.
+  try { return estimateValueTokens(buildNudgeMessages(messages, shape), 0); } catch (err) { return Number.POSITIVE_INFINITY; }
 }
 
 function budgetReason(options, config, messages, shape) {
@@ -748,6 +805,9 @@ function makeLogMeta(config, permission) {
     mode: config.mode,
     family: undefined,
     identityGate: permission ? permission.identityGate : undefined,
+    // The request log sanitizes the identityGateResult key (plan §12), so the
+    // gate verdict must carry that name to reach the control page.
+    identityGateResult: permission ? permission.identityGate : undefined,
     skipReason: permission && !permission.eligible ? permission.skipReason : undefined,
     l2Eligible: false,
     l2Attempted: false,
@@ -879,6 +939,20 @@ async function runL2(options) {
   var observation = opts.observation || createObservation();
   var context = opts.context || {};
   var permission = personOpenedPermission(context, { requireEpoch: true });
+  var key = opts.stateKey || stateKeyFrom(permission);
+  var state = stateFor(key, true);
+  // L3 preconditions live on this epoch state row: the NEXT request of the
+  // epoch only redrives when the LAST response of the epoch ended silent.
+  // On the hold path nothing else records that verdict -- rememberResponse()
+  // runs only when the terminal is NOT held -- so a working identity gate
+  // (l2Eligible=true => terminal held => runL2) left lastResponseSilent false
+  // forever and L3 never armed. Every release below that knows the verdict
+  // writes it, so the state always mirrors the response that just ended.
+  function settleSilent(silent) {
+    if (!state) return;
+    state.lastResponseSilent = silent === true;
+    state.updatedAt = Date.now();
+  }
   var result = {
     injection: meta,
     observation: observation,
@@ -908,6 +982,7 @@ async function runL2(options) {
   }
   if (!silentStop(observation)) {
     meta.skipReason = observation.currentResponseToolCallCount > 0 ? "response_has_tool_calls" : "terminal_not_silent";
+    settleSilent(false);
     return release(meta.skipReason, "classification-skipped");
   }
   var debt = classifyDebt({
@@ -925,14 +1000,17 @@ async function runL2(options) {
   if (debt.debtState !== "owed" || (debt.debtShape !== "no-touch" && debt.debtShape !== "touch-then-tool")) {
     meta.skipReason = "debt_not_owed";
     meta.family = "l2.no-op";
+    // A silent stop with no debt owed this turn is exactly the case L3 exists
+    // for: the next request of the epoch reclassifies the transcript and can
+    // redrive once.
+    settleSilent(true);
     return release("debt_not_owed", "not-eligible");
   }
-  var key = opts.stateKey || stateKeyFrom(permission);
-  var state = stateFor(key, true);
   if (state && state.finalNoTool) {
     meta.skipReason = "l2_attempt_exhausted";
     meta.finalNoTool = true;
     result.finalNoTool = true;
+    settleSilent(true);
     return release("l2_attempt_exhausted", "classification-skipped");
   }
   if (state && state.l2AdditionalRuns >= config.l2.maxAdditionalRuns) {
@@ -940,6 +1018,7 @@ async function runL2(options) {
     meta.finalNoTool = true;
     result.finalNoTool = true;
     state.finalNoTool = true;
+    settleSilent(true);
     return release("l2_attempt_exhausted", "classification-skipped");
   }
   var budget = budgetReason(opts, config, opts.messages, debt.debtShape);
@@ -950,11 +1029,15 @@ async function runL2(options) {
   meta.l2CompletionTokenCap = budget.completionTokens;
   if (budget.reason) {
     meta.skipReason = budget.reason;
+    // The response was silent and only the reservation stopped the second run:
+    // the next request of the epoch still gets the L3 chance.
+    settleSilent(true);
     return release(budget.reason, "not-eligible");
   }
   var lease = acquireLease(key);
   if (!lease) {
     meta.skipReason = "lease_busy";
+    settleSilent(true);
     return release("lease_busy", "not-eligible");
   }
   var aborted = false;
@@ -972,9 +1055,13 @@ async function runL2(options) {
     }), config.l2.terminalDecisionTimeoutMs, function () { watchdog = true; safeRelease(firstHold, "terminal_decision_timeout"); });
     if (watchdog || decisionResult && decisionResult.__timeout) {
       meta.skipReason = "terminal_decision_timeout";
+      settleSilent(true);
       return release("terminal_decision_timeout", "classification-skipped");
     }
-    if (aborted) return release("client_closed", "failed-first-fallback");
+    if (aborted) {
+      settleSilent(true);
+      return release("client_closed", "failed-first-fallback");
+    }
     state.l2AdditionalRuns += 1;
     meta.l2Attempted = true;
     meta.l2AdditionalRuns = state.l2AdditionalRuns;
@@ -1025,10 +1112,14 @@ async function runL2(options) {
       return result;
     } catch (err) {
       meta.l2Outcome = "failed-first-fallback";
+      // The original (silent) terminal goes out; the epoch still remembers a
+      // silent ending so L3 can redrive on the next request.
+      settleSilent(silentStop(observation));
       return release(err && err.message === "client_closed" ? "client_closed" : "l2_fallback_original_terminal", "failed-first-fallback");
     }
   } catch (err) {
     meta.l2Outcome = "failed-first-fallback";
+    settleSilent(silentStop(observation));
     return release(err && err.message ? err.message : "l2_exception", "failed-first-fallback");
   } finally {
     if (abortSignal && typeof abortSignal.removeEventListener === "function") abortSignal.removeEventListener("abort", onAbort);

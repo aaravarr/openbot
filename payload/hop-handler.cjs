@@ -6,7 +6,7 @@ var https = require("https");
 var nodeCrypto = require("crypto");
 var { URL } = require("url");
 var path = require("path");
-var { toOpenAIMessages, sanitizeToolCallIds } = require("./openai-messages.cjs");
+var { toOpenAIMessages, sanitizeToolCallIds, repairOrphanedToolCalls, TOOL_CALL_INCOMPLETE_CONTENT } = require("./openai-messages.cjs");
 var {
   enrichImageReads,
   enforceImageBudget,
@@ -717,6 +717,31 @@ function openUpstream(urlStr, body, key, inbound, apiType) {
   var lib = u.protocol === "https:" ? https : http;
   var outboundBody = Object.assign({}, body);
   delete outboundBody.__openbot_api_type;
+  // Identity metadata rides the body for logging and the dry-run gate only;
+  // no upstream provider ever sees it (same gate as __openbot_api_type).
+  delete outboundBody.openbotBotId;
+  delete outboundBody.openbotChatType;
+  // Explicit mirrors of the conversation identity on converted (allow-list)
+  // documents — the converted families drop body.conversationId/epochId by
+  // construction, so these mirrors exist only there and are deleted with
+  // the rest of the identity metadata.
+  delete outboundBody.openbotConversationId;
+  delete outboundBody.openbotEpochId;
+  // Conversation identity stamped by the custom wrap (runtime.cjs) for the
+  // injection gate. Same contract: it feeds findConversationId / the
+  // observable fallback and the request log, never the provider wire. This
+  // is the single serialization point for chat-completions AND the source
+  // body of both converted families, so stripping here (plus the mirror
+  // deletions on the converted documents below) keeps every outbound
+  // payload free of the mirror fields.
+  delete outboundBody.conversationId;
+  delete outboundBody.conversation_id;
+  delete outboundBody.sessionId;
+  delete outboundBody.session_id;
+  delete outboundBody.chatId;
+  delete outboundBody.chat_id;
+  delete outboundBody.epochId;
+  delete outboundBody.epoch_id;
   var payload = Buffer.from(JSON.stringify(outboundBody), "utf8");
   var wantStream = body && body.stream === true;
   var headers = {
@@ -1231,14 +1256,26 @@ function injectionHeader(headers, name) {
 
 function injectionObservedContext(req, body, conversationId) {
   var headers = (req && req.headers) || {};
+  // Observable identity is bounded to body fields, transport headers and the
+  // host prompt path — never transcript prose (plan §9.1). The OpenAI wire
+  // protocol carries no bot identity, so the request-log contract (botId from
+  // /home/box/agent-data/agents/<uuid>/profile.json in the system prompt,
+  // chatType from <user_query>) is the only observable source the custom wrap
+  // actually provides. It stays observable-only: it can never reach the
+  // trusted gate.
+  var clues = requestLog.extractChatContext ? requestLog.extractChatContext(isRecord(body) ? body.messages : undefined) : {};
   var observed = {
-    botId: isRecord(body) && typeof body.botId === "string" ? body.botId : injectionHeader(headers, "x-openbot-bot-id"),
+    botId: isRecord(body) && typeof body.botId === "string" ? body.botId : injectionHeader(headers, "x-openbot-bot-id") || clues.botId || "",
     conversationId: conversationId || "",
     epochId: isRecord(body) && typeof body.epochId === "string" ? body.epochId : injectionHeader(headers, "x-openbot-epoch-id"),
-    chatType: isRecord(body) && typeof body.chatType === "string" ? body.chatType : injectionHeader(headers, "x-openbot-chat-type"),
+    chatType: isRecord(body) && typeof body.chatType === "string" ? body.chatType : injectionHeader(headers, "x-openbot-chat-type") || clues.chatType || "",
     directChat: isRecord(body) && (body.directChat === true || body.direct_chat === true),
     internalLane: isRecord(body) && (body.internalLane === true || body.internal_lane === true),
   };
+  // Bounded observation fields for the request log. They are NOT trust: the
+  // gate below never consults them when a trusted host context is present.
+  if (observed.botId) body.openbotBotId = String(observed.botId).slice(0, 64);
+  if (observed.chatType) body.openbotChatType = String(observed.chatType).slice(0, 32);
   return injectionHardening.contextFromRequest(req, body, observed);
 }
 
@@ -1799,6 +1836,21 @@ async function handleCompletionsInner(req, res) {
     });
     body.messages = injectionPre.messages;
     injectionMetadata = injectionPre.injection;
+    // Pre-flight guard, on the wire array, AFTER injection prep: no outbound
+    // message array may carry an assistant tool_calls block that is not
+    // immediately followed by ALL of its role=tool results (incident
+    // 2026-09-11: an image enrichment pass had slotted a user message between
+    // two parallel tool results and the upstream 400'd "assistant message
+    // with 'tool_calls' must be followed by tool messages"). Runs before
+    // canonicalBody/outboundBody are captured, so every api type —
+    // chat-completions, responses, anthropic — serializes this same repaired
+    // array, and the remediation second call reuses the repaired history.
+    // Deliberately after applyPreGeneration: the debt classifier must judge
+    // the transcript as the host emitted it — a synthesized "did not
+    // complete" row (TOOL_CALL_INCOMPLETE_CONTENT, excluded from execution
+    // chronology there) is a wire-shape fix, not execution chronology.
+    // Deterministic; an already-valid array is returned untouched.
+    body.messages = repairOrphanedToolCalls(body.messages);
     var injectionRuntime = {
       config: injectionPre.config,
       context: injectionContext,
@@ -1824,6 +1876,18 @@ async function handleCompletionsInner(req, res) {
     });
     var outboundBody = apiType === "responses" ? protocolConverters.chatToResponses(body) : apiType === "anthropic" ? protocolConverters.chatToAnthropic(body) : body;
     outboundBody.__openbot_api_type = apiType;
+    // Converted families rebuild the body from an allow-list, so the
+    // observable-identity mirror must be stamped on the converted document
+    // too (openUpstream strips it before the upstream ever sees it).
+    if (injectionContext.observed && injectionContext.observed.botId) outboundBody.openbotBotId = injectionContext.observed.botId;
+    if (injectionContext.observed && injectionContext.observed.chatType) outboundBody.openbotChatType = injectionContext.observed.chatType;
+    // Same for the wrap-stamped conversation identity: chat-completions
+    // keeps it on the passthrough body and the converters drop it, so the
+    // converted documents get the explicit mirrors here to stay in sync
+    // with the openbotBotId/openbotChatType mirrors above. openUpstream
+    // deletes these before the upstream sees the request.
+    if (injectionContext.observed && injectionContext.observed.conversationId) outboundBody.openbotConversationId = injectionContext.observed.conversationId;
+    if (injectionContext.observed && injectionContext.observed.epochId) outboundBody.openbotEpochId = injectionContext.observed.epochId;
     noteWireBytes(outboundBody);
     fields.requestBody = outboundBody;
     fields.stream = body.stream === true;
@@ -1961,6 +2025,9 @@ exports.inboundClientMeta = inboundClientMeta;
 exports.detectClientName = detectClientName;
 exports.parseClientVersion = parseClientVersion;
 exports.findConversationId = findConversationId;
+// Test seam: the full observed-context construction (headers + body + host
+// prompt clues) without a live HTTP request.
+exports.injectionObservedContextForTests = injectionObservedContext;
 exports.opencodeSessionId = opencodeSessionId;
 exports.loadKey = loadKey;
 exports.noteFirstContent = noteFirstContent;

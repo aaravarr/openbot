@@ -6,52 +6,28 @@ import { useApp, useBoxState } from "../store";
 import { Badge, Button, Notice, Switch } from "./ui";
 
 /**
- * Delivery follow-up ("injection hardening") switch.
+ * Delivery follow-up ("injection hardening").
  *
- * The switch owns off/on; the radios pick the depth once it is on. Saving writes
- * the sand-data config file that the hop hot-reads, so nothing here bounces the
- * host or the hop: the next request picks the change up.
+ * One switch, and that is the whole card: off sends nothing extra, on means the
+ * enforcing mode with every layer armed. Saving writes the sand-data config
+ * file the hop hot-reads, so nothing here bounces the host or the hop — the next
+ * request picks the change up. `dry-run` stays reachable through that file for
+ * operators (skills/openbot-config/reference.md); the card no longer offers it.
  */
 
-type DeliveryChoice = Exclude<DeliveryMode, "off">;
+/** The card's two product-copy strings, kept verbatim as constants. */
+const ABOUT =
+  "Grok Bot only shows the user what the model delivers with a SendToUser call. When a custom turn ends without one, the result never reaches them. This follow-up extends the built-in reminder: it nudges the model to deliver its result before the turn closes, so fewer replies are lost.";
 
-type DeliveryDraft = { enabled: boolean; mode: DeliveryChoice };
+const SUBLINE =
+  "Experimental and off by default. Turn it on and save — it applies from the next message, and nothing extra is sent while it is off.";
 
-const MODE_CHOICES: { value: DeliveryChoice; label: string; hint: string; recommended?: boolean }[] = [
-  {
-    value: "dry-run",
-    label: "Observe only",
-    hint: "Records what a follow-up would do. Nothing extra is sent.",
-    recommended: true,
-  },
-  {
-    value: "enforce",
-    label: "Send the follow-up",
-    hint: "Sends one extra request so the result actually reaches the user.",
-  },
-];
+/** Everything the switch arms. The payload runs a layer only while its layer object is present. */
+const ALL_LAYERS = { l1: true, l2: true, l3: true } as const;
 
-function draftOf(settings: DeliverySettings): DeliveryDraft {
-  return {
-    enabled: settings.mode !== "off",
-    mode: settings.mode === "off" ? "dry-run" : settings.mode,
-  };
-}
-
-function modeLabel(mode: DeliveryMode): string {
-  if (mode === "dry-run") return "Dry run";
-  if (mode === "enforce") return "Enforce";
-  return "Off";
-}
-
-function sourcePhrase(source: DeliverySettings["source"]): string {
-  if (source === "env") return "pinned by an environment variable";
-  if (source === "file") return "from the config file";
-  return "default, no config file yet";
-}
-
-function layerSummary(layers: DeliverySettings["layers"]): string {
-  return (["l1", "l2", "l3"] as const).map((name) => `${name.toUpperCase()} ${layers[name] ? "on" : "off"}`).join(" · ");
+/** The switch is the whole draft: on means enforce with every layer armed. */
+function draftOf(settings: DeliverySettings): boolean {
+  return settings.mode !== "off";
 }
 
 /**
@@ -72,23 +48,18 @@ function saveFailureMessage(err: unknown): string {
 function describeSaved(saved: DeliverySettings, requested: DeliveryMode): string {
   const base =
     requested === "off"
-      ? "Delivery follow-up is off. The file keeps its layer tuning."
-      : requested === "dry-run"
-        ? "Dry run: follow-ups are recorded and nothing extra is sent."
-        : "Enforce: a follow-up is sent when a turn ends without delivering.";
+      ? "Off: nothing extra is sent."
+      : "On: a follow-up nudges the model when a turn ends without delivering.";
   return saved.envOverride && saved.mode !== requested
-    ? `${base} An environment variable still pins the effective mode to ${modeLabel(saved.mode)}.`
+    ? `${base} An environment variable still pins the mode.`
     : base;
 }
-
-/** Everything the switch can arm. The payload runs a layer only while its layer object is present. */
-const ALL_LAYERS = { l1: true, l2: true, l3: true } as const;
 
 export function DeliveryCard() {
   const { pushToast } = useApp();
   const state = useBoxState();
   const custom = state.snapshot.alignment.desired === "custom";
-  const [data, setData] = useState<{ server: DeliverySettings; draft: DeliveryDraft } | null>(null);
+  const [data, setData] = useState<{ server: DeliverySettings; draft: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -118,6 +89,7 @@ export function DeliveryCard() {
           <span className="card__label" id="h-delivery">
             Delivery follow-up
           </span>
+          <Badge tone="info">Experimental</Badge>
         </div>
         <div className="card__body stack" style={{ gap: 12 }}>
           {loadError ? (
@@ -139,34 +111,31 @@ export function DeliveryCard() {
     );
   }
 
-  const { server, draft } = data;
-  const requested: DeliveryMode = draft.enabled ? draft.mode : "off";
-  // The server state is only "what the card claims" when the mode matches and,
-  // for an enabled mode, every layer the card displays is actually armed. A
+  const { server, draft: enabled } = data;
+  const requested: DeliveryMode = enabled ? "enforce" : "off";
+  // The server state is only "what the switch claims" when the mode matches and,
+  // for an enabled mode, every layer the switch stands for is actually armed. A
   // config file that is a bare `{"mode":"enforce"}` arms nothing, so the card
   // reads as dirty and one Save arms it instead of dead-ending on a disabled
   // button.
   const dirty =
     requested !== server.mode ||
-    (requested !== "off" && !(server.layers.l1 && server.layers.l2 && server.layers.l3));
-  const badgeTone = !draft.enabled ? undefined : draft.mode === "enforce" ? "accent" : "info";
-
-  const edit = (next: DeliveryDraft) => setData({ server, draft: next });
+    (requested === "enforce" && !(server.layers.l1 && server.layers.l2 && server.layers.l3));
 
   const save = async () => {
     setSaving(true);
     setSaveError(null);
     try {
-      // Saving an enabled mode arms every layer the card displays: the file only
-      // runs a layer whose object is present, so a layer left out of the file
-      // (or turned off by hand) stays dead. Saving `off` sends no layers.
+      // Saving an enabled mode arms every layer the switch stands for: the file
+      // only runs a layer whose object is present, so a layer left out of the
+      // file (or turned off by hand) stays dead. Saving `off` sends no layers.
       const saved = await saveDeliverySettings(requested, requested === "off" ? undefined : ALL_LAYERS);
       setData({ server: saved, draft: draftOf(saved) });
       pushToast("success", "Delivery follow-up saved", describeSaved(saved, requested));
     } catch (err) {
-      // The switch and radios are optimistic. A failed write rolls the draft
-      // back to the last mode the server confirmed instead of leaving the page
-      // claiming a mode the hop is not running.
+      // The switch is optimistic. A failed write rolls the draft back to the mode
+      // the server confirmed instead of leaving the page claiming a mode the hop
+      // is not running.
       const message = saveFailureMessage(err);
       setData({ server, draft: draftOf(server) });
       setSaveError(message);
@@ -182,94 +151,37 @@ export function DeliveryCard() {
         <span className="card__label" id="h-delivery">
           Delivery follow-up
         </span>
-        <Badge tone={badgeTone}>{draft.enabled ? modeLabel(draft.mode) : "Off"}</Badge>
+        <Badge tone="info">Experimental</Badge>
       </div>
       <div className="card__body stack" style={{ gap: 16 }}>
-        <p style={{ color: "var(--body)", margin: 0 }}>
-          Grok Bot only shows the user what the model delivers with a SendToUser tool call. When a custom turn ends
-          without one, the result never reaches them. This follow-up nudges the model to deliver it.
-        </p>
-
-        {!custom ? (
-          <Notice tone="info" icon={Info}>
-            This setting only applies to custom turns. Stock xAI turns never reach the hop, so nothing here changes
-            them.
-          </Notice>
-        ) : null}
+        <p style={{ color: "var(--body)", margin: 0 }}>{ABOUT}</p>
 
         <div className="stack" style={{ gap: 6 }}>
           <Switch
-            checked={draft.enabled}
+            checked={enabled}
             disabled={saving}
-            onChange={(next) => edit({ enabled: next, mode: draft.mode })}
-            label="Enable delivery follow-up"
+            onChange={(next) => setData({ server, draft: next })}
+            label="Enable the delivery follow-up"
           />
-          <span style={{ color: "var(--muted)", fontSize: 12 }}>
-            Off by default. Nothing extra is sent until you turn this on and save.
-          </span>
-          {draft.enabled ? (
-            <span style={{ color: "var(--muted)", fontSize: 12 }}>
-              Turning this on and saving arms all three layers (L1 · L2 · L3) — the file only runs a layer while
-              its block is present, so one turned off by hand comes back on.
-            </span>
-          ) : null}
+          <span className="delivery-card__hint">{SUBLINE}</span>
         </div>
 
-        {draft.enabled ? (
-          <div className="stack" style={{ gap: 8 }} role="radiogroup" aria-label="Follow-up mode">
-            {MODE_CHOICES.map((choice) => (
-              <label key={choice.value} style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
-                <input
-                  type="radio"
-                  name="delivery-mode"
-                  value={choice.value}
-                  checked={draft.mode === choice.value}
-                  disabled={saving}
-                  onChange={() => edit({ enabled: true, mode: choice.value })}
-                  style={{ accentColor: "var(--primary)", marginTop: 3 }}
-                />
-                <span className="stack" style={{ gap: 2 }}>
-                  <span className="row gap-2">
-                    <span style={{ fontWeight: 500 }}>{choice.label}</span>
-                    {choice.recommended ? <Badge>Recommended</Badge> : null}
-                  </span>
-                  <span style={{ color: "var(--muted)", fontSize: 12 }}>{choice.hint}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-        ) : null}
-
-        <div className="rule-microcopy">
-          <Info aria-hidden="true" />
-          <span>
-            Changes apply from the next request with no restart, and any failure releases the turn normally — a failed
-            follow-up never leaves the chat stuck.
-          </span>
-        </div>
-
-        <div className="def-grid">
-          <span className="k">Effective now</span>
-          <span className="v">{modeLabel(server.mode)} — {sourcePhrase(server.source)}</span>
-          <span className="k">Config file</span>
-          <span className="v mono">{server.exists ? server.path : `${server.path} (not written yet)`}</span>
-          <span className="k">Layers</span>
-          <span className="v">{layerSummary(server.layers)}</span>
-          <span className="k">Extra runs</span>
-          <span className="v">up to {server.maxAdditionalRuns} follow-up {server.maxAdditionalRuns === 1 ? "request" : "requests"}</span>
-        </div>
-
-        {server.envOverride ? (
-          <Notice tone="warn" icon={TriangleAlert}>
-            An environment variable pins the mode to <strong>{modeLabel(server.mode)}</strong>, so the file cannot win
-            while it is set. Saving is still allowed.
+        {!custom ? (
+          <Notice tone="info" icon={Info}>
+            This setting only applies to custom turns.
           </Notice>
         ) : null}
 
-        <div className="row row--between wrap gap-3">
-          <span style={{ color: "var(--muted)", fontSize: 12 }}>{dirty ? "Unsaved changes." : "Saved."}</span>
+        {server.envOverride ? (
+          <Notice tone="warn" icon={TriangleAlert}>
+            An environment variable pins the delivery follow-up on this Computer, so saving here cannot change what
+            runs until it is unset.
+          </Notice>
+        ) : null}
+
+        <div className="delivery-card__actions">
           <Button variant="primary" loading={saving} disabled={!dirty} onClick={() => void save()}>
-            Save delivery follow-up
+            Save
           </Button>
         </div>
         {saveError ? (

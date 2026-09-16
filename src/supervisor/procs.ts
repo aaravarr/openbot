@@ -23,6 +23,13 @@ export type FsDeps = {
    * marker) fall back to a plain write when it is absent.
    */
   rename?(from: AbsPath, to: AbsPath): void;
+  /**
+   * Append without rewriting the file. Optional only for test doubles: the
+   * real implementation always provides it, and callers that share a file with
+   * another writer (the events channel, a running cloudflared's log) fall back
+   * to read-then-write when it is absent.
+   */
+  append?(path: AbsPath, body: string, mode?: number): void;
 };
 
 export type ProcDeps = {
@@ -35,6 +42,14 @@ export type ProcDeps = {
     env: NodeJS.ProcessEnv;
     log: AbsPath;
     pidFile: AbsPath;
+    /**
+     * Whether the child's pid may be written to `pidFile` on its behalf.
+     * Defaults to true. False is for a child that publishes that same pidfile
+     * itself (the guard daemon): a pid written before the child runs makes the
+     * child read a live owner back -- itself -- and refuse to start, and it
+     * would overwrite the lock an already-running daemon holds.
+     */
+    writePidFile?: boolean;
   }): OwnedPid;
   stop(pid: OwnedPid): void;
   hostPids(hostMain: AbsPath): OwnedPid[];
@@ -80,6 +95,9 @@ export function nodeFs(): FsDeps {
     },
     write(path, body, mode = 0o644) {
       fs.writeFileSync(path, body, { encoding: "utf8", mode });
+    },
+    append(path, body, mode = 0o644) {
+      fs.appendFileSync(path, body, { encoding: "utf8", mode });
     },
     copy(from, to) {
       fs.copyFileSync(from, to);
@@ -275,7 +293,9 @@ export function nodeProcs(): ProcDeps {
       }
       child.unref();
       const pid = parseOwnedPid(child.pid);
-      fs.writeFileSync(input.pidFile, `${String(pid)}\n`, { encoding: "utf8", mode: 0o644 });
+      if (input.writePidFile !== false) {
+        fs.writeFileSync(input.pidFile, `${String(pid)}\n`, { encoding: "utf8", mode: 0o644 });
+      }
       return pid;
     },
     stop(pid) {

@@ -201,6 +201,12 @@ Off: `"expose":"off"`. CLI: `openbot tunnel on`, `openbot tunnel off`, `openbot 
 
 A `cloudflare-quick` URL is bound to the cloudflared process in `openbot-tunnel.pid`: while that pid is alive the URL is stable, and reconcile never probes the public URL or rotates it. A new URL happens only when that process died (the UI service restarts it within a minute and logs `tunnel.rotate` in `openbot-events.jsonl`) or when the user turns the tunnel off and on. Do not "fix" a link by re-running on/off: that always costs a new hostname.
 
+### Guard, fast drift, and the watcher
+
+A custom box runs a guard daemon that heals host wrap drift — the host file Grok Bot's own idle auto-update rewrites back to stock. It patrols once a minute (`openbot-guard-interval`, minutes 1–60; `OPENBOT_GUARD_INTERVAL` overrides it for one start) and, between patrols, stats the host file every 5 s (`OPENBOT_GUARD_DRIFT_POLL_MS`, 1000–60000 ms, `0` disables), so drift is repaired in seconds instead of waiting for the next patrol. A repair appends a WARN `wrap-drift` row to `openbot-events.jsonl` (`metadata.trigger` is `drift-poll` when the poll found it, with `metadata.reason` such as `changed+marker-missing`), one row to `openbot-guard.log`, and an audit line to `openbot-audit.jsonl`. On official nothing fires: a stock host file there is the desired state, not drift.
+
+The UI service babysits the daemon: every 60 s it starts one when `openbot-guard.pid` names no live process (`OPENBOT_GUARD_WATCH=0` disables; failures back off up to 15 minutes) and always rewrites `openbot-guard-watch.json` with `{lastTickAt, lastTickMs, mode, guardPid, lastAction, failures}`. A missing or minutes-old `lastTickAt` means the babysitter itself is not running — read that file when drift is not being repaired. Do not hand-edit the heartbeat, `openbot-guard.log`, or `openbot-events.jsonl`. Details: [reference.md](reference.md) § "Guard patrol, fast wrap drift, and the babysitter".
+
 ### Logs
 
 `openbot-logs.json`: `loggingEnabled` (default false), `logBodies` (false), `logBodiesOnError` (true), `logRetentionDays` (7; 1–365), `maxBodyCaptureBytes` (65536; 1024–1048576), `maxRecords` (2000; 1–10000).

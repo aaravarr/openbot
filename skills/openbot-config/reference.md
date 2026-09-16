@@ -58,11 +58,14 @@ Default root: `/home/box/sand-data/` (see env below).
 | `secrets.json` | JSON, **0600** | `{ "providers": { "<providerId>": "<stored locally>" } }` |
 | `openbot-pause.json` | JSON | Global gateway pause flag (see below). Missing or corrupt = not paused (fail open). Trailing newline. |
 | `openbot-bot-models.json` | JSON | Optional per-bot overrides: { "assignments": { "<botId>": "<catalog modelId>" } }; missing/corrupt = empty. OPENBOT_BOT_MODELS overrides the path. |
-| `openbot-expose` | text | `loopback` or `cloudflare-quick` plus newline. Written by reconcile. |
+| `openbot-expose` | text | `loopback` or `cloudflare-quick` plus newline. Written by reconcile when the token differs. |
+| `openbot-guard-interval` | text | Optional guard patrol tuning, minutes 1-60 plus newline. `install.sh` and the guard babysitter pass it as `--interval`; `OPENBOT_GUARD_INTERVAL` overrides it for one start. Default 1. |
+| `openbot-events.jsonl` | JSONL, append-only | Events channel (`{id, at, type, severity, message, metadata}`, newest last). The tunnel writes `tunnel.start` / `tunnel.rotate` here with the old and new URL; the service writes `guard.watch` / `tunnel.watch`. Written whether or not request recording is on. Do not hand-edit. |
 | `openbot-logs.json` | JSON | LogSettings (see below). Trailing newline. |
 | `openbot-injection.json` | JSON | Optional named injection strategy (see below); absent/invalid = mode off; trailing newline. |
 | `openbot-model-catalog.json` | JSON | Source B cache — **do not hand-edit**; `POST /api/model-catalog/refresh` |
-| `openbot-tunnel.json` | JSON | Cached public tunnel URL — do not fake a URL; use `set-expose` / `openbot tunnel on` |
+| `openbot-tunnel.json` | JSON | Cached public tunnel URL and the pid that owns it — do not fake a URL; use `set-expose` / `openbot tunnel on`. The URL is valid while that pid is alive |
+| `openbot-tunnel.log` (+ `.1`) | log | cloudflared output, appended across restarts and rotated to `.1` past 4 MiB. OpenBot markers `--- openbot: … ---` name each start, its reason and its URL |
 | `openbot-requests.jsonl` + `openbot-request-bodies/` | logs | Not config |
 | `host-main.cjs.pre-openbot` | backup | Read-only dump; do not patch as the source of wrap |
 | `openbot-hop.pid`, `openbot-ui.pid`, `openbot-tunnel.pid` | pids | Supervisor-owned; do not impersonate |
@@ -249,6 +252,8 @@ For OpenAI OAuth, the stored value remains a redacted string under `providers.op
 
 - Mode file: `official\n` or `custom\n`. Source of truth for wrap mode. Reconcile writes it (`writeMode`). Do not flip this file to wrap or unwrap. The UI reads it **strictly**: only the literal token `official` (after trimming) means official; missing, empty, or garbage resolves to **custom** — never official (users own custom state and often have zero official quota, so an unreadable mode file must never reconcile chat back to official). Repair a corrupted token by writing `custom` and reconciling from the control page (`POST /api/save`); check `openbot-audit.jsonl` to see what changed it.
 - Expose file: `loopback\n` or `cloudflare-quick\n`. Tokens `cloudflare` / `on` / `cf` parse to `cloudflare-quick`; `off` / `loopback` / `no` / `false` parse to `loopback`. Tailscale is not in this release.
+- Keep the URL stable: a quick-tunnel hostname belongs to the cloudflared process recorded in `openbot-tunnel.json` (`pid`), so reconcile adopts the cached URL whenever that pid is alive — it never probes the public URL and never restarts a live tunnel. A new URL is minted only when the pid is dead, when the cache is missing/corrupt, or when the user turns the tunnel off and on. The UI service babysits it (`OPENBOT_TUNNEL_WATCH=0` disables): every 60 s it restarts a dead cloudflared, backs off up to 15 minutes on repeated failures, and does nothing on official or on a `loopback` expose.
+- Rotation is recorded, never silent: `openbot-events.jsonl` gets a `tunnel.rotate` row with `metadata.previousUrl`, `metadata.url` and `metadata.reason` (`pid-dead`, `cache-unreadable`, `no-cache`), and the same information lands in `openbot-tunnel.log` markers. Report a changed URL to the user from there instead of guessing.
 
 ## `openbot-audit.jsonl`
 
